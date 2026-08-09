@@ -1790,7 +1790,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .run(&mut BufWriter::new(Vec::new()))
             .expect("current scalar protocol version 4 must be accepted before signing");
 
-        for version in [0_u32, 1, 2, u32::MAX] {
+        for version in [0_u32, 1, 2, 3, u32::MAX] {
             let genesis_file = minimal_genesis_file();
             replace_manifest_wire_protocol_version(
                 &genesis_file,

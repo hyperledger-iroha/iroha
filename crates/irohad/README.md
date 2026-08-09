@@ -65,7 +65,7 @@ config selector that dynamically loads executable provider code.
 The stock `irohad` binary does not embed deployment providers. With the default
 empty binding catalog it starts without external adapters. With a non-empty
 catalog it uses the stock local-broker client and
-fail before subsystem startup if the broker or any exact requested role is
+fails before subsystem startup if the broker or any exact requested role is
 missing, substituted, stale, or unsupported.
 
 There are two supported injection boundaries. A deployment-owned embedding
@@ -78,12 +78,50 @@ An explicitly injected registry remains authoritative. There is no
 process-global registry, plugin loader, environment selector, or executable
 provider selector in configuration.
 
-The source tree provides `serve_runtime_provider_broker_v1` as an injected
-broker-server library boundary, but no checked-in executable calls it and no
-HSM, KMS, sealed-store, credential loader, or production backend is packaged.
-Deployments using the stock client must therefore supervise a separately
-owned broker process that injects every requested backend. Client wiring alone
-is not production-adapter or deployment qualification.
+When finalized moderation is enabled, that same catalog projection also
+qualifies the configured strict-ingress handle, revision, and public-policy
+digest against Torii's fixed V1 ingress binding. This happens before the stock
+broker client or an injected registry is invoked, and therefore before Tokio
+or node-owned durable state exists. The in-process ingress is intentionally not
+an external broker slot; missing, substituted, stale, zero-qualified, or
+test-marked configuration fails the common launcher preflight, while the live
+adapter remains requalified at Torii construction and around every operation.
+
+The source tree provides `RuntimeProviderBrokerDeploymentV1` as the standard
+deployment assembly around the injected `serve_runtime_provider_broker_v1`
+server boundary. `RuntimeProviderBrokerExecutableV1` adds the common process
+shell: a one-argument `RuntimeProviderBrokerExecutableArgsV1` CLI, secure
+bounded canonical-catalog loading, redacted failures, supervisor-owned
+readiness/lifecycle hooks, and SIGINT/SIGTERM shutdown. Its
+`RuntimeProviderBrokerBackendRegistryV1` receives only the sanitized non-empty
+public catalog, and the assembled launch performs exact live server
+qualification before readiness.
+The server accepts canonical non-empty client subsets of that catalog so the
+stock daemon and packaged standalone services can share the fixed endpoint;
+the handshake still requires every binding byte-for-byte, and a session cannot
+invoke a provider outside its authenticated subset. Deployment launchers can
+handoff that projection without sharing `actual::Config` by calling
+`IrohaRuntimeProviderBindingsV1::export_canonical_v1`; the broker side loads it
+with `load_canonical_v1`, or uses
+`load_runtime_provider_broker_catalog_file_v1` for the process shell's secure
+absolute-path handoff. The explicitly versioned canonical Norito artifact is
+bounded, non-empty, strictly ordered, and contains only the chain identity plus
+public handles, identities, revisions, bounds, and policy digests already held
+by the sanitized projection. The common CLI has no socket override, plugin,
+private-key, credential, or test-provider argument; Linux and macOS use the
+platform-fixed authenticated endpoint, while Windows and other platforms fail
+before catalog filesystem access because V1 has no equivalent authenticated
+transport.
+
+No checked-in binary or registry supplies vendor HSM, KMS, WebAuthn, sealed
+store, network, or immutable-query implementations. Under the current static
+injection architecture, a deployment must link its reviewed concrete registry
+into a thin owned binary that parses `RuntimeProviderBrokerExecutableArgsV1`
+and calls `RuntimeProviderBrokerExecutableV1`; credentials remain inside those
+provider objects. A generic in-tree binary would first require an explicitly
+approved and versioned authenticated provider-plugin/IPC ABI, which V1 does not
+define. Client wiring, the common executable shell, or an empty/dummy registry
+alone is not production-adapter or deployment qualification.
 
 Registry resolution itself validates the sanitized binding catalog and rejects
 missing or unrequested dependency objects. It cannot independently attest to a
@@ -120,10 +158,11 @@ qualification:
   any subsystem receives it. Missing, unexpected, role-confused, substituted,
   stale, test-marked, or drifting providers fail resolution.
 
-- Stream-token signing checks the configured production handle and Ed25519
-  public key and verifies every returned signature. Its configuration and
-  provider trait do not yet expose an adapter revision or policy digest, so
-  independent stale/revoked-provider detection remains a V1 production blocker.
+- Stream-token signing checks the configured production handle, Ed25519 public
+  key, non-zero adapter revision, and public-policy digest.
+  Both startup qualification probes are individually identity-fenced, and every signing
+  operation rechecks the exact qualification and handle/key binding before and
+  after the external call before verifying the returned signature.
 
 - Provider-ingest source and resolver adapters check independently configured
   production handles, non-zero revisions and public-policy digests, the fixed
@@ -169,9 +208,12 @@ The stock Governance DAG binary likewise has no built-in credential loader;
 deployment launchers inject a
 `GovernanceDagServiceRuntimeProviderRegistryV1` through the library entrypoint.
 
-Moderation strict ingress and the stream-token identity gap above remain
-production blockers; this registry wiring alone is not a claim that the
-embedding launcher or a deployment is production-complete.
+The stream-token source-side identity gap is closed. Production readiness still
+requires a genuine deployment-owned signer matching that exact public binding
+and multi-replica rotation/revocation/failover evidence. Likewise, moderation
+strict-ingress preflight does not provide the real external moderation signer,
+settlement, publication, notification, archive, or multi-replica deployment
+evidence required for production readiness.
 
 ## Configuration
 

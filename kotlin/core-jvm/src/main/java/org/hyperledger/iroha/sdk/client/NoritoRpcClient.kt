@@ -247,8 +247,8 @@ class NoritoRpcClient private constructor(builder: Builder) {
         private fun resolveMethod(request: TransportRequest?): String = request?.method ?: ""
         private fun resolveAuthority(request: TransportRequest?): String {
             if (request == null) return ""
-            val uri = request.uri
-            if (uri != null && uri.authority != null) return uri.authority.trim()
+            val authority = request.uri.authority
+            if (authority != null) return authority.trim()
             val hosts = request.headers["Host"]
             return if (hosts.isNullOrEmpty()) "" else hosts[0].trim()
         }

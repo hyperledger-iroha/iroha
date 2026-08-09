@@ -290,6 +290,7 @@ fn validate_field_attrs(fields: &Fields) -> Result<(), syn::Error> {
         Fields::Named(named) => {
             for f in &named.named {
                 let attrs = FieldAttr::parse(&f.attrs)?;
+                validate_required_attr(f, &attrs, true)?;
                 if attrs.skip && attrs.default {
                     return Err(syn::Error::new_spanned(
                         f,
@@ -321,6 +322,7 @@ fn validate_field_attrs(fields: &Fields) -> Result<(), syn::Error> {
         Fields::Unnamed(unnamed) => {
             for f in &unnamed.unnamed {
                 let attrs = FieldAttr::parse(&f.attrs)?;
+                validate_required_attr(f, &attrs, false)?;
                 if attrs.rename.is_some() {
                     return Err(syn::Error::new_spanned(
                         f,
@@ -342,6 +344,35 @@ fn validate_field_attrs(fields: &Fields) -> Result<(), syn::Error> {
             }
         }
         Fields::Unit => {}
+    }
+    Ok(())
+}
+
+fn validate_required_attr(
+    field: &syn::Field,
+    attrs: &FieldAttr,
+    is_named: bool,
+) -> Result<(), syn::Error> {
+    if !attrs.required {
+        return Ok(());
+    }
+    let error = if !is_named {
+        Some("#[norito(required)] is only supported on named fields")
+    } else if !is_option_type(&field.ty) {
+        Some("#[norito(required)] can only be used on Option fields")
+    } else if attrs.default {
+        Some("#[norito(required)] cannot be combined with #[norito(default)]")
+    } else if attrs.skip {
+        Some("#[norito(required)] cannot be combined with #[norito(skip)]")
+    } else if attrs.flatten {
+        Some("#[norito(required)] cannot be combined with #[norito(flatten)]")
+    } else if attrs.skip_serializing_if.is_some() {
+        Some("#[norito(required)] cannot be combined with #[norito(skip_serializing_if = ...)]")
+    } else {
+        None
+    };
+    if let Some(message) = error {
+        return Err(syn::Error::new_spanned(field, message));
     }
     Ok(())
 }
@@ -544,6 +575,8 @@ struct FieldAttr {
     rename: Option<String>,
     /// Whether the field should be skipped entirely.
     skip: bool,
+    /// Require this `Option` field's key to be present during JSON deserialization.
+    required: bool,
     /// Use [`Default::default`] or a provided function when the field is missing.
     default: bool,
     /// Optional function path to compute the default value.
@@ -978,6 +1011,14 @@ impl FieldAttr {
                             return Err(meta.error("duplicate `skip` attribute"));
                         }
                         out.skip = true;
+                    } else if meta.path.is_ident("required") {
+                        if meta.input.peek(Token![=]) || meta.input.peek(syn::token::Paren) {
+                            return Err(meta.error("`required` does not take a value"));
+                        }
+                        if out.required {
+                            return Err(meta.error("duplicate `required` attribute"));
+                        }
+                        out.required = true;
                     } else if meta.path.is_ident("default") {
                         if out.default {
                             return Err(meta.error("duplicate `default` attribute"));
@@ -1078,100 +1119,12 @@ impl FieldAttr {
 }
 
 #[cfg(test)]
-mod field_attr_tests {
-    use super::*;
-
-    #[test]
-    fn needs_size_attribute_is_parsed() {
-        let field: syn::Field = syn::parse_quote! {
-            #[norito(needs_size)]
-            demo: u32
-        };
-        let attrs = FieldAttr::parse(&field.attrs).expect("valid field attribute");
-        assert!(attrs.needs_size);
-    }
-
-    #[test]
-    fn malformed_and_unknown_field_attributes_are_rejected() {
-        let malformed: syn::Field = syn::parse_quote! {
-            #[norito(with = "bad::")]
-            malformed: u32
-        };
-        assert!(FieldAttr::parse(&malformed.attrs).is_err());
-
-        let unknown: syn::Field = syn::parse_quote! {
-            #[norito(transparant)]
-            unknown: u32
-        };
-        let error = FieldAttr::parse(&unknown.attrs).expect_err("unknown key must reject");
-        assert_eq!(error.to_string(), "unknown `norito` field attribute");
-    }
-
-    #[test]
-    fn malformed_enum_field_attribute_is_rejected_before_codegen() {
-        let input: DeriveInput = syn::parse_quote! {
-            enum Demo {
-                Value {
-                    #[norito(with = "bad::")]
-                    value: u32,
-                },
-            }
-        };
-
-        validate_data_field_attrs(&input.data)
-            .expect_err("enum fields must use the same validation as struct fields");
-    }
-}
+#[path = "tests/field_attrs.rs"]
+mod field_attr_tests;
 
 #[cfg(test)]
-mod self_delimiting_tests {
-    use super::*;
-
-    #[test]
-    fn allowlisted_types_are_self_delimiting() {
-        let ok_types: Vec<syn::Type> = vec![
-            syn::parse_quote!(String),
-            syn::parse_quote!(Cow<'static, str>),
-            syn::parse_quote!(PhantomData<u8>),
-            syn::parse_quote!(Vec<u8>),
-            syn::parse_quote!(VecDeque<u8>),
-            syn::parse_quote!(LinkedList<u8>),
-            syn::parse_quote!(BinaryHeap<u8>),
-            syn::parse_quote!(HashMap<String, u8>),
-            syn::parse_quote!(BTreeMap<String, u8>),
-            syn::parse_quote!(HashSet<u8>),
-            syn::parse_quote!(BTreeSet<u8>),
-            syn::parse_quote!(Option<u32>),
-            syn::parse_quote!(Result<u8, u8>),
-        ];
-
-        for ty in ok_types {
-            assert!(is_self_delimiting(&ty), "expected self-delimiting: {ty:?}");
-        }
-    }
-
-    #[test]
-    fn non_allowlisted_types_are_not_self_delimiting() {
-        let bad_types: Vec<syn::Type> = vec![
-            syn::parse_quote!(u32),
-            syn::parse_quote!(Foo),
-            syn::parse_quote!(ConstVec<u8>),
-            syn::parse_quote!(Name),
-            syn::parse_quote!(Metadata),
-            syn::parse_quote!(ProofAttachment),
-            syn::parse_quote!(VerifyingKeyId),
-            syn::parse_quote!(ConstString),
-            syn::parse_quote!(ViewChangeProofPayload),
-        ];
-
-        for ty in bad_types {
-            assert!(
-                !is_self_delimiting(&ty),
-                "unexpected self-delimiting: {ty:?}"
-            );
-        }
-    }
-}
+#[path = "tests/type_classification.rs"]
+mod self_delimiting_tests;
 
 #[derive(Default)]
 struct EnumAttr {
@@ -1218,20 +1171,8 @@ impl VariantAttr {
 }
 
 #[cfg(test)]
-mod variant_attr_tests {
-    use super::*;
-
-    #[test]
-    fn unknown_variant_attribute_is_rejected() {
-        let variant: Variant = syn::parse_quote! {
-            #[norito(other)]
-            Unknown
-        };
-
-        let error = VariantAttr::parse(&variant.attrs).expect_err("unknown key must reject");
-        assert_eq!(error.to_string(), "unknown `norito` variant attribute");
-    }
-}
+#[path = "tests/variant_attrs.rs"]
+mod variant_attr_tests;
 
 /// Generate `NoritoSerialize` implementation for a struct.
 ///
@@ -3939,7 +3880,7 @@ fn derive_fast_json_struct_flatten(
         } else {
             None
         };
-        if is_option_type(&field.ty) {
+        if is_option_type(&field.ty) && !attrs.required {
             if let Some(expr) = default_expr {
                 finals.push(quote! { #field_ident: #var_ident.unwrap_or_else(|| #expr) });
             } else {
@@ -4553,7 +4494,7 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                             if attrs.default {
                                 finals
                                     .push(quote! { #name: #name.unwrap_or_else(|| #default_expr) });
-                            } else if is_option {
+                            } else if is_option && !attrs.required {
                                 finals.push(quote! { #name: #name.unwrap_or(None) });
                             } else {
                                 finals.push(quote! { #name: #name.ok_or_else(|| norito::Error::Message(format!("missing field `{}`", stringify!(#name))))? });
@@ -5464,7 +5405,7 @@ fn derive_struct_json_deserialize(
                 } else {
                     None
                 };
-                if is_option_type(&f.ty) {
+                if is_option_type(&f.ty) && !attrs.required {
                     if let Some(expr) = default_expr {
                         finals.push(quote! { #field_ident: #var_ident.unwrap_or_else(|| #expr) });
                     } else {
@@ -5696,7 +5637,7 @@ fn derive_struct_json_deserialize_flatten(
         } else {
             None
         };
-        if is_option_type(&field.ty) {
+        if is_option_type(&field.ty) && !attrs.required {
             if let Some(expr) = default_expr {
                 finals.push(quote! { #field_ident: #var_ident.unwrap_or_else(|| #expr) });
             } else {

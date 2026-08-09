@@ -5,11 +5,11 @@ use flate2::{
     write::{DeflateEncoder, GzEncoder},
     Compression as FlateCompression,
 };
-use iroha_crypto::KeyPair;
+use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::da::prelude::*;
 use iroha_data_model::nexus::LaneId;
 use libfuzzer_sys::fuzz_target;
-use norito::{from_bytes, to_bytes};
+use norito::{decode_from_bytes, to_bytes};
 use std::io::Write;
 use zstd::stream::encode_all as zstd_encode_all;
 
@@ -38,21 +38,21 @@ struct FuzzCase {
 }
 
 fn limit_vec_64(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Vec<u8>> {
-    let len = usize::min(u.int::<usize>()? % 64, 64);
+    let len = u.int_in_range(0..=64_usize)?;
     let mut bytes = vec![0u8; len];
     u.fill_buffer(&mut bytes)?;
     Ok(bytes)
 }
 
 fn limit_vec_2048(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Vec<u8>> {
-    let len = usize::min(u.int::<usize>()? % 2048, 2048);
+    let len = u.int_in_range(0..=2_048_usize)?;
     let mut bytes = vec![0u8; len];
     u.fill_buffer(&mut bytes)?;
     Ok(bytes)
 }
 
 fn limit_string_32(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<String> {
-    let len = usize::min(u.int::<usize>()? % 32, 32);
+    let len = u.int_in_range(0..=32_usize)?;
     let mut buf = vec![0u8; len];
     u.fill_buffer(&mut buf)?;
     let filtered = buf
@@ -67,7 +67,7 @@ fn limit_string_32(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Str
 
 fn limit_metadata(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Vec<MetadataSeed>> {
     let mut items = Vec::new();
-    let count = usize::min(u.int::<usize>()? % 8, 8);
+    let count = u.int_in_range(0..=8_usize)?;
     for _ in 0..count {
         items.push(MetadataSeed::arbitrary(u)?);
     }
@@ -116,7 +116,7 @@ fn build_case(seed: FuzzCase) -> ConstructedCase {
             .expect("encoding zstd payload in memory must succeed"),
     };
 
-    let client_blob_id = BlobDigest::from_hash(blake3::hash(&payload));
+    let client_blob_id = BlobDigest::new(iroha_crypto::blake3_256(&payload));
     let blob_class = match seed.blob_class % 4 {
         0 => BlobClass::TaikaiSegment,
         1 => BlobClass::NexusLaneSidecar,
@@ -162,13 +162,15 @@ fn build_case(seed: FuzzCase) -> ConstructedCase {
     let chunk_size = 1 << 10;
     let total_size = payload.len() as u64;
 
-    let keypair = KeyPair::random();
+    let keypair = KeyPair::try_from_seed(vec![0x5A; 32], Algorithm::Ed25519)
+        .expect("fixed fuzz signing seed must derive an Ed25519 key");
     let submitter = keypair.public_key().clone();
-    let signature = keypair.sign(&payload);
+    let signature = Signature::try_new(keypair.private_key(), &payload)
+        .expect("fixed Ed25519 key must sign the fuzz payload");
 
     let mut manifest = None;
     let manifest_bytes = if seed.include_manifest {
-        let blob_hash = BlobDigest::from_hash(blake3::hash(&payload));
+        let blob_hash = BlobDigest::new(iroha_crypto::blake3_256(&payload));
         let chunk_commitments = Vec::<ChunkCommitment>::new();
         let da_manifest = DaManifestV1 {
             version: DaManifestV1::VERSION,
@@ -225,13 +227,13 @@ fuzz_target!(|seed: FuzzCase| {
     let request_bytes =
         to_bytes(&constructed.request).expect("DA ingest request should Norito-encode");
     let decoded_request: DaIngestRequest =
-        from_bytes(&request_bytes).expect("encoded request should decode");
+        decode_from_bytes(&request_bytes).expect("encoded request should decode");
     assert_eq!(constructed.request, decoded_request);
 
     if let Some(manifest) = constructed.manifest {
         let manifest_bytes = to_bytes(&manifest).expect("DA manifest should Norito-encode cleanly");
         let decoded_manifest: DaManifestV1 =
-            from_bytes(&manifest_bytes).expect("encoded manifest should decode");
+            decode_from_bytes(&manifest_bytes).expect("encoded manifest should decode");
         assert_eq!(manifest, decoded_manifest);
     }
 });

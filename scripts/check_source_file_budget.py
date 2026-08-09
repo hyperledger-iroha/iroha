@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enforce ratcheting line-count budgets for tracked source files."""
+"""Enforce ratcheting line-count budgets for candidate source files."""
 
 from __future__ import annotations
 
@@ -68,7 +68,8 @@ class Finding:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Check tracked source files against production/test line limits. "
+            "Check tracked and non-ignored untracked source files against "
+            "production/test line limits. "
             "Files already above a limit must have an exact no-growth baseline."
         )
     )
@@ -175,9 +176,16 @@ def normalize_relative_path(path: str | PurePosixPath) -> str:
 
 
 def tracked_paths(root: Path) -> list[str]:
-    """Return tracked repository paths in deterministic order."""
+    """Return the full non-ignored candidate-tree paths in deterministic order."""
     output = subprocess.check_output(
-        ["git", "ls-files", "-z"],
+        [
+            "git",
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ],
         cwd=root,
     )
     decoded = os.fsdecode(output)
@@ -231,7 +239,7 @@ def collect_counts(
     paths: Iterable[str],
     excluded_prefixes: tuple[str, ...],
 ) -> dict[str, int]:
-    """Count governed tracked sources, failing closed on unreadable inputs."""
+    """Count governed candidate sources, failing closed on unreadable inputs."""
     counts: dict[str, int] = {}
     for path in paths:
         if not is_source_path(path) or is_excluded(path, excluded_prefixes):

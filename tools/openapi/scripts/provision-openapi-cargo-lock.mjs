@@ -542,7 +542,7 @@ export async function generateOpenApiCargoLockCandidate({
   await spawnChecked(cargoExecutable, arguments_, {
     cwd: repoRoot,
     env: {
-      ...process.env,
+      ...isolateGitRepositoryEnvironment(),
       RUSTC_BOOTSTRAP: '1',
     },
   });
@@ -1083,6 +1083,7 @@ async function gitBytes(repoRoot, arguments_, {allowedExitCodes = [0]} = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn('git', arguments_, {
       cwd: repoRoot,
+      env: isolateGitRepositoryEnvironment(),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const stdout = [];

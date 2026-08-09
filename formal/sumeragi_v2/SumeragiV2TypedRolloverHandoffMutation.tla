@@ -221,7 +221,7 @@ SameRosterAdvancesGeneration ==
           !.transferState = "Empty",
           !.flushState = "Empty",
           !.retryableChunk = 0,
-          !.lifecycleCommitPhase = "Published",
+          !.lifecycleCommitPhase = "Current",
           !.receiptStage = "Consumed",
           !.receiptConsumeCount = 1,
           !.successorActive = TRUE,

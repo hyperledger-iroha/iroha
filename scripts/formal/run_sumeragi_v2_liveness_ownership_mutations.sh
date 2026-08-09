@@ -124,23 +124,23 @@ assert_mutation_failure_contract() {
   local log="$2"
   local expected_status="$3"
   local expected_primary="$4"
-  local expected_trace
   local diagnostic_count
+  local trace_header
   local whitespace_prefixed_count
   if [[ "$expected_status" -eq 12 ]]; then
+    trace_header="Error: The behavior up to this point is:"
     [[ "$expected_primary" =~ ^Error:\ Invariant\ .+\ is\ violated\.$ ]] || {
       sumeragi_v2_tlc_contract_fail \
         "$label" "$log" \
         "status-12 mutation expected a named invariant primary diagnostic"
     }
-    expected_trace="Error: The behavior up to this point is:"
   elif [[ "$expected_status" -eq 13 ]]; then
+    trace_header="Error: The following behavior constitutes a counter-example:"
     [[ "$expected_primary" == "Error: Temporal properties were violated." ]] || {
       sumeragi_v2_tlc_contract_fail \
         "$label" "$log" \
         "status-13 mutation expected the exact temporal primary diagnostic"
     }
-    expected_trace="Error: The following behavior constitutes a counter-example:"
   else
     sumeragi_v2_tlc_contract_fail \
       "$label" "$log" \
@@ -149,7 +149,7 @@ assert_mutation_failure_contract() {
   sumeragi_v2_tlc_assert_exact_line \
     "$label" "$log" "$expected_primary"
   sumeragi_v2_tlc_assert_exact_line \
-    "$label" "$log" "$expected_trace"
+    "$label" "$log" "$trace_header"
   diagnostic_count="$(
     grep -Ec \
       '^[[:space:]]*(Error:|Deadlock reached([.]|$)|Temporal properties were violated[.]$)' \
@@ -158,7 +158,7 @@ assert_mutation_failure_contract() {
   [[ "$diagnostic_count" == 2 ]] || {
     sumeragi_v2_tlc_contract_fail \
       "$label" "$log" \
-      "mutation TLC log must contain exactly its primary and behavior diagnostics; found ${diagnostic_count}"
+      "mutation TLC log must contain exactly its primary and trace diagnostics; found ${diagnostic_count}"
   }
   whitespace_prefixed_count="$(
     grep -Ec \

@@ -1076,7 +1076,7 @@ pub(super) struct GeneratorTable<F: ProofScalar> {
 }
 
 impl<F: ProofScalar> GeneratorTable<F> {
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.points.len()
     }

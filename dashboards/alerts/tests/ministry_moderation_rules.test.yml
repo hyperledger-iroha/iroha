@@ -14,6 +14,8 @@ tests:
         values: '5 6 7 8 9 10 11 12 13 14'
       - series: 'moderation_inference_latency_seconds_bucket{environment="prod", manifest_id="c9bdf0b2", le="2"}'
         values: '10 12 14 16 18 20 22 24 26 28'
+      - series: 'moderation_inference_latency_seconds_bucket{environment="prod", manifest_id="c9bdf0b2", le="4"}'
+        values: '15 18 22 26 30 34 38 42 46 50'
       - series: 'moderation_inference_latency_seconds_bucket{environment="prod", manifest_id="c9bdf0b2", le="+Inf"}'
         values: '15 18 22 26 30 34 38 42 46 50'
     alert_rule_test:
@@ -22,22 +24,42 @@ tests:
         exp_alerts:
           - exp_labels:
               environment: staging
+              severity: critical
+            exp_annotations:
+              summary: "Moderation ingest stalled"
+              description: |
+                Environment staging has not processed moderation requests for 10 minutes (5m rate 0.0000 req/s).
       - alertname: ModerationDriftSpike
-        eval_time: 7m
+        eval_time: 10m
         exp_alerts:
           - exp_labels:
               environment: prod
               manifest_id: c9bdf0b2
               model_id: vision
+              severity: warning
+            exp_annotations:
+              summary: "Model drift exceeds budget"
+              description: |
+                Drift score 0.30 for model vision (manifest c9bdf0b2) exceeds the 20% ceiling.
       - alertname: ModerationQueueBacklog
-        eval_time: 8m
+        eval_time: 12m
         exp_alerts:
           - exp_labels:
               environment: prod
               manifest_id: c9bdf0b2
+              severity: warning
+            exp_annotations:
+              summary: "Quarantine backlog growing"
+              description: |
+                Queue depth 70 exceeded the 50 item target for manifest c9bdf0b2.
       - alertname: ModerationLatencyDegraded
         eval_time: 8m
         exp_alerts:
           - exp_labels:
               environment: prod
               manifest_id: c9bdf0b2
+              severity: warning
+            exp_annotations:
+              summary: "Inference latency above 2s P95"
+              description: |
+                Moderation inference latency exceeded 2 seconds (P95=3.80s) for manifest c9bdf0b2.

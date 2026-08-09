@@ -212,7 +212,7 @@ directly; equal bytes at a new proposal origin are not admitted.
 Pending-WAL and boundary capability projections bind the primary proposal
 origin separately from the lifecycle owner and bind the auxiliary proposal
 origin of any embedded certificate. Begin, acknowledgement, requested effect,
-and reconstructed grant must match both. Revision 3 has no legacy decoder or
+and reconstructed grant must match both. Revision 4 has no legacy decoder or
 missing-origin inference.
 
 The production timer/FIFO arbiter in

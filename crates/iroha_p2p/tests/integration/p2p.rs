@@ -69,15 +69,6 @@ impl iroha_p2p::network::message::ClassifyTopic for MultiTopic {
     }
 }
 
-#[derive(Clone, Debug, Decode, Encode)]
-struct ConsensusMessage(u32);
-
-impl iroha_p2p::network::message::ClassifyTopic for ConsensusMessage {
-    fn topic(&self) -> iroha_p2p::network::message::Topic {
-        iroha_p2p::network::message::Topic::Consensus
-    }
-}
-
 macro_rules! impl_decode_from_slice_via_canonical {
     ($($ty:ty),+ $(,)?) => {
         $(

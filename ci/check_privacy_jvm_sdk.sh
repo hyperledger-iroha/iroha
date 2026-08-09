@@ -3,8 +3,42 @@ set -euo pipefail
 
 ROOT_DIR="${PRIVACY_JVM_SDK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 JAVA_HOME_OVERRIDE="${PRIVACY_JVM_SDK_JAVA_HOME:-}"
+PYTHON_BIN="${PRIVACY_JVM_PYTHON_BIN:-python3}"
+ABI21_ARTIFACT_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi21_artifact.py"
 JAVA_OUT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-java-sdk-test.XXXXXX")"
 trap 'rm -rf "${JAVA_OUT}"' EXIT
+
+if [[ -z "${PRIVACY_JVM_NATIVE_ARTIFACT:-}" || \
+  -z "${PRIVACY_JVM_NATIVE_MANIFEST:-}" ]]; then
+  echo "error: authenticated JVM privacy native artifact and manifest are required" >&2
+  exit 1
+fi
+if ! NATIVE_DIRECTORY="$(
+  cd "$(dirname "${PRIVACY_JVM_NATIVE_ARTIFACT}")" && pwd -P
+)"; then
+  echo "error: JVM privacy native artifact directory is unavailable" >&2
+  exit 1
+fi
+if [[ "${PRIVACY_JVM_NATIVE_ARTIFACT}" != \
+    "${NATIVE_DIRECTORY}/libconnect_norito_bridge.so" || \
+  "${PRIVACY_JVM_NATIVE_MANIFEST}" != \
+    "${NATIVE_DIRECTORY}/native-sdk-abi21.json" ]]; then
+  echo "error: JVM privacy native paths are not canonical Linux ABI-21 paths" >&2
+  exit 1
+fi
+if [[ "${IROHA_NATIVE_LIBRARY_PATH:-}" != "${NATIVE_DIRECTORY}" ]]; then
+  echo "error: IROHA_NATIVE_LIBRARY_PATH must select only the authenticated JVM privacy bridge" >&2
+  exit 1
+fi
+if [[ "${LD_LIBRARY_PATH:-}" != "${NATIVE_DIRECTORY}" ]]; then
+  echo "error: LD_LIBRARY_PATH must select only the authenticated JVM privacy bridge" >&2
+  exit 1
+fi
+
+"${PYTHON_BIN}" -I -B "${ABI21_ARTIFACT_CHECKER}" verify \
+  --artifact "${PRIVACY_JVM_NATIVE_ARTIFACT}" \
+  --manifest "${PRIVACY_JVM_NATIVE_MANIFEST}" \
+  --source-root "${ROOT_DIR}"
 
 is_java_21_home() {
   local java_home="$1"
@@ -97,7 +131,7 @@ javac \
   -d "${JAVA_OUT}" \
   java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java \
   java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtilsTests.java
-java -ea -cp "${JAVA_OUT}:${PRIVACY_CORE_JVM_JAR}" \
+java -ea -Djava.library.path="${NATIVE_DIRECTORY}" -cp "${JAVA_OUT}:${PRIVACY_CORE_JVM_JAR}" \
   org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest
-java -ea -cp "${JAVA_OUT}:${PRIVACY_CORE_JVM_JAR}" \
+java -ea -Djava.library.path="${NATIVE_DIRECTORY}" -cp "${JAVA_OUT}:${PRIVACY_CORE_JVM_JAR}" \
   org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests

@@ -22,7 +22,6 @@ import {
   deriveContractAddress,
   prepareBrowserContractArtifact,
 } from "../src/smartContractDeployment.js";
-import { createStaticArtifactAdmissionVerifier } from "./helpers/artifactAdmissionWasm.js";
 import { ToriiBrowserClient } from "../src/toriiBrowserClient.js";
 import {
   browserTransactionPayloadHashHex,
@@ -272,7 +271,6 @@ test("browser deployment retains the existing key locally and commits every step
   const submissions = [];
   let stateReads = 0;
   const result = await deploySmartContractBrowser({
-    artifactAdmissionVerifier: ARTIFACT_ADMISSION_VERIFIER,
     artifactBytes: fixture.artifactBytes,
     manifest: fixture.manifest,
     compilerCodeHash: fixture.codeHashHex,
@@ -355,7 +353,7 @@ test("browser deployment retains the existing key locally and commits every step
   assert.equal(result.transactions.length, 4);
 });
 
-test("browser deployment fails closed without authentic shared artifact admission", async () => {
+test("browser deployment rejects retired pre-release options before callbacks", async () => {
   const fixture = deploymentFixture();
   let externalCalls = 0;
   const options = {
@@ -389,17 +387,11 @@ test("browser deployment fails closed without authentic shared artifact admissio
       throw new Error("must not submit transaction");
     },
   };
-  await assert.rejects(
-    deploySmartContractBrowser(options),
-    /must come from instantiateIvmArtifactAdmissionWasm/u,
-  );
+  const retiredVerifierOption = "artifactAdmission" + "Verifier";
   await assert.rejects(
     deploySmartContractBrowser({
       ...options,
-      artifactAdmissionVerifier: {
-        verifierSha256Hex: "00".repeat(32),
-        verify: () => ({ ok: true }),
-      },
+      [retiredVerifierOption]: {},
     }),
     /must come from instantiateIvmArtifactAdmissionWasm/u,
   );
@@ -432,7 +424,6 @@ test("browser deployment fails closed without authentic shared artifact admissio
 test("browser deployment stops without exact persisted Applied finality and authoritative state", async () => {
   const fixture = deploymentFixture();
   const base = {
-    artifactAdmissionVerifier: ARTIFACT_ADMISSION_VERIFIER,
     artifactBytes: fixture.artifactBytes,
     manifest: fixture.manifest,
     compilerCodeHash: fixture.codeHashHex,
@@ -494,7 +485,6 @@ test("browser deployment stops without exact persisted Applied finality and auth
 test("deployment rejects incompatible node bytes and invalid manifest provenance before upload", async () => {
   const fixture = deploymentFixture();
   const base = {
-    artifactAdmissionVerifier: ARTIFACT_ADMISSION_VERIFIER,
     artifactBytes: fixture.artifactBytes,
     manifest: fixture.manifest,
     compilerCodeHash: fixture.codeHashHex,
@@ -547,7 +537,6 @@ test("deployment rejects non-Rust aliases and state/address disagreement before 
   const fixture = deploymentFixture();
   let signCalls = 0;
   const base = {
-    artifactAdmissionVerifier: ARTIFACT_ADMISSION_VERIFIER,
     artifactBytes: fixture.artifactBytes,
     manifest: fixture.manifest,
     compilerCodeHash: fixture.codeHashHex,

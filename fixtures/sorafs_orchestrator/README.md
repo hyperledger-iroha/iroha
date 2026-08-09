@@ -5,10 +5,13 @@
 # SoraFS Orchestrator Fixtures
 
 The files under this directory capture the deterministic multi-provider fetch
-scenario used by every SDK parity harness (`SF-6d` roadmap item). Each fixture
-bundle exposes the canonical chunk plan, provider metadata, telemetry snapshot,
-and orchestrator options so Rust/JS/Swift/Python tests exercise the exact same
-inputs without regenerating them ad hoc.
+scenario used by the four orchestrator parity lanes (`SF-6d` roadmap item):
+Rust, JavaScript/Node, the Python native facade, and Swift. Each fixture bundle
+exposes the canonical chunk plan, provider metadata, telemetry snapshot, and
+orchestrator options so those lanes exercise the exact same inputs without
+regenerating them ad hoc. This harness does not claim Kotlin/JVM, mirrored Java
+Android, or C# orchestrator coverage, and fixture replay is not live provider-
+ingest or deployment-qualification evidence.
 
 ## Layout
 

@@ -157,7 +157,7 @@ def args_for(kind: str, tmp_path: Path, suffix: str = "") -> list[str]:
         for metric in MODULE.REQUIRED_METRICS:
             args.extend(["--metric", metric])
     elif kind == "native_bridge_release":
-        args.extend(["--bridge-abi-version", "12"])
+        args.extend(["--bridge-abi-version", "21"])
         args.extend(
             ["--artifact", f"hedging-native-artifact-swift-xcframework:{ARTIFACT_DIGEST}"]
         )
@@ -378,6 +378,22 @@ def test_duplicate_native_bridge_artifact_id_fails_closed_without_leaking(
     captured = capsys.readouterr()
     assert "duplicate --artifact id" in captured.err
     assert artifact_id not in captured.err
+    assert not canary_path(tmp_path, "native_bridge_release").exists()
+
+
+@pytest.mark.parametrize("abi", [20, 22])
+def test_native_bridge_release_requires_exact_abi_before_write(
+    tmp_path: Path,
+    capsys,
+    abi: int,
+) -> None:
+    args = args_for("native_bridge_release", tmp_path)
+    args[args.index("--bridge-abi-version") + 1] = str(abi)
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--bridge-abi-version must equal the sole first-release ABI 21" in captured.err
     assert not canary_path(tmp_path, "native_bridge_release").exists()
 
 

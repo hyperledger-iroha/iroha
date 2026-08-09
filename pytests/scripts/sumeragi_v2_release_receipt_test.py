@@ -20,152 +20,46 @@ import pytest
 
 from pytests.scripts.sumeragi_v2_release_receipt_components import (
     proof_ledger_checker_components,
+    release_receipt_writer_components,
     terminal_output_path,
+)
+from pytests.scripts.sumeragi_v2_release_receipt_test_support import (
+    CARGO_VERSION_OUTPUT,
+    CHAOS_FIELDS,
+    CHAOS_MARKER,
+    FINAL_MARKER,
+    PREBUILT_HOST_TRIPLE,
+    RUSTC_VERSION_OUTPUT,
+    SCALING_CONFIGURATION_DATA,
+    SCALING_IROHAD_SHA256,
+    SCALING_IROHA_CLI_SHA256,
+    SCALING_TRIAL_HARNESS_DATA,
+    SCENARIOS,
+    SUMMARY_FIELDS,
+    artifact_metadata,
+    canonical_json,
+    command_record,
+    protected_metadata,
+    sha256,
+    write_tsv,
 )
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py"
-FINAL_MARKER = (
-    "Sumeragi v2 formal gate passed: source-bound TLAPS, all registered "
-    "adversarial scheduler/readiness/indexed-height/item-carrier/reply-writer/"
-    "recovery/ownership mutations, bounded TLC, trace replay, and production Verus"
+RELEASE_RECEIPT_TEST_COMPONENT_FILES = (
+    "sumeragi_v2_release_receipt_bootstrap_archive_cases.py",
+    "sumeragi_v2_release_receipt_terminal_publication_cases.py",
 )
-CHAOS_MARKER = (
-    "SUMERAGI_V2_CHAOS_COMPLETED permissioned_heights=50000 "
-    "npos_heights=50000 total_heights=100000 supplied_commit_qcs=100000 "
-    "supplied_tcs=75000 finalized_validators=400000 wal_append_restarts=314 "
-    "fetch_restarts=312 store_restarts=312 validation_restarts=312 "
-    "application_restarts=312 stale_generation_rejections=1562 "
-    "deferred_fetch_completions=400936 deferred_store_completions=400624 "
-    "deferred_validation_completions=400312 "
-    "deferred_application_completions=400000 duplicate_commit_qcs=3124 "
-    "reordered_commit_batches=75000 reordered_tc_batches=75000 "
-    "insufficient_dual_qcs=1030 count_only_qcs=515 power_only_qcs=515 "
-    "restart_interval=64 duplicate_interval=32 under_quorum_interval=97 "
-    "certificate_source=external_fixture"
-)
-CHAOS_FIELDS = {
-    "schema_version": "2",
-    "permissioned_heights": "50000",
-    "npos_heights": "50000",
-    "completed_heights": "100000",
-    "supplied_commit_qcs": "100000",
-    "supplied_tcs": "75000",
-    "finalized_validators": "400000",
-    "wal_append_restarts": "314",
-    "fetch_restarts": "312",
-    "store_restarts": "312",
-    "validation_restarts": "312",
-    "application_restarts": "312",
-    "stale_generation_rejections": "1562",
-    "deferred_fetch_completions": "400936",
-    "deferred_store_completions": "400624",
-    "deferred_validation_completions": "400312",
-    "deferred_application_completions": "400000",
-    "duplicate_commit_qcs": "3124",
-    "reordered_commit_batches": "75000",
-    "reordered_tc_batches": "75000",
-    "insufficient_dual_qcs": "1030",
-    "count_only_qcs": "515",
-    "power_only_qcs": "515",
-    "restart_interval": "64",
-    "duplicate_interval": "32",
-    "under_quorum_interval": "97",
-    "certificate_source": "external_fixture",
-}
-SCENARIOS = (
-    "authoritative_v2_genesis_commits_on_every_validator",
-    "authoritative_v2_finalizes_through_validator_restart",
-    "taira_npos_leader_timeout_commits_within_rotation_bound",
-    "real_network_same_subject_locked_reproposal_converges_after_ordered_quorum_release",
-    "real_network_distinct_subject_prepare_qcs_converge_after_causal_release",
-)
-SUMMARY_FIELDS = (
-    "profile",
-    "source_manifest_sha256",
-    "scenario",
-    "seed",
-    "result",
-    "cargo_status",
-    "tee_status",
-    "run_log_sha256",
-    "output",
-    "localnet",
-    "command",
-)
-SCALING_CONFIGURATION_DATA = b"[nexus]\nenabled = true\n"
-SCALING_TRIAL_HARNESS_DATA = b"#!/usr/bin/env bash\nexit 0\n"
-SCALING_IROHAD_SHA256 = "c" * 64
-SCALING_IROHA_CLI_SHA256 = "d" * 64
-CARGO_VERSION_OUTPUT = b"cargo 1.93.1 (083ac5135 2025-12-15)\n"
-RUSTC_VERSION_OUTPUT = (
-    b"rustc 1.93.1 (01f6ddf75 2026-02-11)\n"
-    b"binary: rustc\n"
-    b"commit-hash: 01f6ddf7501f6ddf7501f6ddf7501f6ddf7501f6\n"
-    b"commit-date: 2026-02-11\n"
-    b"host: x86_64-unknown-linux-gnu\n"
-    b"release: 1.93.1\n"
-    b"LLVM version: 21.1.0\n"
-)
-PREBUILT_HOST_TRIPLE = "x86_64-unknown-linux-gnu"
 
 
-def sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def _execute_test_component(filename: str) -> None:
+    """Execute one reviewed case component in this canonical test namespace."""
 
-
-def canonical_json(value: object) -> bytes:
-    return (
-        json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
-    ).encode("utf-8")
-
-
-def artifact_metadata(path: Path, mode: int) -> dict[str, object]:
-    return {
-        "archive_name": path.name,
-        "mode": f"{mode:04o}",
-        "sha256": sha256(path),
-        "size_bytes": path.stat().st_size,
-    }
-
-
-def protected_metadata(
-    path: Path, mode: int, protected_sha256: str
-) -> dict[str, object]:
-    return {
-        "archive_name": path.name,
-        "mode": f"{mode:04o}",
-        "observed_sha256": sha256(path),
-        "protected_sha256": protected_sha256,
-        "size_bytes": path.stat().st_size,
-    }
-
-
-def command_record(
-    argv: list[str],
-    replay_argv: list[str],
-    status: int,
-    stdout: bytes,
-    stderr: bytes,
-) -> dict[str, object]:
-    return {
-        "argv": argv,
-        "replay_argv": replay_argv,
-        "exit_status": status,
-        "stdout_base64": base64.b64encode(stdout).decode("ascii"),
-        "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
-        "stdout_size_bytes": len(stdout),
-        "stderr_base64": base64.b64encode(stderr).decode("ascii"),
-        "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
-        "stderr_size_bytes": len(stderr),
-    }
-
-
-def write_tsv(path: Path, fields: dict[str, str]) -> None:
-    path.write_text(
-        "".join(f"{name}\t{value}\n" for name, value in fields.items()),
-        encoding="utf-8",
-    )
+    path = Path(__file__).with_name(filename)
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError(f"release-receipt test component is unavailable: {path}")
+    source = path.read_text(encoding="utf-8")
+    exec(compile(source, str(path), "exec"), globals())
 
 
 def fixture_writer(tmp_path: Path) -> Path:
@@ -177,6 +71,10 @@ def fixture_writer(tmp_path: Path) -> Path:
     nexus.mkdir()
     writer = scripts / SCRIPT.name
     shutil.copy2(SCRIPT, writer)
+    for relative in release_receipt_writer_components(ROOT_DIR):
+        destination = project / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
     shutil.copy2(
         ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh",
         scripts / "run_sumeragi_v2_release_gates.sh",
@@ -231,6 +129,16 @@ if "--release" in args:
             "canonical": True,
         }:
             raise SystemExit(83)
+    if "--production-trace-extraction-evidence" in args:
+        trace_path = pathlib.Path(
+            args[args.index("--production-trace-extraction-evidence") + 1]
+        )
+        if json.loads(trace_path.read_text(encoding="utf-8")) != {
+            "backend_verification": True,
+            "canonical": True,
+            "theorem": "sumeragi-v2-production-trace-extraction",
+        }:
+            raise SystemExit(85)
 raise SystemExit(0)
 """,
         encoding="utf-8",
@@ -1677,7 +1585,13 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     data_lane_certificate_test = writer_symbols["_DATA_LANE_CERTIFICATE_TEST"]
     taira_contract_tests = writer_symbols["_TAIRA_CONTRACT_TESTS"]
     cross_sdk_tests = writer_symbols["_CROSS_SDK_TESTS"]
-    js_status_tests = writer_symbols["_JS_STATUS_TESTS"]
+    rust_sdk_diagnostics_tests = writer_symbols["_RUST_SDK_DIAGNOSTICS_TESTS"]
+    sdk_diagnostics_suite_source_paths = writer_symbols[
+        "_SUMERAGI_SDK_DIAGNOSTICS_SUITE_SOURCE_PATHS"
+    ]
+    sdk_diagnostics_suite_source_manifest = writer_symbols[
+        "_sumeragi_sdk_diagnostics_suite_source_manifest"
+    ](ROOT_DIR)
     native_amx_grouped_fixture = writer_symbols["_NATIVE_AMX_GROUPED_FIXTURE"]
     native_amx_grouped_negative_control_count = writer_symbols[
         "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT"
@@ -1743,6 +1657,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     for relative_path in (
         native_amx_grouped_fixture,
         *native_amx_grouped_suite_source_paths,
+        *sdk_diagnostics_suite_source_paths,
     ):
         retained_source = release_root / relative_path
         retained_source.parent.mkdir(parents=True, exist_ok=True)
@@ -1829,6 +1744,10 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                 test_lines = [f"test {data_lane_certificate_test} ... ok"]
             elif leg_id == "cross-sdk-rust":
                 test_lines = [f"test {test} ... ok" for test in cross_sdk_tests]
+            elif leg_id == "sumeragi-diagnostics-rust":
+                test_lines = [
+                    f"test {test} ... ok" for test in rust_sdk_diagnostics_tests
+                ]
             elif leg_id.startswith("taira-contract-"):
                 contract_index = int(leg_id.rsplit("-", 1)[1])
                 test_lines = [
@@ -1852,16 +1771,16 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                 "suite_source_manifest_sha256="
                 f"{native_amx_grouped_suite_source_manifest}"
             ]
-        else:
+        elif kind == "sdk-diagnostics":
+            surface = leg_id.removeprefix("sumeragi-diagnostics-")
             log_lines = [
-                *(
-                    line
-                    for test_index, test in enumerate(js_status_tests, 1)
-                    for line in (f"# Subtest: {test}", f"ok {test_index} - {test}")
-                ),
-                f"# pass {required_count}",
-                "# fail 0",
+                "sumeragi-v2-sdk-diagnostics "
+                f"surface={surface} tests={required_count} "
+                "suite_source_manifest_sha256="
+                f"{sdk_diagnostics_suite_source_manifest}"
             ]
+        else:
+            raise AssertionError(f"unsupported corridor leg kind {kind}")
         log.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
         corridor_logs.append(log)
         corridor_summary_lines.append(
@@ -2019,13 +1938,13 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                 "jar_sha256\t"
                 "1ac65e9c16595c19241519b209c8055d1aa79bf718f23df7cde5cf9b3dd88f2a",
                 f"source_manifest_sha256\t{sealed_manifest}",
-                "result_count\t5",
+                "result_count\t6",
                 "result\tautoscale-lifecycle\tSumeragiV2AutoscaleLifecycle\t"
                 "multilane_autoscale_lifecycle_fixed.cfg\t8\tNoError\t"
                 f"{'1' * 64}\t{'2' * 64}\t{'3' * 64}",
                 "result\tnative-application-evidence\t"
                 "SumeragiV2NativeApplicationEvidence\t"
-                "multilane_native_application_evidence_fixed.cfg\t5\tNoError\t"
+                "multilane_native_application_evidence_fixed.cfg\t8\tNoError\t"
                 f"{'4' * 64}\t{'5' * 64}\t{'6' * 64}",
                 "result\tautonomous-reservation-carrier\t"
                 "SumeragiV2AutonomousReservationCarrier\t"
@@ -2035,10 +1954,14 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                 "SumeragiV2QueuePlanAdmissionRegistry\t"
                 "multilane_queue_plan_admission_registry_fixed.cfg\t8\tNoError\t"
                 f"{'a' * 64}\t{'b' * 64}\t{'c' * 64}",
+                "result\tkura-replica-retention\t"
+                "SumeragiV2KuraReplicaRetention\t"
+                "kura_replica_retention_fixed.cfg\t8\tNoError\t"
+                f"{'d' * 64}\t{'e' * 64}\t{'f' * 64}",
                 "result\tinflight-first-release-layout\t"
                 "SumeragiV2InFlightFirstRelease\t"
                 "inflight_first_release_fixed.cfg\t18\tNoError\t"
-                f"{'d' * 64}\t{'e' * 64}\t{'f' * 64}",
+                f"{'0' * 64}\t{'1' * 64}\t{'2' * 64}",
             )
         )
         + "\n",
@@ -2047,6 +1970,16 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     formal_cross_tool_evidence = formal_dir / "cross_tool_evidence.json"
     formal_cross_tool_evidence.write_text(
         '{"backend_verification":true,"canonical":true}\n', encoding="utf-8"
+    )
+    # Aggregate-success fixtures exercise the checker-authenticated production
+    # trace-extraction theorem interface required by the release receipt.
+    formal_production_trace_extraction_evidence = (
+        formal_dir / "production_trace_extraction_evidence.json"
+    )
+    formal_production_trace_extraction_evidence.write_text(
+        '{"backend_verification":true,"canonical":true,'
+        '"theorem":"sumeragi-v2-production-trace-extraction"}\n',
+        encoding="utf-8",
     )
     formal_harness_lock = formal_dir / "harness-Cargo.lock"
     shutil.copy2(
@@ -2132,7 +2065,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     write_tsv(
         formal_completion,
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "head_commit": head,
             "head_tree": tree,
             "source_manifest_sha256": sealed_manifest,
@@ -2146,6 +2079,9 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                 formal_multilane_apalache_evidence
             ),
             "cross_tool_evidence_sha256": sha256(formal_cross_tool_evidence),
+            "production_trace_extraction_evidence_sha256": sha256(
+                formal_production_trace_extraction_evidence
+            ),
             "harness_cargo_lock_sha256": sha256(formal_harness_lock),
             "formal_toolchain_sha256": sha256(formal_toolchain),
             "tlaps_resource_jsonl_sha256": sha256(formal_tlaps_resource_jsonl),
@@ -2425,6 +2361,9 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "formal_verus_log": formal_verus_log,
         "formal_multilane_apalache_evidence": formal_multilane_apalache_evidence,
         "formal_cross_tool_evidence": formal_cross_tool_evidence,
+        "formal_production_trace_extraction_evidence": (
+            formal_production_trace_extraction_evidence
+        ),
         "formal_harness_lock": formal_harness_lock,
         "formal_toolchain": formal_toolchain,
         "formal_tlaps_resource_jsonl": formal_tlaps_resource_jsonl,
@@ -2931,6 +2870,9 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
             "formal_multilane_apalache_evidence"
         ),
         "formal_cross_tool_evidence": "formal_cross_tool_evidence",
+        "formal_production_trace_extraction_evidence": (
+            "formal_production_trace_extraction_evidence"
+        ),
         "formal_harness_lock": "formal_harness_lock",
         "formal_toolchain": "formal_toolchain",
         "formal_tlaps_resource_jsonl": "formal_tlaps_resource_jsonl",
@@ -2968,6 +2910,19 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         {"path": str(path.resolve()), "sha256": sha256(path)}
         for path in corridor_logs
     ]
+    diagnostics_legs = {
+        Path(artifact["path"]).stem.split("-", 1)[1]
+        for artifact in receipt["evidence"]["corridor_logs"]
+        if "-sumeragi-diagnostics-" in Path(artifact["path"]).name
+    }
+    assert diagnostics_legs == {
+        "sumeragi-diagnostics-rust",
+        "sumeragi-diagnostics-python",
+        "sumeragi-diagnostics-javascript",
+        "sumeragi-diagnostics-swift",
+        "sumeragi-diagnostics-kotlin",
+        "sumeragi-diagnostics-java",
+    }
     proof_fidelity_logs = [
         artifact
         for artifact in receipt["evidence"]["corridor_logs"]
@@ -3191,6 +3146,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
                 "formal_verus_log",
                 "formal_multilane_apalache_evidence",
                 "formal_cross_tool_evidence",
+                "formal_production_trace_extraction_evidence",
                 "formal_harness_lock",
                 "formal_toolchain",
                 "formal_tlaps_resource_jsonl",
@@ -3575,9 +3531,11 @@ def test_receipt_rejects_prebuilt_artifact_symlink(
         assert isinstance(binaries, list)
         artifact = binaries[0]
     assert isinstance(artifact, Path)
+    original_bytes = artifact.read_bytes()
+    original_mode = stat.S_IMODE(artifact.stat().st_mode)
     replacement = tmp_path / f"{fixture_name}-replacement"
-    replacement.write_bytes(artifact.read_bytes())
-    replacement.chmod(artifact.stat().st_mode & 0o7777)
+    replacement.write_bytes(original_bytes)
+    replacement.chmod(original_mode)
     parent = artifact.parent
     parent.chmod(0o700)
     artifact.unlink()
@@ -3586,12 +3544,24 @@ def test_receipt_rejects_prebuilt_artifact_symlink(
     except (NotImplementedError, OSError) as error:
         pytest.skip(f"symlinks unavailable: {error}")
     parent.chmod(0o500)
-    writer = fixture_writer(tmp_path)
 
-    result = run_writer(evidence, terminal_output_path(evidence), writer)
+    try:
+        writer = fixture_writer(tmp_path)
+        result = run_writer(evidence, terminal_output_path(evidence), writer)
 
-    assert result.returncode == 1
-    assert "non-symlink" in result.stderr
+        assert result.returncode == 1
+        assert "non-symlink" in result.stderr
+    finally:
+        # Restore the sealed fixture before pytest's retained tmp-path cleanup.
+        # Otherwise the external replacement can be removed before this
+        # read-only parent's symlink, leaving a dangling link that pytest cannot
+        # chmod and unlink on macOS.
+        parent.chmod(0o700)
+        if artifact.is_symlink() or artifact.exists():
+            artifact.unlink()
+        artifact.write_bytes(original_bytes)
+        artifact.chmod(original_mode)
+        parent.chmod(0o500)
 
 
 def test_receipt_rejects_prebuilt_binary_hardlink_alias(tmp_path: Path) -> None:
@@ -4069,7 +4039,7 @@ def test_receipt_rejects_rehashed_noncanonical_apalache_evidence(
     assert isinstance(completion, Path)
     canonical = apalache.read_text(encoding="utf-8")
     apalache.write_text(
-        canonical.replace("result_count\t5", "result_count\t4", 1),
+        canonical.replace("result_count\t6", "result_count\t5", 1),
         encoding="utf-8",
     )
     fields = dict(
@@ -4099,6 +4069,62 @@ def test_receipt_rejects_rehashed_noncanonical_apalache_evidence(
 
     assert result.returncode == 1
     assert "is not exact source-bound NoError evidence" in result.stderr
+
+
+def test_receipt_rejects_legacy_formal_completion_without_trace_extraction(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    completion = evidence["formal_completion"]
+    assert isinstance(completion, Path)
+    fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    fields["schema_version"] = "1"
+    fields.pop("production_trace_extraction_evidence_sha256")
+    write_tsv(completion, fields)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert (
+        "formal completion is release-ineligible without authenticated "
+        "production trace-extraction evidence"
+    ) in result.stderr
+
+
+def test_receipt_rejects_trace_extraction_not_authenticated_by_checker(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    trace_evidence = evidence["formal_production_trace_extraction_evidence"]
+    completion = evidence["formal_completion"]
+    assert isinstance(trace_evidence, Path)
+    assert isinstance(completion, Path)
+    trace_evidence.write_text(
+        '{"backend_verification":false,"canonical":true,'
+        '"theorem":"sumeragi-v2-production-trace-extraction"}\n',
+        encoding="utf-8",
+    )
+    fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    fields["production_trace_extraction_evidence_sha256"] = sha256(
+        trace_evidence
+    )
+    write_tsv(completion, fields)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert (
+        "archived formal evidence does not authenticate production "
+        "trace extraction"
+    ) in result.stderr
 
 
 def test_receipt_links_required_cross_tool_evidence(tmp_path: Path) -> None:
@@ -5091,6 +5117,10 @@ def test_receipt_rejects_cross_source_completion(
             "formal_multilane_apalache_evidence",
             "formal multilane Apalache evidence digest mismatch",
         ),
+        (
+            "formal_production_trace_extraction_evidence",
+            "formal production trace-extraction evidence digest mismatch",
+        ),
         ("formal_toolchain", "formal toolchain digest mismatch"),
         ("formal_tlaps_resource_jsonl", "TLAPS resource samples digest mismatch"),
         ("formal_tlaps_resource_summary", "TLAPS resource summary digest mismatch"),
@@ -5566,6 +5596,69 @@ def test_receipt_rejects_rehashed_malformed_corridor_log(
     assert "ambiguous Cargo transcript" in result.stderr
 
 
+def test_receipt_rejects_sumeragi_diagnostics_rust_log_missing_named_test(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    summary = evidence["corridor_summary"]
+    completion = evidence["corridor_completion"]
+    assert isinstance(summary, Path)
+    assert isinstance(completion, Path)
+    summary_lines = summary.read_text(encoding="utf-8").splitlines()
+    row_index = next(
+        index
+        for index, line in enumerate(summary_lines[1:], 1)
+        if "\tsumeragi-diagnostics-rust\t" in line
+    )
+    row = summary_lines[row_index].split("\t")
+    log = summary.parent / row[8]
+    log_lines = log.read_text(encoding="utf-8").splitlines()
+    named_test_index = next(
+        index
+        for index, line in enumerate(log_lines)
+        if line.startswith("test client::tests::get_sumeragi_")
+    )
+    del log_lines[named_test_index]
+    log.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+    row[7] = sha256(log)
+    summary_lines[row_index] = "\t".join(row)
+    summary.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
+    completion_fields = read_tsv_fields(completion)
+    completion_fields["summary_sha256"] = sha256(summary)
+    write_tsv(completion, completion_fields)
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert (
+        "corridor exact Cargo leg sumeragi-diagnostics-rust lacks its named test"
+        in result.stderr
+    )
+
+
+def test_receipt_rejects_sumeragi_diagnostics_suite_source_drift(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    release_root = evidence["release_root"]
+    assert isinstance(release_root, Path)
+    source = (
+        release_root
+        / "python/iroha_python/tests/client_sumeragi_v2_status_test.py"
+    )
+    source.write_bytes(source.read_bytes() + b"\n# forged post-harness source drift\n")
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert (
+        "corridor Sumeragi v2 SDK diagnostics python leg is not bound to the "
+        "exact suite sources" in result.stderr
+    )
+
+
 def test_hand_invoked_writer_rejects_fake_machine_completion_artifacts(
     tmp_path: Path,
 ) -> None:
@@ -5575,7 +5668,10 @@ def test_hand_invoked_writer_rejects_fake_machine_completion_artifacts(
     result = run_writer(evidence, output, SCRIPT)
 
     assert result.returncode == 1
-    assert "archived formal Verus evidence failed validation" in result.stderr
+    assert (
+        "archived formal ledger has an invalid cross-tool evidence requirement"
+        in result.stderr
+    )
     assert not output.exists()
 
 
@@ -5898,697 +5994,6 @@ def test_receipt_revalidates_archived_taira_semantics(tmp_path: Path) -> None:
     assert "archived Taira evidence failed release validation" in result.stderr
 
 
-@pytest.mark.parametrize(
-    ("field_path", "replacement"),
-    [
-        (("schema_version",), True),
-        (("schema_version",), 1.0),
-        (("trust_boundary", "same_uid_and_trusted_ancestor_owners"), 1),
-        (("trusted_inputs", "revocation", "size_bytes"), False),
-        (("runner", "size_bytes"), True),
-        (("runner", "size_bytes"), 1.0),
-        (("runner", "mode"), 0o755),
-        (("runner", "path_entries"), ["relative-path"]),
-        (
-            ("runner", "self_digest_environment_variables"),
-            ["SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256"],
-        ),
-        (("trusted_execution_probes", "bash", "exit_status"), False),
-    ],
-)
-def test_receipt_rejects_bootstrap_marker_schema_and_type_confusion(
-    tmp_path: Path, field_path: tuple[str, ...], replacement: object
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    mutate_bootstrap_marker(
-        evidence,
-        lambda value: set_nested(value, field_path, replacement),
-    )
-
-    result = run_writer(evidence, terminal_output_path(evidence), writer)
-
-    assert result.returncode == 1
-    assert "bootstrap" in result.stderr.lower()
-    assert not terminal_output_path(evidence).exists()
-
-
-def test_receipt_rejects_bootstrap_marker_without_exact_external_digest(
-    tmp_path: Path,
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    evidence["expected_bootstrap_completion_sha256"] = "0" * 64
-
-    result = run_writer(evidence, terminal_output_path(evidence), writer)
-
-    assert result.returncode == 1
-    assert "out-of-band digest" in result.stderr
-    assert not terminal_output_path(evidence).exists()
-
-
-@pytest.mark.parametrize(
-    "artifact_name",
-    [
-        "trusted-bootstrap.py",
-        "compute-manifest.py",
-        "verify-identity.py",
-        "python3",
-        "bash",
-        "bootstrap-allowed-signers",
-        "bootstrap-revocation",
-    ],
-)
-def test_receipt_rejects_tampered_bootstrap_trusted_archives(
-    tmp_path: Path, artifact_name: str
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    directory = evidence["bootstrap_evidence_dir"]
-    assert isinstance(directory, Path)
-    artifact = directory / artifact_name
-    original_mode = artifact.stat().st_mode & 0o7777
-    artifact.chmod(0o700 if original_mode == 0o500 else 0o600)
-    artifact.write_bytes(artifact.read_bytes() + b"tampered\n")
-    artifact.chmod(original_mode)
-
-    result = run_writer(evidence, terminal_output_path(evidence), writer)
-
-    assert result.returncode == 1
-    assert "bootstrap" in result.stderr.lower()
-    assert not terminal_output_path(evidence).exists()
-
-
-@pytest.mark.parametrize("mutation", ["mode", "symlink", "hardlink"])
-def test_receipt_rejects_bootstrap_archive_path_and_inode_aliases(
-    tmp_path: Path, mutation: str
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    directory = evidence["bootstrap_evidence_dir"]
-    assert isinstance(directory, Path)
-    helper = directory / "compute-manifest.py"
-    if mutation == "mode":
-        helper.chmod(0o600)
-    elif mutation == "symlink":
-        real = directory / "compute-manifest.real"
-        helper.rename(real)
-        helper.symlink_to(real.name)
-    elif mutation == "hardlink":
-        verifier = directory / "verify-identity.py"
-        verifier.unlink()
-        os.link(helper, verifier)
-    else:
-        raise AssertionError(mutation)
-
-    result = run_writer(evidence, terminal_output_path(evidence), writer)
-
-    assert result.returncode == 1
-    assert "bootstrap" in result.stderr.lower()
-    assert not terminal_output_path(evidence).exists()
-
-
-@pytest.mark.parametrize(
-    ("key", "basename"),
-    [
-        ("bootstrap_completion", "BOOTSTRAP_COMPLETED.copy.json"),
-        ("bootstrap_identity", "candidate-identity.copy.json"),
-        ("bootstrap_attestation", "identity-attestation.copy.json"),
-        ("bootstrap_transcript", "identity-transcript.copy.json"),
-    ],
-)
-def test_receipt_rejects_bootstrap_cli_path_aliases(
-    tmp_path: Path, key: str, basename: str
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    source = evidence[key]
-    directory = evidence["bootstrap_evidence_dir"]
-    assert isinstance(source, Path)
-    assert isinstance(directory, Path)
-    alias = directory / basename
-    alias.write_bytes(source.read_bytes())
-    alias.chmod(source.stat().st_mode & 0o7777)
-    evidence[key] = alias
-
-    result = run_writer(evidence, terminal_output_path(evidence), writer)
-
-    assert result.returncode == 1
-    assert "exact evidence path" in result.stderr
-
-
-@pytest.mark.parametrize(
-    ("field_path", "replacement"),
-    [
-        (
-            (
-                "runner",
-                "environment_without_self_digest",
-                "IROHA_RELEASE_BOOTSTRAP_IDENTITY",
-            ),
-            "/tmp/aliased-candidate-identity.json",
-        ),
-        (
-            (
-                "runner",
-                "environment_without_self_digest",
-                "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256",
-            ),
-            "e" * 64,
-        ),
-        (
-            (
-                "runner",
-                "environment_without_self_digest",
-                "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
-            ),
-            "e" * 64,
-        ),
-        (
-            (
-                "runner",
-                "environment_without_self_digest",
-                "IROHA_RELEASE_SCALING_IROHAD_SHA256",
-            ),
-            "e" * 64,
-        ),
-        (
-            (
-                "runner",
-                "environment_without_self_digest",
-                "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
-            ),
-            "e" * 64,
-        ),
-        (("runner", "argv", "0"), "/bin/bash"),
-        (("runner", "closed_path_resolution", "git"), "/usr/bin/git"),
-    ],
-)
-def test_receipt_rejects_bootstrap_runner_aliases(
-    tmp_path: Path, field_path: tuple[str, ...], replacement: object
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-
-    def mutate(value: dict[str, object]) -> None:
-        if field_path[-1].isdigit():
-            current: object = value
-            for field in field_path[:-2]:
-                assert isinstance(current, dict)
-                current = current[field]
-            assert isinstance(current, dict)
-            sequence = current[field_path[-2]]
-            assert isinstance(sequence, list)
-            sequence[int(field_path[-1])] = replacement
-        else:
-            set_nested(value, field_path, replacement)
-
-    mutate_bootstrap_marker(evidence, mutate)
-
-    result = run_writer(evidence, terminal_output_path(evidence), writer)
-
-    assert result.returncode == 1
-    assert "bootstrap" in result.stderr.lower()
-
-
-def test_receipt_requires_distinct_original_and_sealed_candidate_roots(
-    tmp_path: Path,
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    evidence["bootstrap_candidate_root"] = evidence["release_root"]
-
-    result = run_writer(evidence, terminal_output_path(evidence), writer)
-
-    assert result.returncode == 1
-    assert "must be distinct" in result.stderr
-
-
-def test_receipt_requires_exact_bootstrap_release_source_shape(tmp_path: Path) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    wrong_root = tmp_path / "wrong-sealed-source"
-    wrong_root.mkdir()
-    source_lock = evidence["signature_cargo_lock"]
-    assert isinstance(source_lock, Path)
-    (wrong_root / "Cargo.lock").write_bytes(source_lock.read_bytes())
-    evidence["release_root"] = wrong_root
-
-    result = run_writer(evidence, terminal_output_path(evidence), writer)
-
-    assert result.returncode == 1
-    assert "exact bootstrap release-runner source" in result.stderr
-
-
-def test_receipt_requires_exact_terminal_output_path(tmp_path: Path) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    wrong_parent = tmp_path / "wrong-output"
-    wrong_parent.mkdir(mode=0o700)
-    wrong_parent.chmod(0o700)
-    wrong_output = wrong_parent / "RELEASE_COMPLETED.json"
-
-    result = run_writer(
-        evidence,
-        wrong_output,
-        writer,
-        use_supplied_output=True,
-    )
-
-    assert result.returncode == 1
-    assert "exact bootstrap release output path" in result.stderr
-    assert not wrong_output.exists()
-    assert not terminal_output_path(evidence).exists()
-
-
-def private_output(tmp_path: Path) -> tuple[Path, Path]:
-    directory = tmp_path / "private-output"
-    directory.mkdir(mode=0o700)
-    directory.chmod(0o700)
-    return directory, directory / "RELEASE_COMPLETED.json"
-
-
-def test_terminal_publication_is_no_clobber_and_durable(tmp_path: Path) -> None:
-    module = load_writer_module()
-    directory, output = private_output(tmp_path)
-    data = canonical_json({"result": "release-complete"})
-    revalidations = 0
-
-    def revalidate() -> None:
-        nonlocal revalidations
-        revalidations += 1
-
-    module._publish_terminal_receipt(output, data, revalidate=revalidate)
-
-    metadata = output.lstat()
-    assert output.read_bytes() == data
-    assert metadata.st_mode & 0o7777 == 0o400
-    assert metadata.st_nlink == 1
-    assert revalidations == 2
-    assert not list(directory.glob(f".{output.name}.stage.*"))
-
-
-def test_terminal_publication_completes_short_writes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    module = load_writer_module()
-    directory, output = private_output(tmp_path)
-    data = b"terminal receipt with deliberately short writes\n"
-    real_write = module.os.write
-    real_close = module.os.close
-    directory_metadata = directory.stat()
-    injected_close_failure = False
-
-    def short_write(descriptor: int, pending: object) -> int:
-        return real_write(descriptor, pending[:3])
-
-    def close_with_final_directory_failure(descriptor: int) -> None:
-        nonlocal injected_close_failure
-        metadata = os.fstat(descriptor)
-        fail = (
-            not injected_close_failure
-            and stat.S_ISDIR(metadata.st_mode)
-            and (metadata.st_dev, metadata.st_ino)
-            == (directory_metadata.st_dev, directory_metadata.st_ino)
-        )
-        real_close(descriptor)
-        if fail:
-            injected_close_failure = True
-            raise OSError("fixture close reported failure after durable publication")
-
-    monkeypatch.setattr(module.os, "write", short_write)
-    monkeypatch.setattr(module.os, "close", close_with_final_directory_failure)
-
-    module._publish_terminal_receipt(output, data, revalidate=lambda: None)
-
-    assert injected_close_failure
-    assert output.read_bytes() == data
-    assert output.stat().st_nlink == 1
-    assert not list(directory.glob(f".{output.name}.stage.*"))
-
-
-def test_terminal_publication_rejects_zero_length_write_progress(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    module = load_writer_module()
-    directory, output = private_output(tmp_path)
-    monkeypatch.setattr(module.os, "write", lambda _descriptor, _pending: 0)
-
-    with pytest.raises(module.ReceiptError, match="write made no progress"):
-        module._publish_terminal_receipt(
-            output, b"terminal receipt\n", revalidate=lambda: None
-        )
-
-    assert not output.exists()
-    assert not list(directory.glob(f".{output.name}.stage.*"))
-
-
-@pytest.mark.parametrize("failure_call", [1, 2, 3])
-def test_terminal_publication_fsync_failure_cleans_every_owned_name(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    failure_call: int,
-) -> None:
-    module = load_writer_module()
-    directory, output = private_output(tmp_path)
-    real_fsync = module.os.fsync
-    calls = 0
-
-    def failing_fsync(descriptor: int) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == failure_call:
-            raise OSError("fixture fsync failure")
-        real_fsync(descriptor)
-
-    monkeypatch.setattr(module.os, "fsync", failing_fsync)
-
-    with pytest.raises(module.ReceiptError, match="publication failed closed"):
-        module._publish_terminal_receipt(
-            output, b"terminal receipt\n", revalidate=lambda: None
-        )
-
-    assert not output.exists()
-    assert not list(directory.glob(f".{output.name}.stage.*"))
-
-
-def test_terminal_publication_link_failure_cleans_stage(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    module = load_writer_module()
-    directory, output = private_output(tmp_path)
-
-    def fail_link(*_args: object, **_kwargs: object) -> None:
-        raise OSError("fixture link failure")
-
-    monkeypatch.setattr(module.os, "link", fail_link)
-
-    with pytest.raises(module.ReceiptError, match="publication failed closed"):
-        module._publish_terminal_receipt(
-            output, b"terminal receipt\n", revalidate=lambda: None
-        )
-
-    assert not output.exists()
-    assert not list(directory.glob(f".{output.name}.stage.*"))
-
-
-def test_terminal_publication_cleans_a_link_created_before_reported_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    module = load_writer_module()
-    directory, output = private_output(tmp_path)
-    real_link = module.os.link
-
-    def link_then_fail(*args: object, **kwargs: object) -> None:
-        real_link(*args, **kwargs)
-        raise OSError("fixture post-link failure")
-
-    monkeypatch.setattr(module.os, "link", link_then_fail)
-
-    with pytest.raises(module.ReceiptError, match="publication failed closed"):
-        module._publish_terminal_receipt(
-            output, b"terminal receipt\n", revalidate=lambda: None
-        )
-
-    assert not output.exists()
-    assert not list(directory.glob(f".{output.name}.stage.*"))
-
-
-@pytest.mark.parametrize("failure_kind", ["file", "directory"])
-def test_evidence_durability_fsync_failure_fails_closed(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    failure_kind: str,
-) -> None:
-    module = load_writer_module()
-    directory = tmp_path / "evidence"
-    directory.mkdir(mode=0o700)
-    directory.chmod(0o700)
-    artifact = directory / "artifact"
-    artifact.write_bytes(b"progress evidence\n")
-    artifact.chmod(0o400)
-    path_contract = module._capture_path_contract(
-        artifact,
-        "fixture evidence",
-        expected_sha256=sha256(artifact),
-        expected_mode=0o400,
-        expected_owner=os.geteuid(),
-        expected_nlink=1,
-        expected_size=artifact.stat().st_size,
-    )
-    directory_contract = module._capture_directory_contract(
-        directory, "fixture evidence directory"
-    )
-    real_fsync = module.os.fsync
-
-    def fail_selected(descriptor: int) -> None:
-        is_directory = stat.S_ISDIR(os.fstat(descriptor).st_mode)
-        if is_directory == (failure_kind == "directory"):
-            raise OSError("fixture evidence durability failure")
-        real_fsync(descriptor)
-
-    monkeypatch.setattr(module.os, "fsync", fail_selected)
-
-    with pytest.raises(module.ReceiptError, match="fsync failed"):
-        module._fsync_receipt_inputs([directory_contract, path_contract])
-
-
-def test_evidence_durability_rejects_directory_inventory_drift(
-    tmp_path: Path,
-) -> None:
-    module = load_writer_module()
-    directory = tmp_path / "evidence"
-    directory.mkdir(mode=0o700)
-    directory.chmod(0o700)
-    contract = module._capture_directory_contract(
-        directory, "fixture evidence directory"
-    )
-    (directory / "late-artifact").write_bytes(b"late\n")
-
-    with pytest.raises(module.ReceiptError, match="changed before fsync"):
-        module._fsync_receipt_inputs([contract])
-
-
-def test_evidence_durability_orders_files_before_bottom_up_directories(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    module = load_writer_module()
-    parent = tmp_path / "evidence"
-    child = parent / "nested"
-    child.mkdir(parents=True, mode=0o700)
-    parent.chmod(0o700)
-    child.chmod(0o700)
-    artifact = child / "artifact"
-    artifact.write_bytes(b"progress evidence\n")
-    artifact.chmod(0o400)
-    contracts = [
-        module._capture_directory_contract(parent, "fixture parent"),
-        module._capture_path_contract(
-            artifact,
-            "fixture evidence",
-            expected_sha256=sha256(artifact),
-            expected_mode=0o400,
-            expected_owner=os.geteuid(),
-            expected_nlink=1,
-            expected_size=artifact.stat().st_size,
-        ),
-        module._capture_directory_contract(child, "fixture child"),
-    ]
-    inode_names = {
-        (contract.device, contract.inode): contract.path.name
-        for contract in contracts
-    }
-    observed: list[str] = []
-    real_fsync = module.os.fsync
-
-    def record_fsync(descriptor: int) -> None:
-        metadata = os.fstat(descriptor)
-        observed.append(inode_names[(metadata.st_dev, metadata.st_ino)])
-        real_fsync(descriptor)
-
-    monkeypatch.setattr(module.os, "fsync", record_fsync)
-
-    module._fsync_receipt_inputs(contracts)
-
-    assert observed == ["artifact", "nested", "evidence"]
-
-
-@pytest.mark.parametrize("mutation_revalidation", [1, 2])
-def test_terminal_publication_revalidation_failure_cleans_terminal_names(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    mutation_revalidation: int,
-) -> None:
-    module = load_writer_module()
-    directory, output = private_output(tmp_path)
-    evidence = tmp_path / "evidence.tsv"
-    evidence.write_bytes(b"schema_version\t1\nresult\tpassed\n")
-    receipt_data = b"terminal receipt\n"
-    if mutation_revalidation == 1:
-        replacement = tmp_path / "replacement.tsv"
-        replacement.write_bytes(b"schema_version\t1\nresult\tforged\n")
-        original_digest = sha256(evidence)
-        parse_snapshot = module._tsv_fields_from_snapshot
-
-        def replace_after_semantic_validation(
-            evidence_snapshot: object, name: str
-        ) -> dict[str, str]:
-            fields = parse_snapshot(evidence_snapshot, name)
-            os.replace(replacement, evidence)
-            return fields
-
-        monkeypatch.setattr(
-            module,
-            "_tsv_fields_from_snapshot",
-            replace_after_semantic_validation,
-        )
-        evidence_snapshot, fields = module._load_tsv(
-            evidence, "fixture completion"
-        )
-        artifact = module._artifact(evidence_snapshot)
-        assert fields == {"schema_version": "1", "result": "passed"}
-        assert artifact == {"path": str(evidence), "sha256": original_digest}
-        assert sha256(evidence) != artifact["sha256"]
-        snapshot = module._snapshot_contract(evidence_snapshot)
-        receipt_data = canonical_json({"evidence": artifact})
-    else:
-        snapshot = module._capture_path_contract(
-            evidence,
-            "fixture evidence",
-            expected_sha256=sha256(evidence),
-        )
-    calls = 0
-
-    def revalidate() -> None:
-        nonlocal calls
-        calls += 1
-        if mutation_revalidation == 2 and calls == mutation_revalidation:
-            evidence.write_bytes(b"forged evidence\n")
-        module._revalidate_receipt_inputs([snapshot])
-
-    with pytest.raises(module.ReceiptError, match="aggregate evidence"):
-        module._publish_terminal_receipt(
-            output, receipt_data, revalidate=revalidate
-        )
-
-    assert not output.exists()
-    assert not list(directory.glob(f".{output.name}.stage.*"))
-    if mutation_revalidation == 1:
-        cases = (
-            (b"schema_version\t1\r\n", 1024, "canonical LF-only text"),
-            (b"schema_version\t1", 1024, "canonical LF-only text"),
-            (b"schema_version\t" + b"1" * 32 + b"\n", 16, "size limit"),
-        )
-        for index, (data, maximum_bytes, expected) in enumerate(cases):
-            malformed = tmp_path / f"malformed-{index}.tsv"
-            malformed.write_bytes(data)
-            with pytest.raises(module.ReceiptError, match=expected):
-                module._load_tsv(
-                    malformed,
-                    f"malformed fixture {index}",
-                    maximum_bytes=maximum_bytes,
-                )
-
-
-@pytest.mark.parametrize("existing_kind", ["regular", "symlink", "hardlink"])
-def test_terminal_publication_never_overwrites_existing_terminal_name(
-    tmp_path: Path, existing_kind: str
-) -> None:
-    module = load_writer_module()
-    directory, output = private_output(tmp_path)
-    protected = directory / "protected"
-    protected.write_bytes(b"protected bytes\n")
-    if existing_kind == "regular":
-        output.write_bytes(b"previous terminal receipt\n")
-    elif existing_kind == "symlink":
-        output.symlink_to(protected.name)
-    elif existing_kind == "hardlink":
-        os.link(protected, output)
-    else:
-        raise AssertionError(existing_kind)
-    before = output.lstat()
-    protected_bytes = protected.read_bytes()
-
-    with pytest.raises(module.ReceiptError, match="overwrite is forbidden"):
-        module._publish_terminal_receipt(
-            output, b"replacement receipt\n", revalidate=lambda: None
-        )
-
-    after = output.lstat()
-    assert (after.st_dev, after.st_ino) == (before.st_dev, before.st_ino)
-    assert protected.read_bytes() == protected_bytes
-    assert not list(directory.glob(f".{output.name}.stage.*"))
-
-
-@pytest.mark.parametrize("parent_state", ["missing", "mode-0755"])
-def test_terminal_publication_rejects_unsafe_output_directory(
-    tmp_path: Path, parent_state: str
-) -> None:
-    module = load_writer_module()
-    directory = tmp_path / "unsafe-output"
-    if parent_state == "mode-0755":
-        directory.mkdir(mode=0o700)
-        directory.chmod(0o755)
-    output = directory / "RELEASE_COMPLETED.json"
-
-    with pytest.raises(module.ReceiptError, match="terminal receipt output directory"):
-        module._publish_terminal_receipt(
-            output, b"terminal receipt\n", revalidate=lambda: None
-        )
-
-    assert not output.exists()
-
-
-@pytest.mark.parametrize("mutation", ["content", "mode", "inode", "hardlink"])
-def test_aggregate_snapshot_revalidation_rejects_late_mutation(
-    tmp_path: Path, mutation: str
-) -> None:
-    module = load_writer_module()
-    evidence = tmp_path / "aggregate-evidence"
-    evidence.write_bytes(b"original evidence\n")
-    snapshot = module._capture_path_contract(
-        evidence,
-        "fixture evidence",
-        expected_sha256=sha256(evidence),
-    )
-    if mutation == "content":
-        evidence.write_bytes(b"mutated evidence!\n")
-    elif mutation == "mode":
-        evidence.chmod(0o400)
-    elif mutation == "inode":
-        evidence.unlink()
-        evidence.write_bytes(b"original evidence\n")
-    elif mutation == "hardlink":
-        os.link(evidence, tmp_path / "aggregate-evidence-alias")
-    else:
-        raise AssertionError(mutation)
-
-    with pytest.raises(module.ReceiptError, match="aggregate evidence"):
-        module._revalidate_receipt_inputs([snapshot])
-
-
-@pytest.mark.parametrize("mutation", ["mode", "entry", "inode"])
-def test_aggregate_directory_revalidation_rejects_late_mutation(
-    tmp_path: Path, mutation: str
-) -> None:
-    module = load_writer_module()
-    directory = tmp_path / "aggregate-directory"
-    directory.mkdir(mode=0o700)
-    directory.chmod(0o700)
-    snapshot = module._capture_directory_contract(
-        directory, "fixture evidence directory"
-    )
-    if mutation == "mode":
-        directory.chmod(0o755)
-    elif mutation == "entry":
-        (directory / "late-entry").write_bytes(b"late evidence\n")
-    elif mutation == "inode":
-        directory.rmdir()
-        directory.mkdir(mode=0o700)
-        directory.chmod(0o700)
-    else:
-        raise AssertionError(mutation)
-
-    with pytest.raises(module.ReceiptError, match="aggregate evidence directory"):
-        module._revalidate_receipt_inputs([snapshot])
+for _release_receipt_test_component in RELEASE_RECEIPT_TEST_COMPONENT_FILES:
+    _execute_test_component(_release_receipt_test_component)
+del _release_receipt_test_component

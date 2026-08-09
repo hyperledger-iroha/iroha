@@ -9,6 +9,7 @@ fn ordered_release_rejects_conflicts_partial_completion_and_aba_reuse() {
     let completion = release_completion(&records, 1);
     let mut live = records.clone();
     let mut committed = Vec::new();
+    let mut plan_tombstoned = Vec::new();
     let mut barriers = Vec::new();
     let mut completed = Vec::new();
 
@@ -16,9 +17,10 @@ fn ordered_release_rejects_conflicts_partial_completion_and_aba_reuse() {
         apply_frame(
             &mut live,
             &mut committed,
+            &mut plan_tombstoned,
             &mut barriers,
             &mut completed,
-            LaneQueueReservationJournalFrameV5::CompleteRelease(completion.clone()),
+            LaneQueueReservationJournalFrameV6::CompleteRelease(completion.clone()),
         )
         .is_err(),
         "completion must require its exact prepared barrier"
@@ -28,9 +30,10 @@ fn ordered_release_rejects_conflicts_partial_completion_and_aba_reuse() {
     apply_frame(
         &mut live,
         &mut committed,
+        &mut plan_tombstoned,
         &mut barriers,
         &mut completed,
-        LaneQueueReservationJournalFrameV5::PrepareRelease(barrier.clone()),
+        LaneQueueReservationJournalFrameV6::PrepareRelease(barrier.clone()),
     )
     .expect("prepare exact release");
 
@@ -40,9 +43,10 @@ fn ordered_release_rejects_conflicts_partial_completion_and_aba_reuse() {
         apply_frame(
             &mut live,
             &mut committed,
+            &mut plan_tombstoned,
             &mut barriers,
             &mut completed,
-            LaneQueueReservationJournalFrameV5::PrepareRelease(conflicting_barrier),
+            LaneQueueReservationJournalFrameV6::PrepareRelease(conflicting_barrier),
         )
         .is_err(),
         "overlapping release identities must fail closed"
@@ -56,9 +60,10 @@ fn ordered_release_rejects_conflicts_partial_completion_and_aba_reuse() {
         apply_frame(
             &mut live,
             &mut committed,
+            &mut plan_tombstoned,
             &mut barriers,
             &mut completed,
-            LaneQueueReservationJournalFrameV5::CompleteRelease(wrong_records),
+            LaneQueueReservationJournalFrameV6::CompleteRelease(wrong_records),
         )
         .is_err(),
         "completion must match exact live records, including FIFO timestamps"
@@ -70,9 +75,10 @@ fn ordered_release_rejects_conflicts_partial_completion_and_aba_reuse() {
     apply_frame(
         &mut live,
         &mut committed,
+        &mut plan_tombstoned,
         &mut barriers,
         &mut completed,
-        LaneQueueReservationJournalFrameV5::CompleteRelease(completion.clone()),
+        LaneQueueReservationJournalFrameV6::CompleteRelease(completion.clone()),
     )
     .expect("complete exact release");
     assert!(live.is_empty());
@@ -84,9 +90,10 @@ fn ordered_release_rejects_conflicts_partial_completion_and_aba_reuse() {
         apply_frame(
             &mut live,
             &mut committed,
+            &mut plan_tombstoned,
             &mut barriers,
             &mut completed,
-            LaneQueueReservationJournalFrameV5::PutBatch(vec![recreated]),
+            LaneQueueReservationJournalFrameV6::PutBatch(vec![recreated]),
         )
         .is_err(),
         "completed release must block same-hash ABA reservation reuse"
@@ -97,9 +104,10 @@ fn ordered_release_rejects_conflicts_partial_completion_and_aba_reuse() {
     apply_frame(
         &mut live,
         &mut committed,
+        &mut plan_tombstoned,
         &mut barriers,
         &mut completed,
-        LaneQueueReservationJournalFrameV5::ForgetRelease(stale_forget),
+        LaneQueueReservationJournalFrameV6::ForgetRelease(stale_forget),
     )
     .expect("stale full identity is a harmless no-op");
     assert_eq!(completed, vec![completion]);
@@ -107,9 +115,10 @@ fn ordered_release_rejects_conflicts_partial_completion_and_aba_reuse() {
     apply_frame(
         &mut live,
         &mut committed,
+        &mut plan_tombstoned,
         &mut barriers,
         &mut completed,
-        LaneQueueReservationJournalFrameV5::ForgetRelease(barrier),
+        LaneQueueReservationJournalFrameV6::ForgetRelease(barrier),
     )
     .expect("forget exact completion");
     assert!(completed.is_empty());
@@ -121,17 +130,20 @@ fn snapshot_rejects_completed_release_overlapping_live_ownership() {
     let completion = release_completion(core::slice::from_ref(&record), 1);
     let mut live = Vec::new();
     let mut committed = Vec::new();
+    let mut plan_tombstoned = Vec::new();
     let mut barriers = Vec::new();
     let mut completed = Vec::new();
     assert!(
         apply_frame(
             &mut live,
             &mut committed,
+            &mut plan_tombstoned,
             &mut barriers,
             &mut completed,
-            LaneQueueReservationJournalFrameV5::Snapshot {
+            LaneQueueReservationJournalFrameV6::Snapshot {
                 live: vec![record],
                 committed: Vec::new(),
+                plan_tombstoned: Vec::new(),
                 release_barriers: Vec::new(),
                 completed_releases: vec![completion],
             },
@@ -155,7 +167,7 @@ fn exact_tombstone_does_not_remove_readmitted_hash_with_new_plan() {
     apply_unprotected_frame(
         &mut records,
         &mut committed,
-        LaneQueueReservationJournalFrameV5::ReleaseBatch(vec![old.key]),
+        LaneQueueReservationJournalFrameV6::ReleaseBatch(vec![old.key]),
     )
     .expect("stale release is idempotent");
     assert_eq!(records, vec![replacement]);
@@ -169,7 +181,7 @@ fn put_rejects_same_hash_reuse_behind_commit_barrier() {
     apply_unprotected_frame(
         &mut live,
         &mut committed,
-        LaneQueueReservationJournalFrameV5::Commit(old.key),
+        LaneQueueReservationJournalFrameV6::Commit(old.key),
     )
     .expect("commit exact live reservation");
     assert!(live.is_empty());
@@ -181,29 +193,11 @@ fn put_rejects_same_hash_reuse_behind_commit_barrier() {
         apply_unprotected_frame(
             &mut live,
             &mut committed,
-            LaneQueueReservationJournalFrameV5::PutBatch(vec![replacement]),
+            LaneQueueReservationJournalFrameV6::PutBatch(vec![replacement]),
         )
         .is_err(),
         "commit cleanup must block all same-hash reservation identities"
     );
-}
-
-#[test]
-fn prune_is_exact_to_lane_incarnation() {
-    let retired = record(1, 1);
-    let recreated = record(2, 2);
-    let mut records = vec![retired.clone(), recreated.clone()];
-    let mut committed = Vec::new();
-    apply_unprotected_frame(
-        &mut records,
-        &mut committed,
-        LaneQueueReservationJournalFrameV5::Prune {
-            lane_id: retired.key.lane_id,
-            lane_incarnation: retired.key.lane_incarnation,
-        },
-    )
-    .expect("apply prune");
-    assert_eq!(records, vec![recreated]);
 }
 
 #[test]
@@ -219,7 +213,7 @@ fn compaction_is_replay_equivalent() {
     journal.release(first.key).expect("release first");
     assert!(
         journal
-            .compact_if_needed(core::slice::from_ref(&second), &[], &[], &[])
+            .compact_if_needed(core::slice::from_ref(&second), &[], &[], &[], &[])
             .expect("compact")
     );
     drop(journal);
@@ -241,7 +235,7 @@ fn compaction_preserves_valid_owner_state_larger_than_one_execution_group() {
         u64::MAX,
         owner_count,
     );
-    let (mut journal, replay) = LaneQueueReservationJournal::open_with_limits(&path, limits)
+    let (mut journal, replay, _seal) = LaneQueueReservationJournal::open_with_limits(&path, limits)
         .expect("create large bounded journal");
     assert!(replay.records().is_empty());
     journal
@@ -252,12 +246,12 @@ fn compaction_preserves_valid_owner_state_larger_than_one_execution_group() {
         .expect("persist the next bounded owner batch");
     assert!(
         journal
-            .compact_if_needed(&records, &[], &[], &[])
+            .compact_if_needed(&records, &[], &[], &[], &[])
             .expect("compact owner state above one execution group")
     );
     drop(journal);
 
-    let (_journal, replay) = LaneQueueReservationJournal::open_with_limits(&path, limits)
+    let (_journal, replay, _seal) = LaneQueueReservationJournal::open_with_limits(&path, limits)
         .expect("reopen compacted owner state above one execution group");
     assert_eq!(replay.records(), records.as_slice());
 }
@@ -276,7 +270,7 @@ fn compaction_failure_after_rename_is_recovered_on_reopen() {
     );
     assert!(
         journal
-            .compact_if_needed(core::slice::from_ref(&record), &[], &[], &[])
+            .compact_if_needed(core::slice::from_ref(&record), &[], &[], &[], &[])
             .is_err(),
         "a post-rename durability ambiguity must fail closed"
     );
@@ -339,7 +333,7 @@ fn post_sync_compaction_publication_failure_is_poisoned_and_replayed_on_reopen()
     );
 
     let error = journal
-        .compact_if_needed(core::slice::from_ref(&record), &[], &[], &[])
+        .compact_if_needed(core::slice::from_ref(&record), &[], &[], &[], &[])
         .expect_err("checked compaction publication failure must fail closed");
     assert!(
         error.to_string().contains("different exact pre-state"),
@@ -386,15 +380,16 @@ fn compaction_preserves_prepared_and_completed_release_state() {
             .compact_if_needed(
                 &prepared_records,
                 &[],
+                &[],
                 core::slice::from_ref(&prepared),
                 core::slice::from_ref(&completed),
             )
-            .expect("compact all V5 release state")
+            .expect("compact all V6 release state")
     );
     drop(journal);
 
     let (_journal, replay) =
-        LaneQueueReservationJournal::open(&path, 1).expect("replay compacted V5 snapshot");
+        LaneQueueReservationJournal::open(&path, 1).expect("replay compacted V6 snapshot");
     assert_eq!(replay.records(), prepared_records.as_slice());
     assert!(replay.committed().is_empty());
     assert_eq!(replay.release_barriers(), &[prepared]);
@@ -417,18 +412,63 @@ fn commit_barrier_survives_restart_until_exact_forget_is_durable() {
         LaneQueueReservationJournal::open(&path, 1).expect("replay commit barrier");
     assert!(replay.records().is_empty());
     assert_eq!(replay.committed(), &[record.key]);
+    assert!(replay.plan_tombstoned().is_empty());
 
+    journal
+        .plan_tombstoned(record.key)
+        .expect("mark exact durable QueuePlan tombstone");
     journal
         .forget_commit(record.key)
         .expect("forget after independent queue-plan durability");
     journal
-        .compact_if_needed(&[], &[], &[], &[])
+        .compact_if_needed(&[], &[], &[], &[], &[])
         .expect("compact forgotten barrier");
     drop(journal);
     let (_journal, replay) =
         LaneQueueReservationJournal::open(&path, 1).expect("reopen forgotten barrier");
     assert!(replay.records().is_empty());
     assert!(replay.committed().is_empty());
+}
+
+#[test]
+fn plan_tombstoned_marker_is_exact_required_and_compaction_stable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plan-tombstoned-compaction.norito");
+    let record = record(10, 1);
+    let (mut journal, _) = LaneQueueReservationJournal::open(&path, 1).expect("open journal");
+
+    assert!(
+        journal.plan_tombstoned(record.key).is_err(),
+        "a marker without its exact commit barrier must fail closed"
+    );
+    journal
+        .put_batch(vec![record.clone()])
+        .expect("persist live owner");
+    journal.commit(record.key).expect("persist commit barrier");
+    assert!(
+        journal.forget_commit(record.key).is_err(),
+        "ForgetCommit must not consume an unmarked barrier"
+    );
+    journal
+        .plan_tombstoned(record.key)
+        .expect("persist exact marker");
+    assert!(
+        journal
+            .compact_if_needed(
+                &[],
+                core::slice::from_ref(&record.key),
+                core::slice::from_ref(&record.key),
+                &[],
+                &[],
+            )
+            .expect("compact marked barrier")
+    );
+    drop(journal);
+
+    let (_journal, replay) =
+        LaneQueueReservationJournal::open(&path, 1).expect("reopen compacted marker");
+    assert_eq!(replay.committed(), &[record.key]);
+    assert_eq!(replay.plan_tombstoned(), &[record.key]);
 }
 
 #[test]
@@ -465,7 +505,7 @@ fn journal_exclusive_owner_lock_blocks_a_second_runtime() {
         .expect("persist lock-transfer fixture");
     assert!(
         journal
-            .compact_if_needed(core::slice::from_ref(&record), &[], &[], &[])
+            .compact_if_needed(core::slice::from_ref(&record), &[], &[], &[], &[])
             .expect("compact while retaining exclusive ownership"),
         "fixture must exercise lock transfer to the replacement inode"
     );
@@ -495,7 +535,7 @@ fn cached_revision_rejects_an_unlocked_same_length_external_rewrite() {
         .expect("persist first owner");
     let mut alternate = encode_frame(&bootstrap_frame()).expect("encode bootstrap");
     alternate.extend_from_slice(
-        &encode_frame(&LaneQueueReservationJournalFrameV5::PutBatch(vec![second]))
+        &encode_frame(&LaneQueueReservationJournalFrameV6::PutBatch(vec![second]))
             .expect("encode alternate same-length owner"),
     );
     assert_eq!(
@@ -562,7 +602,7 @@ fn compaction_rejects_preexisting_regular_temp_collision() {
     fs::write(&tmp, b"sentinel").expect("create colliding temp");
     assert!(
         journal
-            .compact_if_needed(core::slice::from_ref(&record), &[], &[], &[])
+            .compact_if_needed(core::slice::from_ref(&record), &[], &[], &[], &[])
             .is_err(),
         "compaction must never truncate a predictable preexisting temp path"
     );
@@ -595,7 +635,7 @@ fn compaction_rejects_symlink_temp_collision_without_touching_target() {
     symlink(&target, &tmp).expect("create malicious temp symlink");
     assert!(
         journal
-            .compact_if_needed(core::slice::from_ref(&record), &[], &[], &[])
+            .compact_if_needed(core::slice::from_ref(&record), &[], &[], &[], &[])
             .is_err()
     );
     assert_eq!(fs::read(&target).expect("read sentinel"), b"sentinel");
@@ -603,7 +643,7 @@ fn compaction_rejects_symlink_temp_collision_without_touching_target() {
 
 #[test]
 fn initial_bootstrap_recovers_every_recognizable_staged_prefix() {
-    let expected = encode_frame(&bootstrap_frame()).expect("encode canonical V5 bootstrap");
+    let expected = encode_frame(&bootstrap_frame()).expect("encode canonical V6 bootstrap");
     for written in 0..expected.len() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir
@@ -617,7 +657,7 @@ fn initial_bootstrap_recovers_every_recognizable_staged_prefix() {
         assert_eq!(
             fs::read(&path).expect("read repaired bootstrap"),
             expected,
-            "bootstrap prefix {written} must be replaced by the exact durable V5 marker"
+            "bootstrap prefix {written} must be replaced by the exact durable V6 marker"
         );
     }
 }
@@ -665,7 +705,7 @@ fn complete_indeterminate_frame_is_synced_before_two_restart_adoption() {
             .put_batch(vec![first.clone()])
             .expect("persist first record");
     }
-    let second_frame = encode_frame(&LaneQueueReservationJournalFrameV5::PutBatch(vec![
+    let second_frame = encode_frame(&LaneQueueReservationJournalFrameV6::PutBatch(vec![
         second.clone(),
     ]))
     .expect("encode indeterminate complete frame");
@@ -698,7 +738,7 @@ fn authenticated_truncated_compaction_temp_is_discarded() {
             .put_batch(vec![first.clone()])
             .expect("persist record");
     }
-    let snapshot = canonical_snapshot(core::slice::from_ref(&first), &[], &[], &[])
+    let snapshot = canonical_snapshot(core::slice::from_ref(&first), &[], &[], &[], &[])
         .expect("build canonical snapshot");
     let compacted =
         encode_compacted_journal(snapshot.as_ref()).expect("encode canonical compaction");
@@ -732,7 +772,7 @@ fn corrupt_or_oversized_compaction_temp_fails_closed_and_is_retained() {
                 .put_batch(vec![first.clone()])
                 .expect("persist record");
         }
-        let snapshot = canonical_snapshot(core::slice::from_ref(&first), &[], &[], &[])
+        let snapshot = canonical_snapshot(core::slice::from_ref(&first), &[], &[], &[], &[])
             .expect("build canonical snapshot");
         let mut compacted =
             encode_compacted_journal(snapshot.as_ref()).expect("encode canonical compaction");
@@ -859,9 +899,10 @@ fn runtime_commit_requires_live_owner_but_snapshot_recovery_may_restore_commit_b
     let mut recovered = IndexedReservationReplayState::default();
     recovered
         .transition(
-            &LaneQueueReservationJournalFrameV5::Snapshot {
+            &LaneQueueReservationJournalFrameV6::Snapshot {
                 live: Vec::new(),
                 committed: vec![record.key],
+                plan_tombstoned: Vec::new(),
                 release_barriers: Vec::new(),
                 completed_releases: Vec::new(),
             },
@@ -871,9 +912,9 @@ fn runtime_commit_requires_live_owner_but_snapshot_recovery_may_restore_commit_b
     assert_eq!(recovered.replay().committed(), &[record.key]);
 
     let invalid_replay_path = dir.path().join("absent-commit-replay.norito");
-    let mut invalid_replay = encode_frame(&bootstrap_frame()).expect("encode exact V5 bootstrap");
+    let mut invalid_replay = encode_frame(&bootstrap_frame()).expect("encode exact V6 bootstrap");
     invalid_replay.extend(
-        encode_frame(&LaneQueueReservationJournalFrameV5::Commit(record.key))
+        encode_frame(&LaneQueueReservationJournalFrameV6::Commit(record.key))
             .expect("encode structurally valid absent-owner commit"),
     );
     fs::write(&invalid_replay_path, &invalid_replay).expect("write exact invalid replay prefix");
@@ -892,8 +933,8 @@ fn runtime_commit_requires_live_owner_but_snapshot_recovery_may_restore_commit_b
 fn prepared_checked_transition_is_bound_to_frame_and_state_generation() {
     let first = indexed_record(0);
     let second = indexed_record(1);
-    let first_frame = LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone()]);
-    let second_frame = LaneQueueReservationJournalFrameV5::PutBatch(vec![second.clone()]);
+    let first_frame = LaneQueueReservationJournalFrameV6::PutBatch(vec![first.clone()]);
+    let second_frame = LaneQueueReservationJournalFrameV6::PutBatch(vec![second.clone()]);
 
     let mut wrong_frame_state = IndexedReservationReplayState::default();
     let wrong_frame_authorization = wrong_frame_state
@@ -942,12 +983,12 @@ fn prepared_checked_transition_rejects_same_generation_cross_state_substitution(
     let first = indexed_record(0);
     let second = indexed_record(1);
     let absent = indexed_record(2);
-    let common_frame = LaneQueueReservationJournalFrameV5::ForgetCommit(absent.key);
+    let common_frame = LaneQueueReservationJournalFrameV6::ForgetCommit(absent.key);
 
     let mut identical_left = IndexedReservationReplayState::default();
     identical_left
         .transition(
-            &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone()]),
+            &LaneQueueReservationJournalFrameV6::PutBatch(vec![first.clone()]),
             8,
         )
         .expect("seed the exact left state");
@@ -977,13 +1018,13 @@ fn prepared_checked_transition_rejects_same_generation_cross_state_substitution(
     let mut left = IndexedReservationReplayState::default();
     let mut right = IndexedReservationReplayState::default();
     left.transition(
-        &LaneQueueReservationJournalFrameV5::PutBatch(vec![first]),
+        &LaneQueueReservationJournalFrameV6::PutBatch(vec![first]),
         8,
     )
     .expect("advance left checked state");
     right
         .transition(
-            &LaneQueueReservationJournalFrameV5::PutBatch(vec![second]),
+            &LaneQueueReservationJournalFrameV6::PutBatch(vec![second]),
             8,
         )
         .expect("advance right checked state");
@@ -1014,7 +1055,7 @@ fn prepared_checked_transition_binds_exact_ordered_owner_token_coverage() {
     let third = indexed_record(2);
     let fourth = indexed_record(3);
     let frame =
-        LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone(), second.clone(), third]);
+        LaneQueueReservationJournalFrameV6::PutBatch(vec![first.clone(), second.clone(), third]);
 
     let mut missing_state = IndexedReservationReplayState::default();
     let mut missing = missing_state
@@ -1051,7 +1092,7 @@ fn prepared_checked_transition_binds_exact_ordered_owner_token_coverage() {
     let mut altered = altered_state
         .prepare_checked_transition(&frame, 8)
         .expect("prepare original owner transition");
-    let alternate_frame = LaneQueueReservationJournalFrameV5::PutBatch(vec![first, second, fourth]);
+    let alternate_frame = LaneQueueReservationJournalFrameV6::PutBatch(vec![first, second, fourth]);
     let mut alternate_state = IndexedReservationReplayState::default();
     let mut alternate = alternate_state
         .prepare_checked_transition(&alternate_frame, 8)
@@ -1079,7 +1120,7 @@ fn prepared_checked_transition_binds_exact_ordered_owner_token_coverage() {
 fn checked_transition_result_identity_and_candidate_application_are_atomic() {
     let first = indexed_record(0);
     let second = indexed_record(1);
-    let frame = LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone()]);
+    let frame = LaneQueueReservationJournalFrameV6::PutBatch(vec![first.clone()]);
 
     let mut wrong_result_state = IndexedReservationReplayState::default();
     let mut wrong_result = wrong_result_state
@@ -1096,7 +1137,7 @@ fn checked_transition_result_identity_and_candidate_application_are_atomic() {
     );
     assert_eq!(wrong_result_state, wrong_result_before);
 
-    let absent_frame = LaneQueueReservationJournalFrameV5::ForgetCommit(second.key);
+    let absent_frame = LaneQueueReservationJournalFrameV6::ForgetCommit(second.key);
     let mut shape_state = IndexedReservationReplayState::default();
     let shape_authorization = shape_state
         .prepare_checked_transition(&absent_frame, 8)
@@ -1157,13 +1198,13 @@ fn checked_transition_result_identity_and_candidate_application_are_atomic() {
         "failed semantic revalidation must not partially mutate the published state"
     );
 
-    let removal_frame = LaneQueueReservationJournalFrameV5::ReleaseBatch(vec![first.key]);
+    let removal_frame = LaneQueueReservationJournalFrameV6::ReleaseBatch(vec![first.key]);
     let exact_lane = (first.key.lane_id, first.key.lane_incarnation);
 
     let mut lane_key_state = IndexedReservationReplayState::default();
     lane_key_state
         .transition(
-            &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone()]),
+            &LaneQueueReservationJournalFrameV6::PutBatch(vec![first.clone()]),
             8,
         )
         .expect("seed exact live reservation before lane-key substitution");
@@ -1199,7 +1240,7 @@ fn checked_transition_result_identity_and_candidate_application_are_atomic() {
     let mut lane_member_state = IndexedReservationReplayState::default();
     lane_member_state
         .transition(
-            &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone()]),
+            &LaneQueueReservationJournalFrameV6::PutBatch(vec![first.clone()]),
             8,
         )
         .expect("seed exact live reservation before lane-member substitution");
@@ -1228,7 +1269,7 @@ fn checked_transition_result_identity_and_candidate_application_are_atomic() {
     let mut fifo_member_state = IndexedReservationReplayState::default();
     fifo_member_state
         .transition(
-            &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone()]),
+            &LaneQueueReservationJournalFrameV6::PutBatch(vec![first.clone()]),
             8,
         )
         .expect("seed exact live reservation before FIFO substitution");
@@ -1255,11 +1296,11 @@ fn checked_transition_result_identity_and_candidate_application_are_atomic() {
     );
 
     let multi_removal_frame =
-        LaneQueueReservationJournalFrameV5::ReleaseBatch(vec![first.key, second.key]);
+        LaneQueueReservationJournalFrameV6::ReleaseBatch(vec![first.key, second.key]);
     let mut later_target_state = IndexedReservationReplayState::default();
     later_target_state
         .transition(
-            &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone(), second.clone()]),
+            &LaneQueueReservationJournalFrameV6::PutBatch(vec![first.clone(), second.clone()]),
             8,
         )
         .expect("seed two exact live reservations before later-target corruption");
@@ -1288,11 +1329,11 @@ fn checked_transition_result_identity_and_candidate_application_are_atomic() {
     let mut commit_state = IndexedReservationReplayState::default();
     commit_state
         .transition(
-            &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone()]),
+            &LaneQueueReservationJournalFrameV6::PutBatch(vec![first.clone()]),
             8,
         )
         .expect("seed an exact live reservation before commit corruption");
-    let commit_frame = LaneQueueReservationJournalFrameV5::Commit(first.key);
+    let commit_frame = LaneQueueReservationJournalFrameV6::Commit(first.key);
     let commit_authorization = commit_state
         .prepare_checked_transition(&commit_frame, 8)
         .expect("prepare commit before same-shape FIFO corruption");
@@ -1315,53 +1356,20 @@ fn checked_transition_result_identity_and_candidate_application_are_atomic() {
         "failed commit preflight must preserve live and committed ownership"
     );
 
-    let prune_frame = LaneQueueReservationJournalFrameV5::Prune {
-        lane_id: first.key.lane_id,
-        lane_incarnation: first.key.lane_incarnation,
-    };
-    let mut prune_state = IndexedReservationReplayState::default();
-    prune_state
-        .transition(
-            &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone(), second.clone()]),
-            8,
-        )
-        .expect("seed two exact live reservations before prune corruption");
-    let prune_authorization = prune_state
-        .prepare_checked_transition(&prune_frame, 8)
-        .expect("prepare multi-record prune before corrupting its later target");
-    assert_eq!(
-        prune_state
-            .fifo_ordinals
-            .insert(second.fifo_order.ordinal, first.key.signed_transaction_hash),
-        Some(second.key.signed_transaction_hash)
-    );
-    let prune_before = prune_state.clone();
-    let error = prune_state
-        .apply_checked_transition(&prune_frame, 8, prune_authorization)
-        .expect_err("multi-record prune must preflight every target before removal");
-    assert!(
-        error.to_string().contains("FIFO index"),
-        "unexpected prune-index rejection: {error}"
-    );
-    assert_eq!(
-        prune_state, prune_before,
-        "failed prune preflight must preserve every indexed live reservation"
-    );
-
     let release = release_barrier(&[first.clone(), second.clone()], 91);
     let release_digest = release.digest();
     let completion = release_completion(&[first.clone(), second.clone()], 91);
-    let completion_frame = LaneQueueReservationJournalFrameV5::CompleteRelease(completion);
+    let completion_frame = LaneQueueReservationJournalFrameV6::CompleteRelease(completion);
     let mut completion_state = IndexedReservationReplayState::default();
     completion_state
         .transition(
-            &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone(), second.clone()]),
+            &LaneQueueReservationJournalFrameV6::PutBatch(vec![first.clone(), second.clone()]),
             8,
         )
         .expect("seed two exact live reservations before ordered completion");
     completion_state
         .transition(
-            &LaneQueueReservationJournalFrameV5::PrepareRelease(release),
+            &LaneQueueReservationJournalFrameV6::PrepareRelease(release),
             8,
         )
         .expect("prepare the exact two-record release barrier");
@@ -1392,39 +1400,12 @@ fn checked_transition_result_identity_and_candidate_application_are_atomic() {
         completion_state, completion_before,
         "failed completion preflight must preserve the barrier and every live record"
     );
-
-    let mut hash_binding_state = IndexedReservationReplayState::default();
-    hash_binding_state
-        .transition(
-            &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone()]),
-            8,
-        )
-        .expect("seed an exact live reservation before key/hash substitution");
-    let hash_binding_authorization = hash_binding_state
-        .prepare_checked_transition(&prune_frame, 8)
-        .expect("prepare prune before key/hash substitution");
-    hash_binding_state.ownership.insert(
-        first.key.signed_transaction_hash,
-        DurableReservationOwnership::Live(second.key),
-    );
-    let hash_binding_before = hash_binding_state.clone();
-    let error = hash_binding_state
-        .apply_checked_transition(&prune_frame, 8, hash_binding_authorization)
-        .expect_err("preflight must bind the lane-index lookup hash to the exact owner key");
-    assert!(
-        error.to_string().contains("exact reservation hash"),
-        "unexpected key/hash rejection: {error}"
-    );
-    assert_eq!(
-        hash_binding_state, hash_binding_before,
-        "key/hash rejection must occur before indexed mutation"
-    );
 }
 
 #[test]
 fn checked_transition_generation_overflow_is_rejected_without_mutation() {
     let first = indexed_record(0);
-    let frame = LaneQueueReservationJournalFrameV5::PutBatch(vec![first]);
+    let frame = LaneQueueReservationJournalFrameV6::PutBatch(vec![first]);
     let mut state = IndexedReservationReplayState::default();
     state.transition_generation = u64::MAX;
     let before = state.clone();
@@ -1446,47 +1427,41 @@ fn indexed_replay_matches_reference_vector_transitions_and_ordering() {
     let second = indexed_record(1);
     let third = indexed_record(2);
     let fourth = indexed_record(3);
-    let fifth = indexed_record(4);
     let release = release_barrier(&[first.clone(), second.clone()], 71);
     let completion = release_completion(&[first.clone(), second.clone()], 71);
     let mut stale_forget = release.clone();
     stale_forget.retirement_hash = Hash::new(b"indexed-differential-stale-forget");
     let frames = vec![
-        LaneQueueReservationJournalFrameV5::PutBatch(vec![
+        LaneQueueReservationJournalFrameV6::PutBatch(vec![
             first.clone(),
             second.clone(),
             first.clone(),
         ]),
-        LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone()]),
-        LaneQueueReservationJournalFrameV5::PrepareRelease(release.clone()),
-        LaneQueueReservationJournalFrameV5::PrepareRelease(release.clone()),
-        LaneQueueReservationJournalFrameV5::CompleteRelease(completion.clone()),
-        LaneQueueReservationJournalFrameV5::CompleteRelease(completion),
-        LaneQueueReservationJournalFrameV5::PrepareRelease(release.clone()),
-        LaneQueueReservationJournalFrameV5::ForgetRelease(stale_forget),
-        LaneQueueReservationJournalFrameV5::ForgetRelease(release),
-        LaneQueueReservationJournalFrameV5::PutBatch(vec![
-            third.clone(),
-            fourth.clone(),
-            fifth.clone(),
-        ]),
-        LaneQueueReservationJournalFrameV5::Commit(third.key),
-        LaneQueueReservationJournalFrameV5::ForgetCommit(third.key),
-        LaneQueueReservationJournalFrameV5::ReleaseBatch(vec![fourth.key]),
-        LaneQueueReservationJournalFrameV5::Prune {
-            lane_id: fifth.key.lane_id,
-            lane_incarnation: fifth.key.lane_incarnation,
-        },
+        LaneQueueReservationJournalFrameV6::PutBatch(vec![first.clone()]),
+        LaneQueueReservationJournalFrameV6::PrepareRelease(release.clone()),
+        LaneQueueReservationJournalFrameV6::PrepareRelease(release.clone()),
+        LaneQueueReservationJournalFrameV6::CompleteRelease(completion.clone()),
+        LaneQueueReservationJournalFrameV6::CompleteRelease(completion),
+        LaneQueueReservationJournalFrameV6::PrepareRelease(release.clone()),
+        LaneQueueReservationJournalFrameV6::ForgetRelease(stale_forget),
+        LaneQueueReservationJournalFrameV6::ForgetRelease(release),
+        LaneQueueReservationJournalFrameV6::PutBatch(vec![third.clone(), fourth.clone()]),
+        LaneQueueReservationJournalFrameV6::Commit(third.key),
+        LaneQueueReservationJournalFrameV6::PlanTombstoned(third.key),
+        LaneQueueReservationJournalFrameV6::ForgetCommit(third.key),
+        LaneQueueReservationJournalFrameV6::ReleaseBatch(vec![fourth.key]),
     ];
     let mut indexed = IndexedReservationReplayState::default();
     let mut live = Vec::new();
     let mut committed = Vec::new();
+    let mut plan_tombstoned = Vec::new();
     let mut prepared = Vec::new();
     let mut completed = Vec::new();
     for frame in frames {
         apply_frame_with_ownership_limit(
             &mut live,
             &mut committed,
+            &mut plan_tombstoned,
             &mut prepared,
             &mut completed,
             frame.clone(),
@@ -1497,6 +1472,7 @@ fn indexed_replay_matches_reference_vector_transitions_and_ordering() {
         let replay = indexed.replay();
         assert_eq!(replay.records(), live);
         assert_eq!(replay.committed(), committed);
+        assert_eq!(replay.plan_tombstoned(), plan_tombstoned);
         assert_eq!(replay.release_barriers(), prepared);
         assert_eq!(replay.completed_releases(), completed);
         assert_eq!(
@@ -1514,13 +1490,13 @@ fn indexed_transition_rejections_are_atomic_and_match_reference_replay() {
     let mut indexed = IndexedReservationReplayState::default();
     indexed
         .transition(
-            &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone(), second.clone()]),
+            &LaneQueueReservationJournalFrameV6::PutBatch(vec![first.clone(), second.clone()]),
             8,
         )
         .expect("seed indexed state");
     indexed
         .transition(
-            &LaneQueueReservationJournalFrameV5::PrepareRelease(release.clone()),
+            &LaneQueueReservationJournalFrameV6::PrepareRelease(release.clone()),
             8,
         )
         .expect("seed prepared release");
@@ -1528,22 +1504,18 @@ fn indexed_transition_rejections_are_atomic_and_match_reference_replay() {
     let mut conflicting_release = release.clone();
     conflicting_release.retirement_hash = Hash::new(b"indexed-adversarial-conflicting-release");
     let invalid_frames = vec![
-        LaneQueueReservationJournalFrameV5::ReleaseBatch(vec![first.key]),
-        LaneQueueReservationJournalFrameV5::Commit(first.key),
-        LaneQueueReservationJournalFrameV5::Prune {
-            lane_id: first.key.lane_id,
-            lane_incarnation: first.key.lane_incarnation,
-        },
-        LaneQueueReservationJournalFrameV5::PrepareRelease(conflicting_release),
-        LaneQueueReservationJournalFrameV5::ForgetRelease(release.clone()),
-        LaneQueueReservationJournalFrameV5::CompleteRelease({
+        LaneQueueReservationJournalFrameV6::ReleaseBatch(vec![first.key]),
+        LaneQueueReservationJournalFrameV6::Commit(first.key),
+        LaneQueueReservationJournalFrameV6::PrepareRelease(conflicting_release),
+        LaneQueueReservationJournalFrameV6::ForgetRelease(release.clone()),
+        LaneQueueReservationJournalFrameV6::CompleteRelease({
             let mut wrong = release_completion(core::slice::from_ref(&first), 72);
             wrong.ordered_records[0].enqueue_timestamp_ms = wrong.ordered_records[0]
                 .enqueue_timestamp_ms
                 .saturating_add(1);
             wrong
         }),
-        LaneQueueReservationJournalFrameV5::PutBatch({
+        LaneQueueReservationJournalFrameV6::PutBatch({
             let mut collision = indexed_record(2);
             collision.fifo_order.ordinal = second.fifo_order.ordinal;
             vec![collision]
@@ -1553,12 +1525,14 @@ fn indexed_transition_rejections_are_atomic_and_match_reference_replay() {
         let before = indexed.clone();
         let mut live = replay.records.clone();
         let mut committed = replay.committed.clone();
+        let mut plan_tombstoned = replay.plan_tombstoned.clone();
         let mut prepared = replay.release_barriers.clone();
         let mut completed = replay.completed_releases.clone();
         assert!(
             apply_frame_with_ownership_limit(
                 &mut live,
                 &mut committed,
+                &mut plan_tombstoned,
                 &mut prepared,
                 &mut completed,
                 frame.clone(),
@@ -1601,11 +1575,6 @@ fn runtime_semantic_preflight_rejects_invalid_frames_before_durable_append() {
     conflicting_barrier.retirement_hash = Hash::new(b"runtime-preflight-conflicting-release");
 
     assert!(journal.release(first.key).is_err());
-    assert!(
-        journal
-            .prune(first.key.lane_id, first.key.lane_incarnation)
-            .is_err()
-    );
     assert!(journal.prepare_release(conflicting_barrier).is_err());
     assert!(journal.forget_release(barrier).is_err());
     assert!(journal.complete_release(wrong_completion).is_err());
@@ -1630,7 +1599,7 @@ fn production_replay_handles_many_singleton_frames_with_exact_order() {
     let mut bytes = encode_frame(&bootstrap_frame()).expect("encode bootstrap");
     for record in &records {
         bytes.extend_from_slice(
-            &encode_frame(&LaneQueueReservationJournalFrameV5::PutBatch(vec![
+            &encode_frame(&LaneQueueReservationJournalFrameV6::PutBatch(vec![
                 record.clone(),
             ]))
             .expect("encode singleton reservation"),
@@ -1644,7 +1613,7 @@ fn production_replay_handles_many_singleton_frames_with_exact_order() {
         file_len,
         records.len(),
     );
-    let (_journal, replay) = LaneQueueReservationJournal::open_with_limits(&path, limits)
+    let (_journal, replay, _seal) = LaneQueueReservationJournal::open_with_limits(&path, limits)
         .expect("indexed production replay");
     assert_eq!(replay.records(), records);
     assert!(replay.committed().is_empty());

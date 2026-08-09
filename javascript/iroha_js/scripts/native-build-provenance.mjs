@@ -46,7 +46,13 @@ const SOURCE_TREE_DOMAIN = Buffer.from(
   "iroha.js.native-build-source-tree.v3\0",
   "utf8",
 );
-const ALLOWED_TRACKED_MODES = new Set(["100644", "100755", "120000"]);
+const GITLINK_MODE = "160000";
+const ALLOWED_TRACKED_MODES = new Set([
+  "100644",
+  "100755",
+  "120000",
+  GITLINK_MODE,
+]);
 const GIT_CONFIGURATION = Object.freeze([
   "-c",
   "core.fsmonitor=false",
@@ -658,6 +664,23 @@ function appendSourceEntry(hash, repoRoot, entry, kind) {
   appendField(hash, entry.path);
   const absolutePath = absoluteSourcePath(repoRoot, entry.path);
   const metadata = lstatOrNull(absolutePath);
+  if (entry.indexMode === GITLINK_MODE) {
+    if (kind !== "tracked-source-v1") {
+      throw new Error("Native build untracked source cannot be a gitlink");
+    }
+    if (
+      metadata !== null &&
+      (!metadata.isDirectory() || metadata.isSymbolicLink())
+    ) {
+      throw new Error("Native build gitlink worktree entry has an unsafe file type");
+    }
+    // The exact gitlink object is already bound by trackedInventory.raw, and
+    // Git status binds an absent, dirty, or substituted checkout. Optional
+    // submodule contents are deliberately not native build inputs.
+    appendField(hash, "gitlink");
+    appendField(hash, GITLINK_MODE);
+    return;
+  }
   if (metadata === null) {
     if (kind !== "tracked-source-v1") {
       throw new Error("Native build untracked source disappeared while sealing");
@@ -942,6 +965,12 @@ function ensureSnapshotParents(snapshotRoot, relativePath) {
 }
 
 function copySnapshotEntry(repoRoot, snapshotRoot, entry, kind) {
+  if (entry.indexMode === GITLINK_MODE) {
+    if (kind !== "tracked-source-v1") {
+      throw new Error("Native build untracked source cannot be a gitlink");
+    }
+    return;
+  }
   const sourcePath = absoluteSourcePath(repoRoot, entry.path);
   const destinationPath = absoluteSourcePath(snapshotRoot, entry.path);
   const before = lstatOrNull(sourcePath);
@@ -1056,6 +1085,7 @@ function expectedSnapshotInventory(snapshotRoot, trackedInventory, untrackedInve
   };
   for (const entry of [...trackedInventory.entries, ...untrackedInventory.entries]) {
     if (entry.path.equals(CARGO_LOCK_PATH)) continue;
+    if (entry.indexMode === GITLINK_MODE) continue;
     const metadata = lstatOrNull(absoluteSourcePath(snapshotRoot, entry.path));
     if (metadata === null) continue;
     add(entry.path, metadata.isSymbolicLink() ? "symlink" : "regular");

@@ -20,7 +20,7 @@ LOADER_RELATIVE_PATH = Path("IrohaSwift/Sources/IrohaSwift/NativeBridge.swift")
 EXPECTED_KEYS = {
     "ios-arm64",
     "ios-arm64_x86_64-simulator",
-    "macos-arm64",
+    "macos-arm64_x86_64",
 }
 PUBLISH_LOCK_NAME = ".NoritoBridge.publish.lockfile"
 

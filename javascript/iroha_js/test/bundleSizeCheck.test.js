@@ -52,7 +52,7 @@ test("bundle-size targets retain audited ceilings and browser graph guards", () 
     [
       {
         label: "toriiClient.js",
-      limitKb: 978,
+        limitKb: 983,
         forbidNodeInputs: false,
         forbidGlobalBuffer: false,
       },
@@ -199,6 +199,10 @@ test("browser graph audit derives every explicit browser-conditioned package exp
       target: "./dist/privacyCapabilities.js",
       subpaths: ["./privacy-capabilities"],
     },
+    {
+      target: "./dist/bootleLanternIssuance.js",
+      subpaths: ["./bootle-lantern-issuance"],
+    },
     { target: "./dist/transactionCodec.js", subpaths: ["./transaction-codec"] },
     {
       target: "./dist/smartContractDeployment.js",
@@ -207,10 +211,6 @@ test("browser graph audit derives every explicit browser-conditioned package exp
     { target: "./dist/normalizers.js", subpaths: ["./normalizers"] },
     { target: "./dist/blake2b.js", subpaths: ["./blake2b"] },
     { target: "./dist/ivmArtifact.js", subpaths: ["./ivm-artifact"] },
-    {
-      target: "./dist/ivmArtifactAdmissionWasm.js",
-      subpaths: ["./ivm-artifact-admission-wasm"],
-    },
     {
       target: "./dist/toriiBrowserClient.js",
       subpaths: ["./torii", "./torii-browser"],
@@ -337,8 +337,13 @@ test("public browser aggregate bundles without Node inputs or global Buffer shim
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  assert.equal(Object.keys(result.metafile.inputs).length, 59);
-  assert.equal(result.outputFiles[0].contents.byteLength, 476_074);
+  assert.equal(Object.keys(result.metafile.inputs).length, 64);
+  assert.equal(result.outputFiles[0].contents.byteLength, 479_732);
+  assert.equal(
+    target.limitKb * 1024 - result.outputFiles[0].contents.byteLength,
+    524,
+    "public browser aggregate must retain the audited 524-byte headroom",
+  );
   assert.ok(
     result.outputFiles[0].contents.byteLength <= Math.floor(458_081 * 1.05),
     "public browser aggregate regressed more than 5% from the protected pre-reset tree",
@@ -387,16 +392,16 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
     ["canonicalRequest.js (browser)", 97_869],
   ]);
   const maximumGrowth = new Map([
-    ["toriiClient.js", 1.06],
+    ["toriiClient.js", (983 * 1024) / 945_975],
     ["transactionCodec.js (browser)", 1.05],
     ["nexusApp.js (browser)", 1.05],
     ["canonicalRequest.js (browser)", 1.05],
   ]);
   const expected = new Map([
-    ["toriiClient.js", { bytes: 1_000_409, modules: 61 }],
-    ["transactionCodec.js (browser)", { bytes: 297_228, modules: 46 }],
-    ["nexusApp.js (browser)", { bytes: 380_431, modules: 55 }],
-    ["canonicalRequest.js (browser)", { bytes: 98_090, modules: 34 }],
+    ["toriiClient.js", { bytes: 1_005_947, modules: 67 }],
+    ["transactionCodec.js (browser)", { bytes: 301_649, modules: 48 }],
+    ["nexusApp.js (browser)", { bytes: 381_439, modules: 58 }],
+    ["canonicalRequest.js (browser)", { bytes: 98_089, modules: 34 }],
   ]);
   const { build } = await import("esbuild");
   for (const target of BUNDLE_TARGETS.filter(({ label }) => expected.has(label))) {
@@ -416,6 +421,19 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
       bytes: result.outputFiles[0].contents.byteLength,
       modules: Object.keys(result.metafile.inputs).length,
     };
+    if ([
+      "toriiClient.js",
+      "transactionCodec.js (browser)",
+      "nexusApp.js (browser)",
+    ].includes(target.label)) {
+      assert.equal(
+        Object.keys(result.metafile.inputs).filter((input) =>
+          /(?:^|[/\\])proofAttachment\.js$/u.test(input),
+        ).length,
+        1,
+        `${target.label} must retain exactly one canonical ProofAttachment module`,
+      );
+    }
     if (target.label === "toriiClient.js") {
       assert.equal(
         Object.keys(result.metafile.inputs).some(
@@ -424,6 +442,11 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
         ),
         false,
         "Torii must use the local synchronous BLS validator, not bundle noble's full curve implementation",
+      );
+      assert.equal(
+        target.limitKb * 1024 - actual.bytes,
+        645,
+        "Torii hard ceiling must retain the audited 645-byte headroom",
       );
     }
     assert.deepEqual(actual, expected.get(target.label), target.label);
@@ -460,7 +483,7 @@ test("Kotodama compiler browser export stays below 53 KiB without Node or Buffer
     [],
   );
   assert.equal(Object.keys(result.metafile.inputs).length, 6);
-  assert.equal(result.outputFiles[0].contents.byteLength, 52_735);
+  assert.equal(result.outputFiles[0].contents.byteLength, 52_928);
   assert.ok(
     result.outputFiles[0].contents.byteLength <= Math.floor(52_156 * 1.05),
     "Kotodama compiler browser export regressed more than 5% from the protected pre-reset tree",

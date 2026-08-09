@@ -404,16 +404,10 @@ pub struct PotrTracker {
     checkpoint_store: Option<Arc<PotrCheckpointStore>>,
 }
 
-impl Default for PotrTracker {
-    fn default() -> Self {
-        Self::in_memory(POTR_TRACKER_DEFAULT_MAX_RECORDS_V1)
-            .expect("default PoTR tracker policy is valid")
-    }
-}
-
 impl PotrTracker {
-    /// Construct a bounded non-persistent tracker for focused composition tests.
-    pub fn in_memory(max_records: usize) -> Result<Self, PotrTrackerError> {
+    /// Construct a bounded non-persistent tracker for unit tests.
+    #[cfg(test)]
+    fn in_memory(max_records: usize) -> Result<Self, PotrTrackerError> {
         validate_policy(max_records, POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1)?;
         Ok(Self {
             max_records,
@@ -2691,8 +2685,9 @@ mod tests {
                 .repair_receipt_digest,
             None
         );
+        let unavailable_handoff = RecordingRepair::failing(1);
         assert!(matches!(
-            first_restart.resume_potr_terminal_handoffs(&first_restart),
+            first_restart.resume_potr_terminal_handoffs(&unavailable_handoff),
             Err(PotrTrackerError::RepairHandoff(_))
         ));
         assert_eq!(
@@ -2702,7 +2697,7 @@ mod tests {
                 .expect("persisted receipt")
                 .repair_receipt_digest,
             None,
-            "a repair-incapable adapter must not fabricate a receipt"
+            "a failing explicit repair adapter must not fabricate a receipt"
         );
         drop(first_restart);
 

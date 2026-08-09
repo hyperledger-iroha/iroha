@@ -1549,11 +1549,11 @@ impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
     ) -> ExternalResult<ReputationJournalSourceFinalizedViewV1> {
         if chain_id.as_str().is_empty()
             || maximum_height == 0
-            || query.source_id == ReputationJournalSourceIdV1::ZERO
+            || query.source_id() == ReputationJournalSourceIdV1::ZERO
         {
             return Err(external_failure(FAILURE_INVALID_REQUEST));
         }
-        let source_view = match query.expected_finalized_cursor {
+        let source_view = match query.expected_finalized_cursor() {
             Some(cursor) => {
                 cursor
                     .validate()
@@ -1570,7 +1570,7 @@ impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
                 .map_err(|_| external_failure(FAILURE_INVALID_REQUEST))?;
                 let source_view = self
                     .archive
-                    .journal_event_by_source_at_exact(&key, query.source_id)
+                    .journal_event_by_source_at_exact(&key, query.source_id())
                     .map_err(|_| external_failure(FAILURE_ARCHIVE_READ))?
                     .ok_or_else(|| external_failure(FAILURE_MISSING_ANCHOR))?;
                 if source_view.finalized_at_unix_ms != cursor.finalized_at_unix_ms {
@@ -1584,7 +1584,7 @@ impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
                     .latest_journal_event_by_source_at_or_before(
                         chain_id,
                         maximum_height,
-                        query.source_id,
+                        query.source_id(),
                     )
                     .map_err(|_| external_failure(FAILURE_ARCHIVE_READ))?
                     .ok_or_else(|| external_failure(FAILURE_MISSING_ANCHOR))?
@@ -2457,7 +2457,7 @@ mod tests {
             .expect("historical response honors the expected cursor");
 
         let timestamp_substitution = FindSorafsReputationJournalEventBySourceId::new(
-            query.source_id,
+            query.source_id(),
             Some(ReputationJournalFinalizedCursorV1 {
                 finalized_at_unix_ms: historical_cursor.finalized_at_unix_ms + 1,
                 ..historical_cursor

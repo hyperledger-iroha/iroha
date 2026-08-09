@@ -3778,7 +3778,11 @@ EXACT_TARGET_NEUTRAL_REQUIRED_PROOF_TOKENS = {
         "ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets",
         "ExactDecisionTargetNeutralMaterializedEpisodeIdentitiesDoNotResurrect",
         "ExactDecisionTargetNeutralFrozenSnapshotCarriersArePrimeInvariant",
+        "AsyncOrdinaryIngressTicketExcludesLaterLocalWork",
+        "AsyncSelectedOrdinaryPhysicalCarrierDefinesIngressScheduler",
         "AsyncCandidateProducerContinuationLaterOrdinalCannotOwnRunnerTurn",
+        "AsyncCandidateProducerContinuationPostCutIngressCannotBlockRunnerTurn",
+        "AsyncCandidateProducerContinuationFrozenOwnerPrecedesPostCutReplay",
         "AsyncServeIngressFrozenPredecessorPrefixNeverReplenishesOnDrain",
         "AsyncServeTombstonedIdentityCannotRequeueAtGst",
     ),
@@ -3805,6 +3809,25 @@ EXACT_TARGET_NEUTRAL_REQUIRED_PROOF_TOKENS = {
         "ExactDecisionTargetNeutralMaterializedEpisodeIdentitiesDoNotResurrect",
         "ExactDecisionTargetNeutralFrozenPhysicalCutsRemainPastOrCurrent",
         "AsyncNextProjectsMonotoneProducerJournal",
+    ),
+    "ExactDecisionTargetNeutralPostCutOrdinaryAdmissionCannotEnterFrozenPrefix": (
+        "CandidateProducerContinuationPostCutOrdinaryAdmissionCannotEnterFrozenPrefix",
+    ),
+    "ExactDecisionTargetNeutralFrozenOrdinaryIngressCandidatesCannotReplenish": (
+        "ExactDecisionTargetNeutralPostCutOrdinaryAdmissionCannotEnterFrozenPrefix",
+        "LaterAcceptedOrdinaryCarrierCannotOvertakeFrozenCarrier",
+        "AsyncIngressPhysicalHighWatermarkIsMonotone",
+    ),
+    "ExactDecisionTargetNeutralDormantLocalReplayReplacementConsumesFrozenCausalCharge": (
+        "AsyncCandidateProducerSemanticHandoffReservedPersistsWithoutAck",
+        "AsyncCandidateProducerSemanticHandoffMaterializationRequiresSuccessor",
+        "AsyncCandidateProducerSemanticHandoffRetirementRequiresAck",
+        "ExactDecisionTargetNeutralPostCutContinuationCannotEnterFrozenPrefix",
+    ),
+    "ExactDecisionTargetNeutralExactLocalReplayReplacesFrozenCharge": (
+        "AsyncCandidateProducerContinuationExactLocalReplayRetainsReservation",
+        "AsyncCandidateProducerContinuationExactLocalReplayPublishesStoredCarrier",
+        "AsyncCandidateCausalSuccessorInheritsContinuationPhysicalOwnership",
     ),
     "ExactDecisionTargetNeutralExactOccurrenceStructuralStepIsDescentOrFrame": (
         "ExactDecisionTargetNeutralFrozenPastCutOriginsCannotReplenish",
@@ -3841,6 +3864,8 @@ EXACT_TARGET_NEUTRAL_REQUIRED_PROOF_TOKENS = {
         "AsyncCandidateProducerContinuationGstExcludesResetReplay",
         "ExactDecisionTargetNeutralLeaderWireStageBudgetForSnapshot",
         "ExactDecisionTargetNeutralChargeableLeaderWireCandidatesForSnapshot",
+        "ExactDecisionTargetNeutralChargeableOrdinaryIngressCandidatesForSnapshot",
+        "ExactDecisionTargetNeutralFrozenContinuationRecordsForSnapshot",
     ),
     "ExactDecisionTargetNeutralComposedCausalEpisodeStepIsDescentOrFrame": (
         "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",

@@ -23,7 +23,7 @@ use thiserror::Error;
 mod algebra;
 #[path = "vega/bulletproof_t256.rs"]
 mod bulletproof_t256;
-#[path = "vega/canonical_mc.rs"]
+#[path = "vega/canonical_mc_exact.rs"]
 mod canonical_mc;
 #[path = "vega/circuit.rs"]
 mod circuit;
@@ -43,6 +43,8 @@ mod figure9_layout;
 mod hyrax;
 #[path = "vega/masked_relaxed.rs"]
 mod masked_relaxed;
+#[path = "vega/microsoft_mc.rs"]
+mod microsoft_mc;
 #[path = "vega/nifs.rs"]
 mod nifs;
 #[path = "vega/p256.rs"]
@@ -77,7 +79,7 @@ pub use engine::{
     VegaMdlProofErrorV1, VegaMdlProverConfigV1, VegaRandomSourceErrorV1, VegaRandomSourceV1,
     prove_vega_mdl_figure9_v1, vega_mdl_canonical_relation_digest_v1,
     vega_mdl_compiled_profile_digest_v1, vega_mdl_proof_dimensions_v1, vega_mdl_verifier_digest_v1,
-    verify_vega_mdl_figure9_v1,
+    vega_microsoft_fixture_conformance_v1, verify_vega_mdl_figure9_v1,
 };
 pub use figure9::{
     VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1, VegaMdlFigure9ErrorV1, VegaMdlFigure9WitnessV1,

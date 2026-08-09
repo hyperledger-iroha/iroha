@@ -387,9 +387,10 @@ Artifact installation requires the canonical candidate-bound promotion record th
 `ReleaseAuthentication`, in addition to the trusted policy, attestation, benchmark evidence, and
 cryptographic review. An authenticated-but-unpromoted release cannot become active.
 
-`newToriiClient(...)` exposes only `getReadiness`, `submitTopUp`, `submitRedeem`, and
-`getOperation`. Commands send the typed Norito request directly with `application/x-norito` and the
-signed lowercase operation id as `Idempotency-Key`; responses must be typed Norito as well. Top-up
+`newToriiClient(...)` exposes the query-free, asset-neutral `getOfflineCapability`,
+`getRecipientRegistrationLineage`, `submitTopUp`, `submitRedeem`, and `getOperation`. Commands send
+the typed Norito request directly with `application/x-norito` and the signed lowercase operation id
+as `Idempotency-Key`; responses must be typed Norito as well. Top-up
 bodies are limited to 512 KiB and redemption bodies to 48 MiB, exposed as
 `MAX_TORII_TOP_UP_REQUEST_BYTES_V4` and `MAX_TORII_REDEEM_REQUEST_BYTES_V4`.
 `projectReadiness` returns the live asset scale, committed height/hash, all role-specific verifier
@@ -752,6 +753,10 @@ ANDROID_TRANSPORT_GUARD_AAR=java/iroha_android/android/build/outputs/aar/android
 bash ci/check_android_transport_guard.sh /path/to/classes.jar
 ```
 
+The guard is fail-closed: the compiled artifact, `jdeps`, and archive tooling
+must all be present and successfully inspect the candidate. There is no
+override for allowing JVM transports in an Android release.
+
 ### Transport defaults and troubleshooting
 
 - HTTP clients use a strict runtime split: Android loads `OkHttpTransportExecutorFactory`, while JVM
@@ -765,8 +770,8 @@ bash ci/check_android_transport_guard.sh /path/to/classes.jar
   `OkHttpWebSocketConnectorFactory.createDefault()`, while JVM callers should inject
   `JdkWebSocketConnectorFactory.createDefault()`. This keeps platform selection deterministic and
   avoids reflective discovery; `AndroidClientFactory` performs the injection for its clients.
-- Android artefacts must not contain `java.net.http` bytecode. The `android-and6` workflow now runs a
-  `transport-guard` job that assembles the release AAR and executes
+- Android artefacts must not contain `java.net.http` bytecode. The mobile SDK artifact workflow
+  assembles the Java release AAR and executes
   `ci/check_android_transport_guard.sh` (also available locally via `make android-transport-guard`)
   to fail when JVM-only classes leak into the Android bundle.
 - Guard failures usually mean the wrong artefact was scanned (set `ANDROID_TRANSPORT_GUARD_AAR` to
@@ -1416,9 +1421,10 @@ active and no native library is loaded (avoiding security warnings in CI).
 
 Kotlin callers should use `CudaAcceleratorsKotlin.*OrNull` helpers to receive
 `Long?`/`LongArray?` outputs instead of `Optional` wrappers. See the CUDA
-operator guide for native setup and the manual smoke harness
-(`specs/sdk/android/gpu_operator_guide.md`), which exercises the JNI
-bridge on CUDA-capable devices when `IROHA_CUDA_SELFTEST=1` is set.
+operator guide for native setup and the hardware-qualified smoke harness
+(`specs/sdk/android/gpu_operator_guide.md`). The ordinary JVM suite excludes
+that GPU-only class; the nightly CUDA lane selects it explicitly and any
+missing driver, JNI bridge, or CUDA result fails the lane.
 
 `SoftwareKeyProvider.exportDeterministic(...)` emits a versioned, AES-GCM
 wrapped export bundle (v4) using per-export salt/nonce. The bundle records the

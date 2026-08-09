@@ -13,6 +13,7 @@ import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.numeric.NumericV1;
 import org.hyperledger.iroha.norito.NoritoCodec;
@@ -111,6 +112,19 @@ public final class CancelAssetLockInstructionTests {
             CancelAssetLockInstruction.fromEscrowId(
                 FIXTURE_ESCROW_ID.toLowerCase(java.util.Locale.ROOT), "20"),
         "accepted a noncanonical escrow literal");
+    final String rawEscrowId = FIXTURE_ESCROW_ID.substring(5, 69);
+    for (final String escrowAlias :
+        new String[] {
+          rawEscrowId,
+          "0x" + rawEscrowId,
+          "[\"" + FIXTURE_ESCROW_ID + "\"]",
+          "{\"value\":\"" + FIXTURE_ESCROW_ID + "\"}",
+          FIXTURE_ESCROW_ID.substring(0, FIXTURE_ESCROW_ID.length() - 4) + "0000"
+        }) {
+      expectIllegalArgument(
+          () -> CancelAssetLockInstruction.fromEscrowId(escrowAlias, "20"),
+          "accepted escrow alias '" + escrowAlias + "'");
+    }
   }
 
   @Test
@@ -223,13 +237,32 @@ public final class CancelAssetLockInstructionTests {
       fixtures.put(relative, bytes);
     }
     assertEquals(8, fixtures.size());
+
+    final CancelAssetLockInstruction canonicalFromJson =
+        CancelAssetLockInstruction.fromCanonicalFields(
+            decodeCanonicalJsonFields(fixtures.get("cancel_asset_lock_v1.json")));
+    final CancelAssetLockInstruction canonicalFromNorito =
+        CancelAssetLockInstruction.fromWirePayload(
+            fixtures.get("cancel_asset_lock_v1.to"));
+    assertEquals(canonicalFromJson, canonicalFromNorito);
+    assertEquals(85, fixtures.get("cancel_asset_lock_v1.to").length);
     assertArrayEquals(
         fixtures.get("cancel_asset_lock_v1.to"),
-        CancelAssetLockWirePayloadEncoder.encodePayload(
-            CancelAssetLockInstruction.builder()
-                .setLockId(FIXTURE_LOCK_ID)
-                .setExpectedRemainingAmount("20")
-                .build()));
+        CancelAssetLockWirePayloadEncoder.encodePayload(canonicalFromJson));
+
+    for (final String relative :
+        new String[] {
+          "negative/cancel_asset_lock_legacy_missing_expected_v1.json",
+          "negative/cancel_asset_lock_noncanonical_quantity_v1.json",
+          "negative/cancel_asset_lock_zero_expected_v1.json"
+        }) {
+      expectIllegalArgument(
+          () ->
+              CancelAssetLockInstruction.fromCanonicalFields(
+                  decodeCanonicalJsonFields(fixtures.get(relative))),
+          "accepted " + relative);
+    }
+
     assertArrayEquals(
         RETIRED_NESTED_ESCROW_ID_PAYLOAD,
         fixtures.get("negative/cancel_asset_lock_nested_escrow_id_v1.to"));
@@ -245,6 +278,23 @@ public final class CancelAssetLockInstructionTests {
           },
           "accepted " + relative);
     }
+  }
+
+  private static Map<String, String> decodeCanonicalJsonFields(final byte[] payload) {
+    final Object parsed =
+        JsonParser.parse(new String(payload, StandardCharsets.UTF_8));
+    if (!(parsed instanceof Map<?, ?>)) {
+      throw new IllegalArgumentException("CancelAssetLock JSON must be an object");
+    }
+    final Map<String, String> fields = new LinkedHashMap<>();
+    for (final Map.Entry<?, ?> entry : ((Map<?, ?>) parsed).entrySet()) {
+      if (!(entry.getKey() instanceof String) || !(entry.getValue() instanceof String)) {
+        throw new IllegalArgumentException(
+            "CancelAssetLock JSON fields and values must be strings");
+      }
+      fields.put((String) entry.getKey(), (String) entry.getValue());
+    }
+    return fields;
   }
 
   private static byte[] legacyOneFieldFrame() {

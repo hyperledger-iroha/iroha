@@ -655,6 +655,16 @@ remains available until that evidence is durable. After body pruning, validation
 QC-authenticated manifest root and proof; old hash-only evidence remains blocked unless the
 canonical wire is recovered from authenticated storage or QC signers.
 
+Every revision-4 execution commitment also carries the mandatory `merge_carrier` option. Ordinary
+blocks encode it explicitly as JSON `null` (and as the canonical absent Option tag in Norito).
+A merge carrier encodes the closed V1 object `{version: 1, entry_hash}`, where `entry_hash` is the
+canonical hash of the complete merge-ledger entry. Missing options, unsupported versions,
+malformed hashes, and unknown object fields are rejected; there is no revision-3 omission fallback.
+Immediately after that option, the commitment carries mandatory non-zero
+`executed_block_wire_len: u64` followed by `executed_block_wire_hash`. Validators reject a missing
+or zero length; the pair binds the exact byte length and digest of the canonical result-bearing
+block wire, with no implicit legacy default.
+
 The standalone manifest and receipt histories use the configured Kura sidecar-retention count and
 the existing shared Native sidecar aggregate-byte budget, with one bounded transient publication
 slot. Compaction first fsyncs a versioned prune intent bound to lane, dataspace, incarnation, and

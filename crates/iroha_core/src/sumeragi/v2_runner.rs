@@ -43,14 +43,20 @@ use super::{
     FairV2Ingress, FairV2IngressBarrierBypass, FairV2IngressCapacityError,
     FairV2IngressDequeueDisposition, FairV2IngressOwnershipEvidence, GenesisWithPubKey,
     InboundBlockMessage, SumeragiWorker,
-    message::BlockMessage,
+    message::{BlockMessage, CanonicalExecutedBlockNeedV1},
     output_guard::{ConsensusOutputGuard, ConsensusOutputPermit},
     serviced_candidate_store::LeaderWireLifecycleStoreGate,
     v2::{
         AdapterEffect, AdapterFingerprints, DeferredAdmissionOrdinalSource, LocalProposalDirective,
         ServicedCandidateCapacityGeometry, SignRequest, SumeragiV2Adapter,
     },
-    v2_apply::{V2ApplyService, V2ReservationLifecycleError, reconcile_lane_reservation_ownership},
+    v2_apply::{
+        LaneReservationReconciliationPlanning, V2ApplyService, V2ReservationLifecycleError,
+        apply_lane_reservation_reconciliation_plan,
+        persist_preflighted_historical_autonomous_lane_recoveries, plan_lane_reservation_ownership,
+        preflight_historical_autonomous_lane_recovery,
+        validate_installed_historical_autonomous_lane_recoveries,
+    },
     v2_block_sync::{
         CommitCertificateAdmissionError, V2BlockSyncDiscovery, V2BlockSyncError, V2BlockSyncServer,
     },
@@ -65,10 +71,17 @@ use super::{
         PostFinalityCleanupTarget, V2EffectExecutor, network_ingress_is_certified_fence_escape,
     },
     v2_lane_work::{
-        AuthenticatedGenesisNexusAmxContext, GlobalBodyLockOutcome,
-        HistoricalRecoveryServiceOutcome, MergeSidecarDeferralDisposition, RetainedMergeSidecars,
-        V2LaneIngressOutcome, V2LaneWorkAdapter, V2LaneWorkEffect, V2LaneWorkError,
-        V2LaneWorkLimits, require_validator_storage_platform,
+        AuthenticatedGenesisNexusAmxContext, CanonicalExecutedBlockRecovery, GlobalBodyLockOutcome,
+        HistoricalRecoveryServiceOutcome, LaneApplicationEvidenceRepairPlanning,
+        MergeSidecarDeferralDisposition, RetainedMergeSidecars, V2LaneIngressOutcome,
+        V2LaneWorkAdapter, V2LaneWorkEffect, V2LaneWorkError, V2LaneWorkLimits,
+        apply_lane_application_evidence_repair,
+        persist_canonical_historical_recovery_payload_custody,
+        plan_lane_application_evidence_repair, require_validator_storage_platform,
+    },
+    v2_lifecycle_recovery::{
+        AutonomousLifecycleDeferredTerminalRecoveryHandoff, reconcile_autonomous_lifecycle_startup,
+        reconcile_pending_autonomous_lifecycle_terminal_outcomes,
     },
     v2_npos::V2NposVrfLifecycle,
     v2_recovery::{
@@ -81,19 +94,19 @@ use super::{
     v2_transport::AuthenticatedCertifiedBodyRequest,
     v2_worker::{
         CertifiedServeAdmission, CertifiedServeIngressGate, CertifiedServeNegativeOutcome,
-        CertifiedServePrepareError, ExactFanoutOwnership, ProductionV2Services,
-        V2CleanupSupervisor, durable_exact_output_handoff_owner_pair,
+        CertifiedServePrepareError, ExactFanoutOwnership, KuraReplicaAdvertRefreshOwner,
+        ProductionV2Services, V2CleanupSupervisor, durable_exact_output_handoff_owner_pair,
     },
 };
 use crate::{
-    kura::{Kura, KuraV2CommitReceipt},
+    kura::{AutonomousLifecycleProcessGenerationClaim, Kura, KuraV2CommitReceipt},
     merge_sidecar::{
         CertifiedMergeSidecarClosedPrefix, CertifiedMergeSidecarMessage, MergeSidecarLimits,
         MergeSigningGuardLimits,
     },
     native_amx::NativeAmxMessage,
     queue::{GlobalQueueSelectionLease, Queue},
-    state::State,
+    state::{PendingCertifiedMergeSelection, State},
 };
 
 const IDLE_POLL: Duration = Duration::from_millis(10);
@@ -760,206 +773,8 @@ impl Drop for LeaderWireIngressBinding {
     }
 }
 
-/// Joint per-height ownership of the fair-ingress durable gates.
-///
-/// Once both gates are live they must retire in one queue transaction: the
-/// Serve binding and leader-wire binding describe carriers in the same lanes.
-struct HeightIngressBindings {
-    certified_serve: CertifiedServeIngressBinding,
-    leader_wire: LeaderWireIngressBinding,
-}
-
-impl HeightIngressBindings {
-    fn new(
-        certified_serve: CertifiedServeIngressBinding,
-        leader_wire: LeaderWireIngressBinding,
-    ) -> Self {
-        Self {
-            certified_serve,
-            leader_wire,
-        }
-    }
-
-    fn retire(&mut self) -> Result<(), V2RunnerError> {
-        match (
-            self.certified_serve.gate.as_ref(),
-            self.leader_wire.gate.as_ref(),
-        ) {
-            (None, None) => return Ok(()),
-            (Some(_), None) | (None, Some(_)) => {
-                return Err(V2RunnerError::Service(
-                    "per-height ingress gates changed joint ownership".to_owned(),
-                ));
-            }
-            (Some(_), Some(_)) => {}
-        }
-        if !Arc::ptr_eq(
-            &self.certified_serve.ingress_ready,
-            &self.leader_wire.ingress_ready,
-        ) || !Arc::ptr_eq(
-            &self.certified_serve.block_ingress,
-            &self.leader_wire.block_ingress,
-        ) {
-            return Err(V2RunnerError::Service(
-                "per-height ingress gates changed their shared queue".to_owned(),
-            ));
-        }
-
-        close_ingress_for_rollover(
-            &self.certified_serve.ingress_ready,
-            &self.certified_serve.block_ingress,
-        );
-        self.certified_serve
-            .block_ingress
-            .unbind_height_ingress_gates(
-                self.certified_serve
-                    .gate
-                    .as_ref()
-                    .expect("joint binding retains the certified Serve gate"),
-                self.leader_wire
-                    .gate
-                    .as_ref()
-                    .expect("joint binding retains the leader-wire gate"),
-            )
-            .map_err(V2RunnerError::Service)?;
-        self.certified_serve.gate = None;
-        self.leader_wire.gate = None;
-        Ok(())
-    }
-}
-
-impl Drop for HeightIngressBindings {
-    fn drop(&mut self) {
-        if let Err(error) = self.retire() {
-            // Joint validation failed before mutation. Keep the shared queue
-            // fail-closed and disarm the child guards: retrying their former
-            // split teardown would recreate the carrierless-Ingress cut this
-            // owner exists to prevent.
-            close_ingress_for_rollover(
-                &self.certified_serve.ingress_ready,
-                &self.certified_serve.block_ingress,
-            );
-            self.certified_serve.gate = None;
-            self.leader_wire.gate = None;
-            iroha_logger::error!(
-                %error,
-                "failed to atomically retire the per-height ingress gates"
-            );
-        }
-    }
-}
-
-struct V2StatusClearGuard {
-    clear_on_drop: bool,
-}
-
-impl V2StatusClearGuard {
-    fn new() -> Self {
-        super::status::clear_v2_status();
-        Self {
-            clear_on_drop: false,
-        }
-    }
-
-    fn clear_on_drop(&mut self) {
-        self.clear_on_drop = true;
-    }
-}
-
-impl Drop for V2StatusClearGuard {
-    fn drop(&mut self) {
-        if self.clear_on_drop {
-            super::status::clear_v2_status();
-        }
-    }
-}
-
-fn close_ingress_for_rollover(ingress_ready: &AtomicBool, block_ingress: &FairV2Ingress) {
-    ingress_ready.store(false, Ordering::Release);
-    block_ingress.close();
-}
-
-fn open_ingress_for_active_height(
-    output_guard: &ConsensusOutputGuard,
-    ingress_ready: &AtomicBool,
-    block_ingress: &FairV2Ingress,
-    activation: Option<(PendingSuccessorActivation, wire::SumeragiV2Status)>,
-) -> Result<(), V2RunnerError> {
-    let Some(ingress_permit) = output_guard.acquire() else {
-        return Err(V2RunnerError::RestartRequired);
-    };
-    block_ingress.open().map_err(ingress_capacity_error)?;
-    ingress_ready.store(true, Ordering::Release);
-    if let Some((activation, successor)) = activation
-        && let Err(error) = activation.publish(successor)
-    {
-        close_ingress_for_rollover(ingress_ready, block_ingress);
-        return Err(error);
-    }
-    drop(ingress_permit);
-    Ok(())
-}
-
-fn ingress_capacity_error(error: FairV2IngressCapacityError) -> V2RunnerError {
-    if error.is_bytes() {
-        V2RunnerError::IngressByteCapacity {
-            configured: error.configured(),
-            required: error.required(),
-        }
-    } else {
-        V2RunnerError::IngressCapacity {
-            configured: error.configured(),
-            required: error.required(),
-        }
-    }
-}
-
-fn validate_deadline_duration(duration: Duration) -> Result<(), V2RunnerError> {
-    Instant::now()
-        .checked_add(duration)
-        .ok_or(V2RunnerError::InvalidLimits)?;
-    Ok(())
-}
-
-fn deadline_after(now: Instant, duration: Duration) -> Instant {
-    now.checked_add(duration)
-        .expect("consensus deadline duration was prevalidated before height startup")
-}
-
-fn initial_block_sync_deadline(
-    height_started_at: Instant,
-    round_timeout: Duration,
-    eager_recovery: bool,
-) -> Instant {
-    if eager_recovery {
-        height_started_at
-    } else {
-        deadline_after(height_started_at, round_timeout)
-    }
-}
-
-const fn retain_eager_block_sync(
-    recovering_interrupted_tip: bool,
-    admitted_discovered_commit_qc: bool,
-) -> bool {
-    recovering_interrupted_tip || admitted_discovered_commit_qc
-}
-
-fn snapshot_successor_logical_time(
-    anchor: &wire::SnapshotBootstrapAnchor,
-    block_cadence: Duration,
-) -> Result<Duration, V2RunnerError> {
-    let cadence_ms =
-        u64::try_from(block_cadence.as_millis()).map_err(|_| V2RunnerError::V2BlockTimeOverflow)?;
-    if cadence_ms == 0 || Duration::from_millis(cadence_ms) != block_cadence {
-        return Err(V2RunnerError::InvalidSnapshotBootstrapCadence);
-    }
-    let successor_ms = anchor
-        .snapshot_block_creation_time_ms
-        .checked_add(cadence_ms)
-        .ok_or(V2RunnerError::V2BlockTimeOverflow)?;
-    Ok(Duration::from_millis(successor_ms))
-}
+include!("v2_runner/height_ingress_bindings.rs");
+include!("v2_runner/lifecycle_terminal_recovery.rs");
 
 #[allow(clippy::too_many_lines)]
 fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
@@ -1021,6 +836,25 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         recovered_successor_activation,
         mut staged_genesis_nexus_amx_context,
     ) = recovered.into_parts();
+    let local_peer = common_config.peer.id().clone();
+    // Height-local roster membership is read-only and must precede the first
+    // lifecycle mutation. It controls global duty for this frozen height, not
+    // the immutable process capability: a configured validator may be absent
+    // now and later rotate into a global roster, or still serve an independently
+    // frozen lane descriptor which names its key.
+    let _initial_local_validator =
+        local_validator_index(verified_context.context(), &local_peer, config.role)?;
+    // Claim the process generation before constructing any height-local lane
+    // service.  The claim is rooted in the authenticated recovered chain
+    // context and the immutable local Kura identity; later startup lifecycle
+    // reconciliation consumes this same process-lifetime claim rather than
+    // allowing each height adapter to invent a generation.
+    let _lifecycle_process_generation = claim_runner_lifecycle_process_generation(
+        config.role,
+        kura.as_ref(),
+        verified_context.context(),
+        &local_peer,
+    )?;
     // A process which recovered durable v2 height ownership may be behind its
     // peers. Probe that exact active context immediately, then retain eager
     // discovery only while an authenticated discovered CommitQC acquires or
@@ -1028,27 +862,10 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     // clears the hint, so this does not add permanent all-to-all traffic.
     let mut eager_block_sync =
         recovered_successor_activation.is_some() || pending_kura_apply.is_some();
-    let reservation_recovery = output_guard
-        .begin_fail_stop_operation()
-        .ok_or(V2RunnerError::RestartRequired)?;
-    let recovered_reservations = queue.live_lane_reservations().len();
-    let (finalized_committed_reservations, released_orphans) =
-        reconcile_lane_reservation_ownership(
-            state.as_ref(),
-            queue.as_ref(),
-            kura.as_ref(),
-            &verified_context.context().chain_id,
-        )?;
-    reservation_recovery.complete();
-    if recovered_reservations > 0 || finalized_committed_reservations > 0 || released_orphans > 0 {
-        iroha_logger::info!(
-            recovered = recovered_reservations,
-            finalized_committed = finalized_committed_reservations,
-            released_orphans,
-            "reconciled durable lane reservations against committed v2 merge history"
-        );
-    }
-    let local_peer = common_config.peer.id().clone();
+    // Reconcile exactly once, after an interrupted canonical tip (if any) has
+    // completed State application. Running before that boundary could mistake
+    // the tip's not-yet-published membership for a losing lane proposal.
+    let mut reservation_reconciliation_pending = true;
     let genesis_account = AccountId::new(genesis_public_key);
     let mut first_height_genesis = genesis_body;
     let mut block_sync_server = None;
@@ -1069,6 +886,10 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     let mut liveness_watchdog = super::status::V2LivenessWatchdog::default();
     let deferred_admission_ordinals = DeferredAdmissionOrdinalSource::new(0);
     let mut retained_merge_sidecars: Option<RetainedMergeSidecars> = None;
+    let kura_replica_advert_refresh = Arc::new(
+        KuraReplicaAdvertRefreshOwner::from_kura(kura.as_ref(), Instant::now())
+            .map_err(V2RunnerError::Service)?,
+    );
 
     loop {
         cleanup_supervisor.reap_finished();
@@ -1383,6 +1204,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             lifecycle_ordinals,
             Arc::clone(&output_guard),
             Arc::clone(&block_rx),
+            Arc::clone(&kura_replica_advert_refresh),
             leader_wire_recovery_authority,
             exact_output_service_owner,
         )
@@ -1478,6 +1300,345 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             // must enter through its exact post-apply recovery path.
             authenticated_genesis_nexus_amx_context = None;
         }
+        if reservation_reconciliation_pending {
+            let evidence_repair_queue_fence =
+                LaneApplicationEvidenceRepairQueueFence::capture(queue.as_ref())?;
+            loop {
+                evidence_repair_queue_fence.revalidate(queue.as_ref())?;
+                match plan_lane_application_evidence_repair(
+                    &context,
+                    state.as_ref(),
+                    kura.as_ref(),
+                    lane_work_limits,
+                )? {
+                    LaneApplicationEvidenceRepairPlanning::Ready(plan) if plan.is_empty() => {
+                        break;
+                    }
+                    LaneApplicationEvidenceRepairPlanning::Ready(plan) => {
+                        let planned_items = plan.item_count();
+                        let evidence_repair = output_guard
+                            .begin_fail_stop_operation()
+                            .ok_or(V2RunnerError::RestartRequired)?;
+                        let summary = apply_lane_application_evidence_repair(
+                            state.as_ref(),
+                            kura.as_ref(),
+                            plan,
+                        )?;
+                        let progressed = summary.publication_count();
+                        if planned_items == 0 || progressed == 0 {
+                            return Err(V2RunnerError::Service(
+                                "lane application evidence startup repair made no bounded progress"
+                                    .to_owned(),
+                            ));
+                        }
+                        evidence_repair.complete();
+                        iroha_logger::info!(
+                            ordinary_pairs = summary.ordinary_pairs,
+                            ordinary_receipts = summary.ordinary_receipts,
+                            native_carriers = summary.native_carriers,
+                            native_routes = summary.native_routes,
+                            merge_carriers = summary.merge_carriers,
+                            "published preflighted lane application evidence before Queue startup"
+                        );
+                    }
+                    LaneApplicationEvidenceRepairPlanning::RecoverCanonicalBodies(needs) => {
+                        if needs.is_empty() {
+                            return Err(V2RunnerError::Service(
+                                "lane application evidence repair requested an empty body set"
+                                    .to_owned(),
+                            ));
+                        }
+                        open_ingress_for_active_height(
+                            output_guard.as_ref(),
+                            &ingress_ready,
+                            &block_rx,
+                            None,
+                        )?;
+                        let recovery_capacity =
+                            CanonicalExecutedBlockRecovery::need_capacity(lane_work_limits);
+                        let recovery_batches =
+                            canonical_executed_block_recovery_batches(&needs, recovery_capacity)?;
+                        for bounded_needs in recovery_batches {
+                            let mut body_recovery = CanonicalExecutedBlockRecovery::new(
+                                context.clone(),
+                                local_peer.clone(),
+                                Arc::clone(&state),
+                                Arc::clone(&kura),
+                                Arc::clone(&output_guard),
+                                lane_work_limits,
+                                bounded_needs.to_vec(),
+                            )?;
+                            let mut next_retry = Instant::now();
+                            while body_recovery.has_pending() {
+                                if output_guard.restart_required() {
+                                    return Err(V2RunnerError::RestartRequired);
+                                }
+                                if shutdown_signal.is_sent() {
+                                    height_ingress_bindings.retire()?;
+                                    services.allow_clean_shutdown();
+                                    return Ok(());
+                                }
+                                let now = Instant::now();
+                                if now >= next_retry {
+                                    body_recovery.service_next()?;
+                                    next_retry = deadline_after(now, retransmit_interval);
+                                }
+                                let drained = drain_canonical_executed_block_recovery_ingress(
+                                    &block_rx,
+                                    &mut body_recovery,
+                                    control_queue_capacity,
+                                )?;
+                                if drained != 0 && body_recovery.has_pending() {
+                                    body_recovery.service_next()?;
+                                }
+                                let dispatched =
+                                    dispatch_canonical_executed_block_recovery_effects(
+                                        &mut body_recovery,
+                                        &services,
+                                        control_queue_capacity,
+                                    )?;
+                                if body_recovery.has_pending() && drained == 0 && dispatched == 0 {
+                                    let wait = next_retry
+                                        .saturating_duration_since(Instant::now())
+                                        .min(IDLE_POLL);
+                                    if !wait.is_zero() {
+                                        let _ = wake_rx.recv_timeout(wait);
+                                    }
+                                }
+                            }
+                        }
+                        close_ingress_for_rollover(&ingress_ready, &block_rx);
+                    }
+                }
+            }
+        }
+        if reservation_reconciliation_pending {
+            let summary = loop {
+                let deferred_terminal_recovery =
+                    reconcile_lifecycle_terminal_outcomes_before_queue_planning(
+                        &output_guard,
+                        state.as_ref(),
+                        queue.as_ref(),
+                        kura.as_ref(),
+                        &context,
+                    )?;
+                let planning = plan_lane_reservation_ownership(
+                    state.as_ref(),
+                    queue.as_ref(),
+                    kura.as_ref(),
+                    &verified_context,
+                    None,
+                )?;
+                let planning = match planning {
+                    LaneReservationReconciliationPlanning::Ready(pre_lifecycle_plan) => {
+                        // Classification is read-only. Discard its first receipt, reconcile every
+                        // signed local lifecycle boundary while the Queue gate remains closed, then
+                        // rebuild the complete plan with the exact receipt retained by that flow.
+                        let planner_evidence =
+                            pre_lifecycle_plan.startup_snapshot_recovery_evidence()?;
+                        let lifecycle = reconcile_autonomous_lifecycle_startup(
+                            state.as_ref(),
+                            queue.as_ref(),
+                            kura.as_ref(),
+                            &context,
+                            planner_evidence,
+                            deferred_terminal_recovery,
+                            _lifecycle_process_generation.as_ref(),
+                            &local_peer,
+                            &common_config.key_pair,
+                        )
+                        .map_err(V2RunnerError::Service)?;
+                        let completed_bootstraps = lifecycle.completed_bootstraps();
+                        let recovered_attempts = lifecycle.recovered_attempts();
+                        let replanned = plan_lane_reservation_ownership(
+                            state.as_ref(),
+                            queue.as_ref(),
+                            kura.as_ref(),
+                            &verified_context,
+                            Some(lifecycle),
+                        )?;
+                        if completed_bootstraps != 0 || recovered_attempts != 0 {
+                            iroha_logger::info!(
+                                completed_bootstraps,
+                                recovered_attempts,
+                                "reconciled signed autonomous lifecycle custody before Queue publication"
+                            );
+                        }
+                        replanned
+                    }
+                    pending => pending,
+                };
+                match planning {
+                    LaneReservationReconciliationPlanning::Ready(plan) => {
+                        let reservation_recovery = output_guard
+                            .begin_fail_stop_operation()
+                            .ok_or(V2RunnerError::RestartRequired)?;
+                        let summary = apply_lane_reservation_reconciliation_plan(
+                            state.as_ref(),
+                            queue.as_ref(),
+                            kura.as_ref(),
+                            plan,
+                        )?;
+                        reservation_recovery.complete();
+                        break summary;
+                    }
+                    LaneReservationReconciliationPlanning::RecoverCanonicalBodies(needs) => {
+                        if !queue.lane_reservation_startup_reconciliation_pending() {
+                            return Err(V2RunnerError::Service(
+                                "reservation body recovery was requested after the Queue startup gate opened"
+                                    .to_owned(),
+                            ));
+                        }
+                        iroha_logger::info!(
+                            body_count = needs.len(),
+                            "starting authenticated recovery of pruned canonical executed blocks"
+                        );
+                        open_ingress_for_active_height(
+                            output_guard.as_ref(),
+                            &ingress_ready,
+                            &block_rx,
+                            None,
+                        )?;
+                        let recovery_capacity =
+                            CanonicalExecutedBlockRecovery::need_capacity(lane_work_limits);
+                        let recovery_batches =
+                            canonical_executed_block_recovery_batches(&needs, recovery_capacity)?;
+                        for bounded_needs in recovery_batches {
+                            let mut body_recovery = CanonicalExecutedBlockRecovery::new(
+                                context.clone(),
+                                local_peer.clone(),
+                                Arc::clone(&state),
+                                Arc::clone(&kura),
+                                Arc::clone(&output_guard),
+                                lane_work_limits,
+                                bounded_needs.to_vec(),
+                            )?;
+                            let mut next_retry = Instant::now();
+                            while body_recovery.has_pending() {
+                                if output_guard.restart_required() {
+                                    return Err(V2RunnerError::RestartRequired);
+                                }
+                                if shutdown_signal.is_sent() {
+                                    height_ingress_bindings.retire()?;
+                                    services.allow_clean_shutdown();
+                                    return Ok(());
+                                }
+                                let now = Instant::now();
+                                if now >= next_retry {
+                                    body_recovery.service_next()?;
+                                    next_retry = deadline_after(now, retransmit_interval);
+                                }
+                                let drained = drain_canonical_executed_block_recovery_ingress(
+                                    &block_rx,
+                                    &mut body_recovery,
+                                    control_queue_capacity,
+                                )?;
+                                if drained != 0 && body_recovery.has_pending() {
+                                    body_recovery.service_next()?;
+                                }
+                                let dispatched =
+                                    dispatch_canonical_executed_block_recovery_effects(
+                                        &mut body_recovery,
+                                        &services,
+                                        control_queue_capacity,
+                                    )?;
+                                if body_recovery.has_pending() && drained == 0 && dispatched == 0 {
+                                    let wait = next_retry
+                                        .saturating_duration_since(Instant::now())
+                                        .min(IDLE_POLL);
+                                    if !wait.is_zero() {
+                                        let _ = wake_rx.recv_timeout(wait);
+                                    }
+                                }
+                            }
+                        }
+                        close_ingress_for_rollover(&ingress_ready, &block_rx);
+                        iroha_logger::info!(
+                            "cached authenticated canonical executed blocks; rebuilding the complete immutable reconciliation plan"
+                        );
+                    }
+                    LaneReservationReconciliationPlanning::InstallHistoricalAutonomousRecoveries(
+                        installs,
+                    ) => {
+                        if installs.is_empty() {
+                            return Err(V2RunnerError::Service(
+                                "reservation reconciliation requested an empty historical recovery installation"
+                                    .to_owned(),
+                            ));
+                        }
+                        if !queue.lane_reservation_startup_reconciliation_pending() {
+                            return Err(V2RunnerError::Service(
+                                "historical reservation recovery was requested after the Queue startup gate opened"
+                                    .to_owned(),
+                            ));
+                        }
+                        let historical_recovery = output_guard
+                            .begin_fail_stop_operation()
+                            .ok_or(V2RunnerError::RestartRequired)?;
+                        iroha_logger::info!(
+                            install_count = installs.len(),
+                            "installing finalized historical autonomous recovery inputs"
+                        );
+                        let records = installs
+                            .iter()
+                            .map(|install| {
+                                preflight_historical_autonomous_lane_recovery(
+                                    state.as_ref(),
+                                    kura.as_ref(),
+                                    install,
+                                )
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let process_generation = _lifecycle_process_generation
+                            .as_ref()
+                            .ok_or_else(|| {
+                                V2RunnerError::Service(
+                                    "historical autonomous recovery payload custody requires a validator process generation"
+                                        .to_owned(),
+                                )
+                            })?;
+                        for record in &records {
+                            persist_canonical_historical_recovery_payload_custody(
+                                kura.as_ref(),
+                                process_generation,
+                                &common_config.key_pair,
+                                &local_peer,
+                                record,
+                            )?;
+                        }
+                        let _outcomes =
+                            persist_preflighted_historical_autonomous_lane_recoveries(
+                                kura.as_ref(),
+                                &records,
+                            )?;
+                        validate_installed_historical_autonomous_lane_recoveries(
+                            kura.as_ref(),
+                            &records,
+                        )?;
+                        historical_recovery.complete();
+                        iroha_logger::info!(
+                            install_count = installs.len(),
+                            "installed historical autonomous recovery inputs; rebuilding the complete immutable reconciliation plan"
+                        );
+                    }
+                }
+            };
+            reservation_reconciliation_pending = false;
+            if summary != Default::default() {
+                iroha_logger::info!(
+                    recovered = summary.recovered,
+                    finalized_committed = summary.finalized_committed,
+                    retained_current = summary.retained_current,
+                    retained_certified = summary.retained_certified,
+                    retained_pending_merge = summary.retained_pending_merge,
+                    retained_historical_recovery = summary.retained_historical_recovery,
+                    released_strictly_absent = summary.released_strictly_absent,
+                    released_terminal_loser = summary.released_terminal_loser,
+                    resumed_retirement = summary.resumed_retirement,
+                    "reconciled durable lane reservations from one exact startup evidence plan"
+                );
+            }
+        }
         let mut lane_work = construct_after_pending_tip_application_recovery(
             recovering_interrupted_tip,
             executor.durable_finality().is_some() && recovered_applied_height.is_some(),
@@ -1495,11 +1656,16 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     Arc::clone(&output_guard),
                     exact_output_transport_owner,
                     retained_merge_sidecars.take(),
+                    _lifecycle_process_generation.clone(),
                 )
                 .map_err(V2RunnerError::from)
             },
         )?;
         lane_work.install_lane_drain_queue(Arc::clone(&queue))?;
+        // Signed lifecycle bootstrap, generation takeover, Queue snapshot recovery, and local
+        // Kura body rehydration completed above while the adapter was still carrier-silent.
+        // Activation is one-shot and independently revalidates every hydrated owner before work.
+        lane_work.activate_after_lane_drain_queue_install(&queue)?;
         let mut committed_lane_status_publisher = CommittedLaneStatusPublisher::default();
         committed_lane_status_publisher.publish_if_changed(&lane_work);
         if let Some(scheduler_ordinal) = services
@@ -1630,9 +1796,10 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 // available completion capacity. Otherwise the response could
                 // occupy the sole returned slot and strand that older owner.
                 services.drain_exact_serve_runtime_predecessor(&mut executor, target_ordinal)?;
-                if executor
-                    .older_runtime_lifecycle_predates_exact_serve(Instant::now(), target_ordinal)?
-                {
+                if executor.older_runtime_lifecycle_predates_retained_response(
+                    Instant::now(),
+                    target_ordinal,
+                )? {
                     // The matching PendingFetch is itself an older passive
                     // owner, so this is one bounded opportunity rather than a
                     // prerequisite for retry.
@@ -1742,6 +1909,29 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 // enter the frozen prefix, and exact carrier retry retains the
                 // same episode state and ticket identity.
                 let mut older_predecessor_remains = false;
+                let completion_evidence = services
+                    .certified_serve_predecessor_completion_evidence(
+                        executor.remaining_completion_capacity() != 0,
+                        serve_barrier.scheduler_ordinal(),
+                    )
+                    .map_err(V2RunnerError::Service)?;
+                if let Some(witness) = executor.exact_serve_predecessor_episode_witness(
+                    Instant::now(),
+                    serve_barrier.scheduler_ordinal(),
+                    completion_evidence,
+                )? {
+                    // A passive Fetch is intentionally absent from the
+                    // runnable-owner set. A completed strict predecessor is
+                    // projected without consuming it; its exact local ordinal
+                    // lets the runtime issue one newer episode witness before
+                    // the worker claims capacity and admits the completion.
+                    let _ = services
+                        .observe_certified_serve_predecessor_episode_witness(
+                            serve_barrier,
+                            witness,
+                        )
+                        .map_err(V2RunnerError::Service)?;
+                }
                 let claimed_older_runtime_episode = services
                     .claim_certified_serve_runtime_episode(serve_barrier)
                     .map_err(V2RunnerError::Service)?;
@@ -1756,12 +1946,29 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     // backpressure. Once capacity exists, the queue admits
                     // only this turn's strict older lifecycle and keeps the
                     // exact target barrier installed.
-                    if executor.older_runtime_lifecycle_predates_exact_serve(
+                    let completion_evidence = services
+                        .certified_serve_predecessor_completion_evidence(
+                            executor.remaining_completion_capacity() != 0,
+                            serve_barrier.scheduler_ordinal(),
+                        )
+                        .map_err(V2RunnerError::Service)?;
+                    let predecessor_witness = executor.exact_serve_predecessor_episode_witness(
                         Instant::now(),
                         serve_barrier.scheduler_ordinal(),
-                    )? && services
-                        .certified_serve_runtime_predecessor_capacity_available(serve_barrier)
-                        .map_err(V2RunnerError::Service)?
+                        completion_evidence,
+                    )?;
+                    if let Some(witness) = predecessor_witness {
+                        let _ = services
+                            .observe_certified_serve_predecessor_episode_witness(
+                                serve_barrier,
+                                witness,
+                            )
+                            .map_err(V2RunnerError::Service)?;
+                    }
+                    if predecessor_witness.is_some()
+                        && services
+                            .certified_serve_runtime_predecessor_capacity_available(serve_barrier)
+                            .map_err(V2RunnerError::Service)?
                     {
                         if recovering_interrupted_tip {
                             let _ = advance_pending_tip_recovery_executor(
@@ -1800,11 +2007,26 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                             1,
                         )?;
                     }
-                    older_predecessor_remains = executor
-                        .older_runtime_lifecycle_predates_exact_serve(
-                            Instant::now(),
+                    let completion_evidence = services
+                        .certified_serve_predecessor_completion_evidence(
+                            executor.remaining_completion_capacity() != 0,
                             serve_barrier.scheduler_ordinal(),
-                        )?;
+                        )
+                        .map_err(V2RunnerError::Service)?;
+                    let predecessor_witness = executor.exact_serve_predecessor_episode_witness(
+                        Instant::now(),
+                        serve_barrier.scheduler_ordinal(),
+                        completion_evidence,
+                    )?;
+                    if let Some(witness) = predecessor_witness {
+                        let _ = services
+                            .observe_certified_serve_predecessor_episode_witness(
+                                serve_barrier,
+                                witness,
+                            )
+                            .map_err(V2RunnerError::Service)?;
+                    }
+                    older_predecessor_remains = predecessor_witness.is_some();
                     services
                         .finish_certified_serve_runtime_episode_turn(
                             serve_barrier,
@@ -1928,6 +2150,18 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 &services,
                 control_queue_capacity,
             )?;
+            let advert_refresh = services
+                .service_kura_replica_advert_refresh_turn(Instant::now())
+                .map_err(V2RunnerError::Service)?;
+            if advert_refresh.fanout_attempted {
+                iroha_logger::debug!(
+                    height = context.height,
+                    probes = advert_refresh.probes,
+                    retained_source = advert_refresh.retained_source,
+                    scan_active = advert_refresh.scan_active,
+                    "advanced bounded Kura replica-advert refresh"
+                );
+            }
             services.drain_completions(&mut executor)?;
             let _ = retry_exact_output_and_apply_sidecar_admissions(
                 &mut lane_work,
@@ -2030,7 +2264,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 let now = Instant::now();
                 if now >= next_lane_retransmit {
                     let _ = service_historical_recovery_tick(&mut lane_work)?;
-                    lane_work.service_next_native_participant_recovery_request()?;
                     lane_work.schedule_autonomous_new_view_timeouts(
                         now,
                         executor.current_tag().view(),
@@ -2075,7 +2308,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 let now = Instant::now();
                 if now >= next_lane_retransmit {
                     let _ = service_historical_recovery_tick(&mut lane_work)?;
-                    lane_work.service_next_native_participant_recovery_request()?;
                     lane_work.schedule_autonomous_new_view_timeouts(
                         now,
                         executor.current_tag().view(),
@@ -2879,6 +3111,7 @@ enum DecidedLaneRecoveryCurrentServe {
 
 enum DecidedLaneRecoveryIngressPreparation {
     LaneLocal,
+    KuraReplicaAdvert,
     CurrentServe(DecidedLaneRecoveryCurrentServe),
     HistoricalServe,
     LeaderWireRetire,
@@ -2891,6 +3124,7 @@ enum DecidedLaneRecoveryCurrentDrain<Admission> {
 
 enum DecidedLaneRecoveryDrainAuthorization<Admission> {
     LaneLocal,
+    KuraReplicaAdvert,
     CurrentServe(DecidedLaneRecoveryCurrentDrain<Admission>),
     HistoricalServe,
     LeaderWireRetire,
@@ -2946,6 +3180,11 @@ fn authorize_decided_lane_recovery_drain<A: DecidedLaneRecoveryDrainAuthorizer>(
         DecidedLaneRecoveryIngressPreparation::LaneLocal => {
             DecidedLaneRecoveryDrainDecision::Authorized(
                 DecidedLaneRecoveryDrainAuthorization::LaneLocal,
+            )
+        }
+        DecidedLaneRecoveryIngressPreparation::KuraReplicaAdvert => {
+            DecidedLaneRecoveryDrainDecision::Authorized(
+                DecidedLaneRecoveryDrainAuthorization::KuraReplicaAdvert,
             )
         }
         DecidedLaneRecoveryIngressPreparation::HistoricalServe => {
@@ -3012,6 +3251,9 @@ fn prepare_decided_lane_recovery_ingress(
         &PeerId,
     ) -> Result<AuthenticatedCertifiedBodyRequest, String>,
 ) -> DecidedLaneRecoveryIngressPreparation {
+    if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {
+        return DecidedLaneRecoveryIngressPreparation::KuraReplicaAdvert;
+    }
     if inbound.message().is_lane_local() {
         return DecidedLaneRecoveryIngressPreparation::LaneLocal;
     }
@@ -3104,6 +3346,104 @@ fn prepare_decided_lane_recovery_ingress(
             request: authenticated,
         },
     )
+}
+
+#[derive(Debug)]
+enum KuraReplicaAdvertAdmissionError {
+    InvalidAdvert(String),
+    Fatal(crate::kura::Error),
+}
+
+fn classify_kura_replica_advert_admission_error(
+    error: crate::kura::Error,
+) -> KuraReplicaAdvertAdmissionError {
+    match error {
+        crate::kura::Error::InvalidKuraReplicaAdvert(reason) => {
+            KuraReplicaAdvertAdmissionError::InvalidAdvert(reason)
+        }
+        error => KuraReplicaAdvertAdmissionError::Fatal(error),
+    }
+}
+
+/// Consume one fixed-small authenticated Kura replica advert without exposing
+/// it to either consensus reducer.
+///
+/// Fair admission already checks the signature and direct transport binding.
+/// This terminal seam repeats the complete local ownership proof so mutation
+/// of the queued carrier fails closed. Kura then revalidates the exact durable
+/// body, finality artifact, CommitQC signer, and deterministic keeper set; a
+/// remotely invalid claim is simply retired.
+fn admit_kura_replica_advert_ingress(
+    receiver: &FairV2Ingress,
+    kura: &Kura,
+    mut inbound: InboundBlockMessage,
+) -> Result<(), V2RunnerError> {
+    let advertised_keeper = match inbound.message() {
+        BlockMessage::KuraReplicaAdvert(advert) => advert.keeper.clone(),
+        _ => {
+            return Err(V2RunnerError::Service(
+                "Kura replica advert terminal received another message class".to_owned(),
+            ));
+        }
+    };
+    let authenticated_via = inbound.via().cloned();
+    let mut ingress_ownership = inbound.take_ingress_ownership().ok_or_else(|| {
+        V2RunnerError::Service(
+            "Kura replica advert lost its fair-ingress ownership carrier".to_owned(),
+        )
+    })?;
+    if !ingress_ownership.validate_exact()
+        || !ingress_ownership.matches_message(inbound.message())
+        || !ingress_ownership.matches_semantic_origin(inbound.sender())
+        || !ingress_ownership.matches_reply_routes(inbound.reply_routes())
+    {
+        return Err(V2RunnerError::Service(
+            "Kura replica advert carried altered fair-ingress ownership".to_owned(),
+        ));
+    }
+    receiver
+        .bind_leader_wire_runtime_ownership(&mut ingress_ownership)
+        .map_err(V2RunnerError::Service)?;
+    let (message, sender, reply_routes) = inbound.into_message_sender_and_reply_routes();
+    let BlockMessage::KuraReplicaAdvert(advert) = message else {
+        return Err(V2RunnerError::Service(
+            "Kura replica advert changed message class after ownership validation".to_owned(),
+        ));
+    };
+    if sender.as_ref() != Some(&advertised_keeper)
+        || authenticated_via.as_ref() != Some(&advertised_keeper)
+        || advert.keeper != advertised_keeper
+        || !ingress_ownership.matches_reply_routes(reply_routes.as_ref())
+    {
+        return Err(V2RunnerError::Service(
+            "Kura replica advert changed its direct authenticated keeper route".to_owned(),
+        ));
+    }
+    match kura.admit_kura_replica_advert(&advert) {
+        Ok(()) => {
+            iroha_logger::debug!(
+                height = advert.height,
+                keeper = %advert.keeper,
+                "admitted authenticated Kura replica advert"
+            );
+        }
+        Err(error) => match classify_kura_replica_advert_admission_error(error) {
+            KuraReplicaAdvertAdmissionError::InvalidAdvert(reason) => {
+                iroha_logger::debug!(
+                    %reason,
+                    height = advert.height,
+                    keeper = %advert.keeper,
+                    "retired invalid Kura replica advert"
+                );
+            }
+            KuraReplicaAdvertAdmissionError::Fatal(error) => {
+                return Err(V2RunnerError::Service(format!(
+                    "Kura replica advert admission encountered local durable-state failure: {error}"
+                )));
+            }
+        },
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3349,6 +3689,10 @@ fn drain_v2_ingress(
         else {
             break;
         };
+        if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {
+            admit_kura_replica_advert_ingress(receiver, kura, inbound)?;
+            continue;
+        }
         if inbound.message().is_lane_local() {
             let _ = lane_work
                 .accept_lane_message_with_ingress_ownership(inbound, executor.current_tag().view());
@@ -3753,6 +4097,7 @@ fn drain_v2_ingress(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DecidedLaneRecoveryDrainCommitOutcome {
     LaneLocal,
+    KuraReplicaAdvert,
     CurrentServe,
     HistoricalServe,
     LeaderWireVolatile,
@@ -3762,6 +4107,8 @@ trait DecidedLaneRecoveryDrainCommitter {
     type Admission;
 
     fn commit_lane_local(&mut self) -> Result<(), V2RunnerError>;
+
+    fn commit_kura_replica_advert(&mut self) -> Result<(), V2RunnerError>;
 
     fn commit_current_serve(
         &mut self,
@@ -3783,6 +4130,10 @@ fn commit_decided_lane_recovery_drain<C: DecidedLaneRecoveryDrainCommitter>(
         DecidedLaneRecoveryDrainAuthorization::LaneLocal => {
             committer.commit_lane_local()?;
             Ok(DecidedLaneRecoveryDrainCommitOutcome::LaneLocal)
+        }
+        DecidedLaneRecoveryDrainAuthorization::KuraReplicaAdvert => {
+            committer.commit_kura_replica_advert()?;
+            Ok(DecidedLaneRecoveryDrainCommitOutcome::KuraReplicaAdvert)
         }
         DecidedLaneRecoveryDrainAuthorization::CurrentServe(current) => {
             committer.commit_current_serve(current)?;
@@ -3844,6 +4195,11 @@ impl DecidedLaneRecoveryDrainCommitter for ProductionDecidedLaneRecoveryDrainCom
             .accept_lane_message_with_ingress_ownership(inbound, self.active_view);
         let _ = self.lane_work.service_next_historical_recovery()?;
         Ok(())
+    }
+
+    fn commit_kura_replica_advert(&mut self) -> Result<(), V2RunnerError> {
+        let inbound = self.take_inbound()?;
+        admit_kura_replica_advert_ingress(self.receiver, self.kura, inbound)
     }
 
     fn commit_current_serve(
@@ -4509,6 +4865,35 @@ fn local_validator_index(
     }
 }
 
+/// Claim the immutable process capability independently of this height's roster duty.
+///
+/// Configured validators must own one generation even while absent from the recovered global
+/// roster: a later height may rotate them back in, and a retained frozen lane descriptor may
+/// still name their key. Explicit observers never mutate this Kura lifecycle namespace.
+fn claim_runner_lifecycle_process_generation(
+    role: NodeRole,
+    kura: &Kura,
+    context: &wire::HeightContext,
+    local_peer: &PeerId,
+) -> Result<Option<AutonomousLifecycleProcessGenerationClaim>, V2RunnerError> {
+    match role {
+        NodeRole::Observer => Ok(None),
+        NodeRole::Validator => {
+            let lifecycle_chain_id = context.chain_id.clone().into_inner();
+            kura.claim_autonomous_lifecycle_process_generation(
+                Hash::new(lifecycle_chain_id.as_bytes()),
+                local_peer,
+            )
+            .map(Some)
+            .map_err(|error| {
+                V2RunnerError::Service(format!(
+                    "failed to claim the durable autonomous lifecycle process generation: {error}"
+                ))
+            })
+        }
+    }
+}
+
 fn round_for_tag(
     context: &wire::HeightContext,
     tag: EventTag,
@@ -4664,21 +5049,6 @@ fn candidate_attachments(
             "certified merge carrier probe differs from the frozen round".to_owned(),
         ));
     }
-    let expected_merge_epoch = state
-        .merge_ledger()
-        .latest()
-        .map_or(1, |latest| latest.epoch_id.saturating_add(1));
-    let certified_merge_entry = state
-        .select_pending_certified_merge_entry_for_round(round_header, expected_merge_epoch)
-        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
-        .map(|(_, entry, _)| entry)
-        .map(|entry| {
-            super::v2_lane_work::authenticate_merge_entry_for_height_context(context, &entry)
-                .map(|()| entry)
-                .map_err(V2RunnerError::Candidate)
-        })
-        .transpose()?;
-
     let effects = if context.mode == wire::ConsensusMode::Npos {
         super::penalties::PenaltyApplier::from_parts(
             state,
@@ -4692,6 +5062,36 @@ fn candidate_attachments(
     } else {
         Default::default()
     };
+    let npos_consensus_effects = (!effects.is_empty()).then_some(effects);
+    super::v2_npos::validate_candidate_records(context, state, npos_consensus_effects.as_ref())
+        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
+    let merge_selection = certified_merge_selection_for_npos(npos_consensus_effects.is_some());
+    if merge_selection == PendingCertifiedMergeSelection::ControlOnly {
+        iroha_logger::debug!(
+            height = context.height,
+            view,
+            "prioritizing deterministic NPoS effects before a certified execution carrier"
+        );
+    }
+    let expected_merge_epoch = state
+        .merge_ledger()
+        .latest()
+        .map_or(1, |latest| latest.epoch_id.saturating_add(1));
+    let selected_merge_entry = state
+        .select_pending_certified_merge_entry_for_round(
+            round_header,
+            expected_merge_epoch,
+            merge_selection,
+        )
+        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
+    let certified_merge_entry = selected_merge_entry
+        .map(|(_, entry, _)| entry)
+        .map(|entry| {
+            super::v2_lane_work::authenticate_merge_entry_for_height_context(context, &entry)
+                .map(|()| entry)
+                .map_err(V2RunnerError::Candidate)
+        })
+        .transpose()?;
     let parent_creation_time = match parent {
         CandidateParent::Block(parent) => parent.header().creation_time(),
         CandidateParent::Snapshot(anchor) => {
@@ -4701,7 +5101,7 @@ fn candidate_attachments(
     Ok(CandidateAttachments {
         time_trigger_clock_progress_required: state
             .time_trigger_clock_progress_required_fast(parent_creation_time),
-        npos_consensus_effects: (!effects.is_empty()).then_some(effects),
+        npos_consensus_effects,
         certified_merge_carrier_header: certified_merge_entry
             .as_ref()
             .and_then(|entry| entry.execution_batch.as_ref())
@@ -4709,6 +5109,16 @@ fn candidate_attachments(
         certified_merge_entry,
         ..CandidateAttachments::default()
     })
+}
+
+const fn certified_merge_selection_for_npos(
+    has_npos_effects: bool,
+) -> PendingCertifiedMergeSelection {
+    if has_npos_effects {
+        PendingCertifiedMergeSelection::ControlOnly
+    } else {
+        PendingCertifiedMergeSelection::Any
+    }
 }
 
 fn adapter_fingerprints(local_peer: &PeerId, config: &SumeragiV2Config) -> AdapterFingerprints {
@@ -4777,92 +5187,7 @@ fn retry_exact_output_and_apply_sidecar_admissions(
     Ok(pending)
 }
 
-fn rollover_finalized_height_outputs(
-    mut lane_work: V2LaneWorkAdapter,
-    services: &ProductionV2Services,
-    receipt: &KuraV2CommitReceipt,
-    artifact: &wire::finality::V2FinalityArtifact,
-    successor: &wire::HeightContext,
-    control_queue_capacity: usize,
-) -> Result<RetainedMergeSidecars, V2RunnerError> {
-    // Finality makes every current-height global/lane output either
-    // Kura-reconstructible or explicitly superseded. Move those owners across
-    // one local durable boundary before the successor opens the merge journal;
-    // no predecessor thread survives this function.
-    let _ = retry_exact_output_and_apply_sidecar_admissions(
-        &mut lane_work,
-        services,
-        control_queue_capacity,
-    )?;
-    let _ = lane_work.recover_decided_canonical_lane_body(receipt, artifact)?;
-    lane_work.persist_anchored_sessions()?;
-    lane_work.prepare_canonical_lane_rollover(artifact)?;
-    let durable_lane_authority = lane_work
-        .durable_lane_rollover_authority(artifact)?
-        .ok_or_else(|| {
-            V2RunnerError::Service(
-                "finalized lane output has not crossed its local durable reconstruction boundary"
-                    .to_owned(),
-            )
-        })?;
-    lane_work.prune_finalized_merge_sidecars()?;
-    lane_work.retain_successor_owned_rollover_effects(artifact, &durable_lane_authority)?;
-
-    loop {
-        apply_certified_merge_sidecar_closed_prefixes(&mut lane_work, services)?;
-        apply_certified_merge_sidecar_chunk_admissions(
-            &mut lane_work,
-            services,
-            control_queue_capacity,
-        )?;
-        let retired = services
-            .handoff_applied_height_output_to_durable_reconstruction(
-                receipt,
-                artifact,
-                &durable_lane_authority,
-            )
-            .map_err(V2RunnerError::Service)?;
-        apply_certified_merge_sidecar_chunk_admissions(
-            &mut lane_work,
-            services,
-            control_queue_capacity,
-        )?;
-        if !services
-            .has_pending_exact_output()
-            .map_err(V2RunnerError::Service)?
-        {
-            break;
-        }
-        if retired == 0 {
-            return Err(V2RunnerError::Service(
-                "finalized exact output has no durable or move-only successor source".to_owned(),
-            ));
-        }
-    }
-
-    let _ = services
-        .handoff_applied_height_output_to_durable_reconstruction(
-            receipt,
-            artifact,
-            &durable_lane_authority,
-        )
-        .map_err(V2RunnerError::Service)?;
-    if lane_work.has_pending_committed_output_handoff()
-        || services
-            .has_pending_exact_output()
-            .map_err(V2RunnerError::Service)?
-    {
-        return Err(V2RunnerError::Service(
-            "finalized output remained owned after durable handoff".to_owned(),
-        ));
-    }
-    let exact_output_handoff = services
-        .seal_applied_height_output_handoff(receipt, artifact, &durable_lane_authority)
-        .map_err(V2RunnerError::Service)?;
-    lane_work
-        .into_retained_merge_sidecars(exact_output_handoff, artifact, successor)
-        .map_err(V2RunnerError::from)
-}
+include!("v2_runner/finalized_output_rollover.rs");
 
 fn apply_certified_merge_sidecar_closed_prefixes(
     lane_work: &mut V2LaneWorkAdapter,
@@ -4904,6 +5229,8 @@ fn require_peeked_lane_work_effect(
 ) -> Result<V2LaneWorkEffect, V2RunnerError> {
     drained.ok_or(V2RunnerError::RestartRequired)
 }
+
+include!("v2_runner/canonical_recovery_ingress.rs");
 
 fn dispatch_lane_work_effects(
     lane_work: &mut V2LaneWorkAdapter,
@@ -4958,97 +5285,7 @@ fn dispatch_lane_work_effects(
     Ok(())
 }
 
-/// Remove retired source occurrences from semantic work already owned by the
-/// lane adapter. A malformed effect which never carried its required route is
-/// left intact so normal strict validation rejects it.
-fn retain_active_owned_reply_routes(effect: &mut V2LaneWorkEffect) -> bool {
-    retain_active_owned_reply_routes_with_snapshot_hook(effect, || {})
-}
-
-#[cfg(test)]
-fn retain_active_owned_reply_routes_after_snapshot<AfterSnapshot>(
-    effect: &mut V2LaneWorkEffect,
-    after_snapshot: AfterSnapshot,
-) -> bool
-where
-    AfterSnapshot: FnOnce(),
-{
-    retain_active_owned_reply_routes_with_snapshot_hook(effect, after_snapshot)
-}
-
-fn retain_active_owned_reply_routes_with_snapshot_hook<AfterSnapshot>(
-    effect: &mut V2LaneWorkEffect,
-    after_snapshot: AfterSnapshot,
-) -> bool
-where
-    AfterSnapshot: FnOnce(),
-{
-    if let V2LaneWorkEffect::PostDurableLaneCertificate {
-        reply_routes,
-        ingress_ownership,
-        ..
-    } = effect
-    {
-        let Some(routes) = reply_routes.as_mut() else {
-            return true;
-        };
-        let Some(ownership) = ingress_ownership.as_mut() else {
-            return true;
-        };
-        if !ownership.validate_exact() || !ownership.matches_reply_routes(Some(routes)) {
-            return true;
-        }
-        let (retained_routes, receipt) = routes.retain_active_with_receipt();
-        after_snapshot();
-        let Some(projected_routes) = ownership.project_retained_reply_routes(receipt) else {
-            // Preserve malformed pre-existing ownership for strict dispatch;
-            // ordinary retirement cannot reach this branch because the exact
-            // route snapshot is projected without another liveness read.
-            return true;
-        };
-        *routes = projected_routes;
-        return retained_routes != 0;
-    }
-    let reply_routes = match effect {
-        V2LaneWorkEffect::PostNativeAmx {
-            reply_routes,
-            message: NativeAmxMessage::PrepareVote(_) | NativeAmxMessage::CommitVote(_),
-            ..
-        } => reply_routes,
-        V2LaneWorkEffect::PostCertifiedMergeSidecar {
-            reply_routes,
-            message,
-            ..
-        } if matches!(
-            message.as_ref(),
-            CertifiedMergeSidecarMessage::CloseAck(_)
-                | CertifiedMergeSidecarMessage::GenerationHint(_)
-                | CertifiedMergeSidecarMessage::Chunk(_)
-        ) =>
-        {
-            reply_routes
-        }
-        V2LaneWorkEffect::PostLaneBlock { .. }
-        | V2LaneWorkEffect::PostDurableLaneCertificate { .. }
-        | V2LaneWorkEffect::PostNativeAmx { .. }
-        | V2LaneWorkEffect::PostLaneDrainVote { .. }
-        | V2LaneWorkEffect::BroadcastMerge(_)
-        | V2LaneWorkEffect::PostCertifiedMergeSidecar { .. } => return true,
-    };
-    let Some(routes) = reply_routes.as_mut() else {
-        return true;
-    };
-    let before = routes.clone();
-    let (retained, receipt) = routes.retain_active_with_receipt();
-    let Some(projected) = receipt.into_output(&before) else {
-        // Preserve the operation's mutated value for normal strict dispatch;
-        // this branch is unreachable for a module-minted receipt and exists
-        // only to fail closed if its exact-history contract is broken.
-        return true;
-    };
-    *routes = projected;
-    retained != 0
-}
+include!("v2_runner/reply_route_retention.rs");
 
 #[derive(Debug)]
 enum LaneWorkEffectDispatch {
@@ -5150,66 +5387,7 @@ fn dispatch_lane_work_effect(
     Ok(LaneWorkEffectDispatch::Complete)
 }
 
-fn drive_merge_sidecar_recovery(
-    executor: &mut V2EffectExecutor,
-    services: &mut ProductionV2Services,
-    lane_work: &mut V2LaneWorkAdapter,
-) -> Result<(), V2RunnerError> {
-    lane_work.retain_deferred_merge_sidecars(&executor.deferred_merge_sidecar_blocks())?;
-    while let Some(deferred) = services.take_merge_sidecar_deferral() {
-        let entry_hash = deferred.reference().entry_hash;
-        if !executor.retains_deferred_merge_sidecar(
-            deferred.work_id(),
-            deferred.round(),
-            deferred.subject(),
-            entry_hash,
-        ) {
-            continue;
-        }
-        let disposition = if executor.deferred_merge_sidecar_is_decided(deferred.work_id()) {
-            lane_work.defer_missing_decided_merge_sidecar(
-                deferred.round(),
-                deferred.subject(),
-                deferred.reference().clone(),
-            )?
-        } else {
-            lane_work.defer_missing_merge_sidecar(
-                deferred.round(),
-                deferred.subject(),
-                deferred.reference().clone(),
-            )?
-        };
-        match disposition {
-            MergeSidecarDeferralDisposition::Fetching
-            | MergeSidecarDeferralDisposition::Available => {}
-            MergeSidecarDeferralDisposition::RetryLater => {
-                services
-                    .requeue_merge_sidecar_deferral(deferred)
-                    .map_err(V2RunnerError::Service)?;
-                break;
-            }
-            MergeSidecarDeferralDisposition::Rejected(reason) => {
-                let _ = executor.reject_deferred_merge_sidecar_work(
-                    deferred.work_id(),
-                    reason,
-                    services,
-                )?;
-            }
-        }
-    }
-    while let Some(entry_hash) = lane_work.take_completed_merge_sidecar() {
-        let _ = executor.retry_deferred_merge_sidecar(entry_hash, services)?;
-    }
-    while let Some(rejected) = lane_work.take_rejected_merge_sidecar() {
-        let _ = executor.reject_deferred_merge_sidecar(
-            rejected.entry_hash(),
-            rejected.reason(),
-            services,
-        )?;
-    }
-    lane_work.retain_deferred_merge_sidecars(&executor.deferred_merge_sidecar_blocks())?;
-    Ok(())
-}
+include!("v2_runner/merge_sidecar_recovery.rs");
 
 fn drain_lane_relay_ingress(
     lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
@@ -5407,4196 +5585,5 @@ pub(super) enum V2RunnerError {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::{
-        cell::{Cell, RefCell},
-        collections::VecDeque,
-        sync::{Mutex, atomic::AtomicUsize},
-    };
-
-    use iroha_config::parameters::actual::{NodeRole, SumeragiV2KeyPolicy, SumeragiV2Limits};
-    use iroha_crypto::{Algorithm, KeyPair, Signature};
-    use iroha_data_model::{
-        ChainId,
-        account::AccountId,
-        block::decode_framed_signed_block,
-        isi::Log,
-        peer::PeerId,
-        transaction::{TransactionBuilder, signed::TransactionResultInner},
-        trigger::DataTriggerSequence,
-    };
-    use iroha_logger::Level;
-    use iroha_p2p::network::{
-        NetworkActorAdmissionError, NetworkReplyFlushAckTestFixture, NetworkReplyRouteTestFixture,
-        NetworkReplyRoutes,
-    };
-    use tempfile::TempDir;
-
-    use super::super::FairV2IngressPushError;
-    use super::*;
-    use crate::{
-        NetworkMessage,
-        merge_sidecar::{
-            CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkV1,
-            CertifiedMergeSidecarCloseV1, CertifiedMergeSidecarMessage,
-            CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarServiceGenerationV1,
-            CertifiedMergeSidecarStreamEpochV1,
-        },
-        sumeragi::LaneRelayMessage,
-    };
-
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn complete_certified_serve_episode_cannot_veto_pacemaker() {
-        let calls = Cell::new(0_u8);
-        for older_runtime_episode_claimed in [true, false] {
-            service_certified_serve_barrier_pacemaker_turn(
-                false,
-                older_runtime_episode_claimed,
-                || {
-                    calls.set(calls.get().saturating_add(1));
-                    Ok::<(), ()>(())
-                },
-            )
-            .expect("live certified Serve barrier services one pacemaker turn");
-        }
-        assert_eq!(
-            calls.get(),
-            2,
-            "a Complete predecessor episode must service the pacemaker exactly like a newly claimed episode"
-        );
-
-        service_certified_serve_barrier_pacemaker_turn(false, false, || {
-            calls.set(calls.get().saturating_add(1));
-            Err::<(), _>("typed pacemaker failure")
-        })
-        .expect_err("live runner propagates a typed pacemaker failure");
-        assert_eq!(calls.get(), 3);
-
-        service_certified_serve_barrier_pacemaker_turn(true, false, || {
-            calls.set(calls.get().saturating_add(1));
-            Ok::<(), ()>(())
-        })
-        .expect("interrupted-tip recovery does not arm a fresh pacemaker");
-        assert_eq!(calls.get(), 3);
-
-        #[cfg(feature = "bls")]
-        {
-            let mut recovery =
-                super::super::v2_worker::tests::SelectedServeTimeoutRecoveryFixture::new();
-            for _ in 0..16 {
-                let older_runtime_episode_claimed = recovery
-                    .service_exact_serve_runtime_prefix()
-                    .expect("service the exact selected-Serve runtime prefix");
-                service_certified_serve_barrier_liveness_turn(
-                    false,
-                    older_runtime_episode_claimed,
-                    |action| match action {
-                        CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode => {
-                            recovery.service_timeout_vote_episode()
-                        }
-                        CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix => {
-                            recovery.service_timeout_recovery_prefix()
-                        }
-                        CertifiedServeBarrierLivenessAction::Pacemaker => {
-                            recovery.service_pacemaker()
-                        }
-                    },
-                )
-                .expect("the selected-Serve suffix retains typed timeout recovery");
-                if recovery.entered_view_one() {
-                    break;
-                }
-            }
-            recovery.assert_complete();
-        }
-    }
-
-    #[test]
-    fn dormant_live_serve_debt_latches_restart_instead_of_waiting_for_requester() {
-        let (mut services, _) = super::super::v2_worker::tests::fixture();
-        assert!(!services.exact_output_restart_required_for_test());
-        let reason = services.fail_closed_dormant_certified_serve(41);
-        assert!(reason.contains("41"));
-        assert!(reason.contains("restart is required for local discharge"));
-        assert!(
-            services.exact_output_restart_required_for_test(),
-            "a carrierless live Serve lifecycle must restart into local startup discharge"
-        );
-    }
-
-    #[test]
-    fn committed_lane_status_publisher_retries_revision_drift_without_publication() {
-        let _guard = super::super::status::rbc_status_test_guard();
-        super::super::status::clear_v2_status();
-        let revision = Cell::new((1_u64, 1_u64, 1_u64));
-        let mut publisher = CommittedLaneStatusPublisher::default();
-
-        assert!(publisher.publish_if_changed_with(|| revision.get(), Vec::new));
-        assert_eq!(publisher.published_revision, Some((1, 1, 1)));
-
-        revision.set((2, 1, 1));
-        let projection_ran = Cell::new(false);
-        assert!(
-            !publisher.publish_if_changed_with(
-                || revision.get(),
-                || {
-                    projection_ran.set(true);
-                    revision.set((3, 1, 1));
-                    Vec::new()
-                },
-            ),
-            "a projection spanning two revisions must not replace the global status root"
-        );
-        assert!(projection_ran.get());
-        assert_eq!(
-            publisher.published_revision,
-            Some((1, 1, 1)),
-            "revision drift must retain the prior acknowledgement for retry"
-        );
-        assert!(
-            super::super::status::committed_lane_blocks_snapshot().is_empty(),
-            "revision drift must retain the prior global status root"
-        );
-
-        assert!(
-            publisher.publish_if_changed_with(|| revision.get(), Vec::new),
-            "the next stable runner edge must retry the newer revision"
-        );
-        assert_eq!(publisher.published_revision, Some((3, 1, 1)));
-        super::super::status::clear_v2_status();
-    }
-
-    #[test]
-    fn pending_tip_recovery_gate_precedes_lane_work_construction() {
-        let constructed = Cell::new(false);
-        let error = construct_after_pending_tip_application_recovery(true, false, || {
-            constructed.set(true);
-            Ok(())
-        })
-        .expect_err("incomplete pending-tip recovery must block construction");
-        assert!(matches!(error, V2RunnerError::PendingTipRecoveryIncomplete));
-        assert!(
-            !constructed.get(),
-            "the lane-work constructor must not run before strict tip repair completes"
-        );
-
-        let value = construct_after_pending_tip_application_recovery(true, true, || {
-            constructed.set(true);
-            Ok(7_u8)
-        })
-        .expect("completed pending-tip recovery may construct lane work");
-        assert_eq!(value, 7);
-        assert!(constructed.get());
-    }
-
-    #[test]
-    fn pending_tip_recovery_deadline_is_bounded_and_fail_closed() {
-        let _status_guard = super::super::status::rbc_status_test_guard();
-        super::super::status::clear_v2_status();
-        let started_at = Instant::now();
-        let round_timeout = Duration::from_secs(10);
-        let deadline = PendingTipRecoveryDeadline::new(started_at, round_timeout)
-            .expect("derive recovery deadline");
-        assert_eq!(deadline.timeout, Duration::from_secs(30));
-        assert!(!deadline.expired(started_at + Duration::from_secs(30) - Duration::from_nanos(1)));
-        assert!(deadline.expired(started_at + Duration::from_secs(30)));
-        assert_eq!(
-            deadline.remaining(started_at + Duration::from_secs(29)),
-            Duration::from_secs(1)
-        );
-
-        let output_guard = ConsensusOutputGuard::isolated();
-        let error = pending_tip_recovery_deadline_error(
-            output_guard.as_ref(),
-            deadline.timeout,
-            17,
-            Some(PendingKuraApplyRecoveryStage::ApplicationDispatched),
-        );
-        assert!(output_guard.restart_required());
-        assert!(matches!(
-            error,
-            V2RunnerError::PendingTipRecoveryDeadlineExceeded {
-                timeout,
-                attempts: 17,
-                stage: Some(PendingKuraApplyRecoveryStage::ApplicationDispatched),
-            } if timeout == Duration::from_secs(30)
-        ));
-        super::super::status::clear_v2_status();
-    }
-
-    #[test]
-    fn bounded_sidecar_admission_turn_applies_only_its_budget() {
-        let mut queued = VecDeque::from([1_u8, 2, 3]);
-        let mut applied = Vec::new();
-        let count = apply_bounded_sidecar_admissions(
-            1,
-            || Ok::<_, ()>(queued.pop_front()),
-            |item| {
-                applied.push(item);
-                Ok::<_, ()>(())
-            },
-        )
-        .expect("bounded admission turn");
-        assert_eq!(count, 1);
-        assert_eq!(applied, vec![1]);
-        assert_eq!(queued, VecDeque::from([2, 3]));
-
-        let result = apply_bounded_sidecar_admissions(
-            2,
-            || Ok::<_, &'static str>(queued.pop_front()),
-            |_item| Err("fail-stop acknowledgement"),
-        );
-        assert_eq!(result, Err("fail-stop acknowledgement"));
-        assert_eq!(queued, VecDeque::from([3]));
-    }
-
-    #[test]
-    fn quiet_retransmission_tick_services_one_retained_historical_session() {
-        let mut lane_work = super::super::v2_lane_work::tests::quiet_historical_recovery_fixture();
-        assert!(lane_work.has_pending_historical_recovery());
-
-        let outcome = service_historical_recovery_tick(&mut lane_work)
-            .expect("quiet retransmission tick advances retained history");
-        let HistoricalRecoveryServiceOutcome::Waiting(wait) = outcome else {
-            panic!("missing canonical body must remain a typed quiet-network retry: {outcome:?}");
-        };
-        assert_eq!(
-            wait.reason(),
-            super::super::v2_lane_work::HistoricalRecoveryWaitReason::CanonicalBlockPending
-        );
-        assert!(wait.first_observation());
-        assert!(
-            lane_work.has_pending_historical_recovery(),
-            "one bounded wait turn must retain the exact historical owner"
-        );
-    }
-
-    #[test]
-    fn empty_drain_after_peek_is_restart_required_without_panicking() {
-        assert!(matches!(
-            require_peeked_lane_work_effect(None),
-            Err(V2RunnerError::RestartRequired)
-        ));
-    }
-
-    fn context() -> (wire::HeightContext, Vec<KeyPair>) {
-        let mut keys = (1_u8..=4)
-            .map(|seed| {
-                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-                    .expect("deterministic key")
-            })
-            .collect::<Vec<_>>();
-        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
-        let roster = keys
-            .iter()
-            .map(|key| wire::ValidatorPower {
-                validator: PeerId::new(key.public_key().clone()),
-                power: 1,
-            })
-            .collect::<Vec<_>>();
-        (
-            wire::HeightContext {
-                chain_id: ChainId::from("v2-runner-test"),
-                protocol_version: wire::PROTOCOL_VERSION,
-                height: 1,
-                epoch: 0,
-                epoch_end_height: u64::MAX,
-                next_epoch_snapshot: None,
-                mode: wire::ConsensusMode::Permissioned,
-                parent_commit_qc: None,
-                snapshot_bootstrap: None,
-                quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
-                roster,
-                nexus_amx_context_hash: Hash::new(b"runner-test-nexus-amx"),
-                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
-                da_layout: wire::DataAvailabilityLayout {
-                    encoding: wire::PayloadEncoding::ReedSolomon16,
-                    chunk_size_bytes: 1024,
-                    data_shards: 1,
-                    parity_shards: 1,
-                    max_payload_size_bytes: 4096,
-                    max_chunk_count: 8,
-                },
-                leader_seed: [0x42; 32],
-            },
-            keys,
-        )
-    }
-
-    fn decided_recovery_certified_request(
-        context: &wire::HeightContext,
-        requester_key: &KeyPair,
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-    ) -> wire::CertifiedBodyRequest {
-        let mut request = wire::CertifiedBodyRequest {
-            round,
-            subject,
-            certificate: wire::QuorumCertificate {
-                round,
-                proposal_round: round,
-                phase: wire::GlobalPhase::Prepare,
-                subject,
-                execution_commitment: wire::ExecutionCommitment::without_topups(
-                    Hash::new(b"runner recovery parent state"),
-                    Hash::new(b"runner recovery post state"),
-                    Hash::new(b"runner recovery ordinary writes"),
-                    Hash::new(b"runner recovery executed block"),
-                ),
-                signers: (0..context.roster.len())
-                    .map(|index| u32::try_from(index).expect("small runner roster index"))
-                    .collect(),
-                aggregate_signature: vec![0xA5; 48],
-            },
-            requester: PeerId::new(requester_key.public_key().clone()),
-            signature: Vec::new(),
-        };
-        request.signature =
-            Signature::new(requester_key.private_key(), &request.signature_preimage())
-                .payload()
-                .to_vec();
-        request
-    }
-
-    fn admitted_decided_recovery_request(
-        context: &wire::HeightContext,
-        request: &wire::CertifiedBodyRequest,
-    ) -> InboundBlockMessage {
-        let requester = request.requester.clone();
-        super::super::fair_v2_ingress_admit_with_roster_for_test(
-            InboundBlockMessage::from_transport(
-                BlockMessage::V2(wire::ConsensusMessageV2::new(
-                    wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request.clone()),
-                )),
-                requester.clone(),
-                requester,
-            ),
-            context
-                .roster
-                .iter()
-                .map(|entry| entry.validator.clone())
-                .collect(),
-        )
-    }
-
-    enum RecordedPrepareOutcome {
-        Admitted(u8),
-        Backpressure,
-        Rejected(&'static str),
-        Service(&'static str),
-    }
-
-    struct RecordingDecidedLaneAuthorizer {
-        calls: Vec<&'static str>,
-        stage_error: Option<&'static str>,
-        prepare_outcome: Option<RecordedPrepareOutcome>,
-    }
-
-    impl RecordingDecidedLaneAuthorizer {
-        fn new(prepare_outcome: RecordedPrepareOutcome) -> Self {
-            Self {
-                calls: Vec::new(),
-                stage_error: None,
-                prepare_outcome: Some(prepare_outcome),
-            }
-        }
-    }
-
-    impl DecidedLaneRecoveryDrainAuthorizer for RecordingDecidedLaneAuthorizer {
-        type Admission = u8;
-
-        fn stage_negative(
-            &mut self,
-            _request_hash: HashOf<wire::CertifiedBodyRequest>,
-            _outcome: CertifiedServeNegativeOutcome,
-        ) -> Result<(), String> {
-            self.calls.push("stage-negative");
-            self.stage_error
-                .map_or(Ok(()), |reason| Err(reason.to_owned()))
-        }
-
-        fn prepare_exact(
-            &mut self,
-            _authenticated_via: &PeerId,
-            _request: AuthenticatedCertifiedBodyRequest,
-        ) -> Result<Self::Admission, CertifiedServePrepareError> {
-            self.calls.push("prepare-exact");
-            match self
-                .prepare_outcome
-                .take()
-                .expect("recording authorizer is called at most once")
-            {
-                RecordedPrepareOutcome::Admitted(admission) => Ok(admission),
-                RecordedPrepareOutcome::Backpressure => {
-                    Err(CertifiedServePrepareError::Backpressure)
-                }
-                RecordedPrepareOutcome::Rejected(reason) => {
-                    Err(CertifiedServePrepareError::Rejected(reason.to_owned()))
-                }
-                RecordedPrepareOutcome::Service(reason) => {
-                    Err(CertifiedServePrepareError::Service(reason.to_owned()))
-                }
-            }
-        }
-    }
-
-    struct RecordingDecidedLaneCommitter {
-        calls: Vec<&'static str>,
-        fail_on: Option<&'static str>,
-    }
-
-    impl RecordingDecidedLaneCommitter {
-        fn new(fail_on: Option<&'static str>) -> Self {
-            Self {
-                calls: Vec::new(),
-                fail_on,
-            }
-        }
-
-        fn record(&mut self, operation: &'static str) -> Result<(), V2RunnerError> {
-            self.calls.push(operation);
-            if self.fail_on == Some(operation) {
-                Err(V2RunnerError::Service(format!("{operation} failed")))
-            } else {
-                Ok(())
-            }
-        }
-    }
-
-    impl DecidedLaneRecoveryDrainCommitter for RecordingDecidedLaneCommitter {
-        type Admission = u8;
-
-        fn commit_lane_local(&mut self) -> Result<(), V2RunnerError> {
-            self.record("lane-local")
-        }
-
-        fn commit_current_serve(
-            &mut self,
-            current: DecidedLaneRecoveryCurrentDrain<Self::Admission>,
-        ) -> Result<(), V2RunnerError> {
-            match current {
-                DecidedLaneRecoveryCurrentDrain::Admitted(7) => self.record("serve-exact-decided"),
-                DecidedLaneRecoveryCurrentDrain::Rejected(_) => {
-                    self.record("retire-staged-negative")
-                }
-                DecidedLaneRecoveryCurrentDrain::Admitted(other) => Err(V2RunnerError::Service(
-                    format!("unexpected test admission {other}"),
-                )),
-            }
-        }
-
-        fn bind_leader_wire(&mut self) -> Result<(), V2RunnerError> {
-            self.record("bind-leader-wire")
-        }
-
-        fn commit_historical_serve(&mut self) -> Result<(), V2RunnerError> {
-            self.record("serve-history")
-        }
-
-        fn commit_leader_wire_volatile(&mut self) -> Result<(), V2RunnerError> {
-            self.record("retire-volatile")
-        }
-    }
-
-    #[test]
-    fn decided_lane_checked_drain_requires_staged_or_prepared_outcome() {
-        let (context, keys) = context();
-        let round = wire::ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: 3,
-        };
-        let subject = proposal_subject(b"decided drain authorization subject");
-        let decided_subject = proposal_subject(b"decided drain authorization winner");
-        let request = decided_recovery_certified_request(&context, &keys[1], round, subject);
-        let inbound = admitted_decided_recovery_request(&context, &request);
-        let prepare = |winner| {
-            prepare_decided_lane_recovery_ingress(
-                &inbound,
-                context.height,
-                winner,
-                |request, sender| {
-                    super::super::v2_transport::authenticate_certified_body_request(
-                        &context,
-                        request,
-                        sender,
-                        |_, _| Ok::<(), String>(()),
-                    )
-                    .map_err(|error| error.to_string())
-                },
-            )
-        };
-
-        let mut staged = RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Backpressure);
-        let staged_decision =
-            authorize_decided_lane_recovery_drain(prepare(decided_subject), &mut staged);
-        assert!(matches!(
-            staged_decision,
-            DecidedLaneRecoveryDrainDecision::Authorized(
-                DecidedLaneRecoveryDrainAuthorization::CurrentServe(
-                    DecidedLaneRecoveryCurrentDrain::Rejected(_)
-                )
-            )
-        ));
-        staged.calls.push("checked-drain");
-        assert_eq!(staged.calls, ["stage-negative", "checked-drain"]);
-
-        let mut failed_stage =
-            RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Backpressure);
-        failed_stage.stage_error = Some("durable negative write failed");
-        assert!(matches!(
-            authorize_decided_lane_recovery_drain(
-                prepare(decided_subject),
-                &mut failed_stage,
-            ),
-            DecidedLaneRecoveryDrainDecision::FailClosed(reason)
-                if reason == "durable negative write failed"
-        ));
-        assert_eq!(failed_stage.calls, ["stage-negative"]);
-
-        let mut admitted = RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Admitted(7));
-        assert!(matches!(
-            authorize_decided_lane_recovery_drain(prepare(subject), &mut admitted),
-            DecidedLaneRecoveryDrainDecision::Authorized(
-                DecidedLaneRecoveryDrainAuthorization::CurrentServe(
-                    DecidedLaneRecoveryCurrentDrain::Admitted(7)
-                )
-            )
-        ));
-        admitted.calls.push("checked-drain");
-        assert_eq!(admitted.calls, ["prepare-exact", "checked-drain"]);
-
-        let mut typed_rejection = RecordingDecidedLaneAuthorizer::new(
-            RecordedPrepareOutcome::Rejected("typed negative was staged"),
-        );
-        assert!(matches!(
-            authorize_decided_lane_recovery_drain(prepare(subject), &mut typed_rejection),
-            DecidedLaneRecoveryDrainDecision::Authorized(
-                DecidedLaneRecoveryDrainAuthorization::CurrentServe(
-                    DecidedLaneRecoveryCurrentDrain::Rejected(reason)
-                )
-            ) if reason == "typed negative was staged"
-        ));
-        typed_rejection.calls.push("checked-drain");
-        assert_eq!(typed_rejection.calls, ["prepare-exact", "checked-drain"]);
-
-        let mut backpressured =
-            RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Backpressure);
-        assert!(matches!(
-            authorize_decided_lane_recovery_drain(prepare(subject), &mut backpressured),
-            DecidedLaneRecoveryDrainDecision::Retain
-        ));
-        assert_eq!(backpressured.calls, ["prepare-exact"]);
-
-        let mut failed_prepare = RecordingDecidedLaneAuthorizer::new(
-            RecordedPrepareOutcome::Service("Serve preparation failed"),
-        );
-        assert!(matches!(
-            authorize_decided_lane_recovery_drain(prepare(subject), &mut failed_prepare),
-            DecidedLaneRecoveryDrainDecision::FailClosed(reason)
-                if reason == "Serve preparation failed"
-        ));
-        assert_eq!(
-            failed_prepare.calls,
-            ["prepare-exact"],
-            "service failure cannot authorize checked dequeue"
-        );
-    }
-
-    #[test]
-    fn decided_lane_commit_orders_bind_before_history_or_volatile_retirement() {
-        let mut exact = RecordingDecidedLaneCommitter::new(None);
-        assert_eq!(
-            commit_decided_lane_recovery_drain(
-                DecidedLaneRecoveryDrainAuthorization::CurrentServe(
-                    DecidedLaneRecoveryCurrentDrain::Admitted(7),
-                ),
-                &mut exact,
-            )
-            .expect("commit exact decided Serve"),
-            DecidedLaneRecoveryDrainCommitOutcome::CurrentServe
-        );
-        assert_eq!(exact.calls, ["serve-exact-decided"]);
-
-        let mut negative = RecordingDecidedLaneCommitter::new(None);
-        assert_eq!(
-            commit_decided_lane_recovery_drain(
-                DecidedLaneRecoveryDrainAuthorization::CurrentServe(
-                    DecidedLaneRecoveryCurrentDrain::Rejected(
-                        "durable negative staged".to_owned(),
-                    ),
-                ),
-                &mut negative,
-            )
-            .expect("retire staged negative"),
-            DecidedLaneRecoveryDrainCommitOutcome::CurrentServe
-        );
-        assert_eq!(negative.calls, ["retire-staged-negative"]);
-
-        let mut historical = RecordingDecidedLaneCommitter::new(None);
-        assert_eq!(
-            commit_decided_lane_recovery_drain(
-                DecidedLaneRecoveryDrainAuthorization::HistoricalServe,
-                &mut historical,
-            )
-            .expect("route historical Serve"),
-            DecidedLaneRecoveryDrainCommitOutcome::HistoricalServe
-        );
-        assert_eq!(historical.calls, ["bind-leader-wire", "serve-history"]);
-
-        let mut volatile = RecordingDecidedLaneCommitter::new(None);
-        assert_eq!(
-            commit_decided_lane_recovery_drain(
-                DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire,
-                &mut volatile,
-            )
-            .expect("retire non-Serve terminal traffic"),
-            DecidedLaneRecoveryDrainCommitOutcome::LeaderWireVolatile
-        );
-        assert_eq!(volatile.calls, ["bind-leader-wire", "retire-volatile"]);
-
-        let mut failed_bind = RecordingDecidedLaneCommitter::new(Some("bind-leader-wire"));
-        assert!(
-            commit_decided_lane_recovery_drain(
-                DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire,
-                &mut failed_bind,
-            )
-            .is_err()
-        );
-        assert_eq!(
-            failed_bind.calls,
-            ["bind-leader-wire"],
-            "a failed bind cannot publish VolatileTerminal"
-        );
-    }
-
-    #[test]
-    fn drain_decided_lane_recovery_ingress_prepares_exact_and_typed_negative_branches() {
-        let (context, keys) = context();
-        let round = wire::ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: 3,
-        };
-        let subject = proposal_subject(b"decided recovery exact subject");
-        let request = decided_recovery_certified_request(&context, &keys[1], round, subject);
-        let inbound = admitted_decided_recovery_request(&context, &request);
-        let authenticate = |request, sender: &PeerId| {
-            super::super::v2_transport::authenticate_certified_body_request(
-                &context,
-                request,
-                sender,
-                |_, _| Ok::<(), String>(()),
-            )
-            .map_err(|error| error.to_string())
-        };
-        assert!(matches!(
-            prepare_decided_lane_recovery_ingress(
-                &inbound,
-                context.height,
-                subject,
-                authenticate,
-            ),
-            DecidedLaneRecoveryIngressPreparation::CurrentServe(
-                DecidedLaneRecoveryCurrentServe::Authenticated { request: authenticated, .. }
-            ) if authenticated.request_hash() == HashOf::new(&request)
-        ));
-
-        assert!(matches!(
-            prepare_decided_lane_recovery_ingress(
-                &inbound,
-                context.height,
-                subject,
-                |_, _| Err("invalid aggregate signature".to_owned()),
-            ),
-            DecidedLaneRecoveryIngressPreparation::CurrentServe(
-                DecidedLaneRecoveryCurrentServe::Negative {
-                    request_hash,
-                    outcome: CertifiedServeNegativeOutcome::InvalidCertificate,
-                    ..
-                }
-            ) if request_hash == HashOf::new(&request)
-        ));
-
-        let decided_subject = proposal_subject(b"decided recovery winning subject");
-        assert_ne!(decided_subject, subject);
-        assert!(matches!(
-            prepare_decided_lane_recovery_ingress(
-                &inbound,
-                context.height,
-                decided_subject,
-                |request, sender| {
-                    super::super::v2_transport::authenticate_certified_body_request(
-                        &context,
-                        request,
-                        sender,
-                        |_, _| Ok::<(), String>(()),
-                    )
-                    .map_err(|error| error.to_string())
-                },
-            ),
-            DecidedLaneRecoveryIngressPreparation::CurrentServe(
-                DecidedLaneRecoveryCurrentServe::Negative {
-                    request_hash,
-                    outcome:
-                        CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided),
-                    ..
-                }
-            ) if request_hash == HashOf::new(&request) && decided == decided_subject
-        ));
-    }
-
-    #[test]
-    fn drain_decided_lane_recovery_ingress_routes_history_and_volatile_terminal_traffic() {
-        let (context, keys) = context();
-        let round = wire::ConsensusRound {
-            context_id: context.id(),
-            height: context.height.saturating_sub(1),
-            view: 0,
-        };
-        let subject = proposal_subject(b"decided recovery historical subject");
-        let historical = decided_recovery_certified_request(&context, &keys[1], round, subject);
-        let historical_inbound = admitted_decided_recovery_request(&context, &historical);
-        assert!(matches!(
-            prepare_decided_lane_recovery_ingress(
-                &historical_inbound,
-                context.height,
-                subject,
-                |_, _| panic!("historical classification precedes active Serve authentication"),
-            ),
-            DecidedLaneRecoveryIngressPreparation::HistoricalServe
-        ));
-
-        let peer = context.roster[0].validator.clone();
-        let non_serve = wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
-                manifest_hash: HashOf::from_untyped_unchecked(Hash::new(
-                    b"wrong-version recovery chunk",
-                )),
-                index: 0,
-                bytes: vec![0xA5],
-                sender: 0,
-                signature: vec![0x5A],
-            }),
-        );
-        let ordinary_non_serve =
-            InboundBlockMessage::new(BlockMessage::V2(non_serve.clone()), Some(peer.clone()));
-        assert!(matches!(
-            prepare_decided_lane_recovery_ingress(
-                &ordinary_non_serve,
-                context.height,
-                subject,
-                |_, _| panic!("non-Serve traffic never reaches Serve authentication"),
-            ),
-            DecidedLaneRecoveryIngressPreparation::LeaderWireRetire
-        ));
-
-        let mut wrong_version = non_serve;
-        wrong_version.protocol_version = wrong_version.protocol_version.saturating_sub(1);
-        let wrong_version =
-            InboundBlockMessage::new(BlockMessage::V2(wrong_version), Some(peer.clone()));
-        assert!(matches!(
-            prepare_decided_lane_recovery_ingress(
-                &wrong_version,
-                context.height,
-                subject,
-                |_, _| panic!("non-Serve traffic never reaches Serve authentication"),
-            ),
-            DecidedLaneRecoveryIngressPreparation::LeaderWireRetire
-        ));
-    }
-
-    fn height_ingress_bindings_fixture(
-        owner_marker: u8,
-    ) -> (
-        TempDir,
-        Arc<FairV2Ingress>,
-        Arc<AtomicBool>,
-        HeightIngressBindings,
-        CertifiedServeIngressGate,
-        Arc<LeaderWireLifecycleStoreGate>,
-    ) {
-        let (context, _) = context();
-        let roster = context
-            .roster
-            .iter()
-            .map(|entry| entry.validator.clone())
-            .collect::<BTreeSet<_>>();
-        let directory = TempDir::new().expect("temporary joint height-ingress directory");
-        let ingress = Arc::new(
-            FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
-                64,
-                512 * 1024 * 1024,
-                64 * 1024 * 1024,
-                super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
-                8 * 1024 * 1024,
-                8 * 1024 * 1024,
-                usize::MAX,
-                usize::MAX,
-                usize::MAX,
-                usize::MAX,
-                None,
-            ),
-        );
-        ingress
-            .configure_roster_for_context(
-                roster.iter().cloned(),
-                &context.chain_id,
-                context.da_layout,
-            )
-            .expect("configure joint height ingress");
-        ingress.require_certified_serve_gate();
-        ingress.require_leader_wire_lifecycle_gate();
-
-        let ingress_ready = Arc::new(AtomicBool::new(false));
-        let (serve_gate, lifecycle_ordinals) =
-            super::super::v2_worker::tests::certified_serve_ingress_gate_fixture();
-        let certified_serve = CertifiedServeIngressBinding::bind(
-            Arc::clone(&ingress_ready),
-            Arc::clone(&ingress),
-            serve_gate.clone(),
-        )
-        .expect("bind joint height Serve gate");
-
-        let capacity = LeaderWireLifecycleStoreGate::derived_capacity(
-            roster.len(),
-            context.da_layout.max_chunk_count,
-        )
-        .expect("derive joint height leader-wire capacity");
-        let owner = [owner_marker; 32];
-        let recovery_authority =
-            super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
-                context.id(),
-                context.height,
-                owner,
-                0,
-                false,
-            );
-        let (leader_gate, restore) = LeaderWireLifecycleStoreGate::open(
-            &directory.path().join("joint-height-ingress.wal"),
-            context.id(),
-            context.height,
-            owner,
-            roster,
-            capacity,
-            context.da_layout.max_chunk_count,
-            recovery_authority,
-            &[],
-            &[],
-        )
-        .expect("open joint height leader-wire gate");
-        let leader_wire = LeaderWireIngressBinding::bind(
-            Arc::clone(&ingress_ready),
-            Arc::clone(&ingress),
-            Arc::clone(&leader_gate),
-            restore,
-            lifecycle_ordinals,
-            context.id(),
-            context.height,
-        )
-        .expect("bind joint height leader-wire gate");
-        let bindings = HeightIngressBindings::new(certified_serve, leader_wire);
-        ingress.open().expect("open joint height ingress");
-        ingress_ready.store(true, Ordering::Release);
-        (
-            directory,
-            ingress,
-            ingress_ready,
-            bindings,
-            serve_gate,
-            leader_gate,
-        )
-    }
-
-    #[test]
-    fn height_ingress_bindings_retire_both_gates_in_one_closed_cut() {
-        let (_directory, ingress, ingress_ready, mut bindings, serve_gate, leader_gate) =
-            height_ingress_bindings_fixture(0xD5);
-        {
-            let state = ingress.state.lock();
-            assert!(state.open);
-            assert!(
-                state
-                    .certified_serve_gate
-                    .as_ref()
-                    .is_some_and(|bound| bound.ptr_eq(&serve_gate))
-            );
-            assert!(
-                state
-                    .leader_wire_lifecycle_gate
-                    .as_ref()
-                    .is_some_and(|bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &leader_gate))
-            );
-        }
-
-        bindings
-            .retire()
-            .expect("retire both per-height ingress gates atomically");
-        assert!(!ingress_ready.load(Ordering::Acquire));
-        assert!(bindings.certified_serve.gate.is_none());
-        assert!(bindings.leader_wire.gate.is_none());
-        {
-            let state = ingress.state.lock();
-            assert!(!state.open);
-            assert!(state.certified_serve_gate.is_none());
-            assert!(state.leader_wire_lifecycle_gate.is_none());
-            assert!(state.leader_wire_lifecycle_ordinals.is_none());
-            assert!(state.leader_wire_context.is_none());
-        }
-        bindings
-            .retire()
-            .expect("joint height retirement remains idempotent");
-    }
-
-    #[test]
-    fn height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership() {
-        {
-            let (_directory, ingress, ingress_ready, mut bindings, serve_gate, leader_gate) =
-                height_ingress_bindings_fixture(0xD6);
-            bindings.leader_wire.ingress_ready = Arc::new(AtomicBool::new(true));
-            let error = bindings
-                .retire()
-                .expect_err("mismatched readiness ownership must reject joint retirement");
-            assert!(matches!(
-                error,
-                V2RunnerError::Service(ref reason)
-                    if reason == "per-height ingress gates changed their shared queue"
-            ));
-            assert!(ingress_ready.load(Ordering::Acquire));
-            assert!(ingress.state.lock().open);
-
-            drop(bindings);
-            assert!(!ingress_ready.load(Ordering::Acquire));
-            let state = ingress.state.lock();
-            assert!(!state.open);
-            assert!(
-                state
-                    .certified_serve_gate
-                    .as_ref()
-                    .is_some_and(|bound| bound.ptr_eq(&serve_gate)),
-                "a failed joint validation cannot partially detach the Serve gate"
-            );
-            assert!(
-                state
-                    .leader_wire_lifecycle_gate
-                    .as_ref()
-                    .is_some_and(|bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &leader_gate)),
-                "a failed joint validation cannot partially detach the leader-wire gate"
-            );
-        }
-
-        {
-            let (_directory, ingress, ingress_ready, mut bindings, serve_gate, leader_gate) =
-                height_ingress_bindings_fixture(0xD7);
-            bindings.leader_wire.gate = None;
-            let error = bindings
-                .retire()
-                .expect_err("partial child ownership must reject joint retirement");
-            assert!(matches!(
-                error,
-                V2RunnerError::Service(ref reason)
-                    if reason == "per-height ingress gates changed joint ownership"
-            ));
-            assert!(ingress_ready.load(Ordering::Acquire));
-            assert!(ingress.state.lock().open);
-
-            drop(bindings);
-            assert!(!ingress_ready.load(Ordering::Acquire));
-            let state = ingress.state.lock();
-            assert!(!state.open);
-            assert!(
-                state
-                    .certified_serve_gate
-                    .as_ref()
-                    .is_some_and(|bound| bound.ptr_eq(&serve_gate)),
-                "partial child ownership cannot trigger split Serve teardown"
-            );
-            assert!(
-                state
-                    .leader_wire_lifecycle_gate
-                    .as_ref()
-                    .is_some_and(|bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &leader_gate)),
-                "partial child ownership cannot trigger split leader-wire teardown"
-            );
-        }
-    }
-
-    fn leader_wire_runtime_ingress_fixture() -> (
-        TempDir,
-        FairV2Ingress,
-        Arc<LeaderWireLifecycleStoreGate>,
-        FairV2IngressOwnershipEvidence,
-        wire::ConsensusMessageV2,
-        PeerId,
-    ) {
-        let (context, keys) = context();
-        let round = wire::ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: 0,
-        };
-        let body = b"runner authenticated-Coalesce defense".to_vec();
-        let subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(
-                b"runner authenticated-Coalesce block",
-            )),
-            payload_hash: Hash::new(&body),
-        };
-        let manifest = encode_payload(&context, round, subject, &body)
-            .expect("encode runner leader-wire fixture payload")
-            .manifest()
-            .clone();
-        let proposer = context.leader(round.view);
-        let mut proposal = wire::Proposal {
-            round,
-            proposer,
-            subject,
-            manifest,
-            justification: wire::ProposalJustification::ParentCommit(
-                wire::ParentCommitJustification { certificate: None },
-            ),
-            signature: Vec::new(),
-        };
-        proposal.signature = Signature::new(
-            keys[usize::try_from(proposer).expect("small runner proposer index")].private_key(),
-            &proposal.signature_preimage(),
-        )
-        .payload()
-        .to_vec();
-        let message =
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal));
-        let semantic_origin = context.roster
-            [usize::try_from(proposer).expect("small runner proposer index")]
-        .validator
-        .clone();
-        let roster = context
-            .roster
-            .iter()
-            .map(|entry| entry.validator.clone())
-            .collect::<Vec<_>>();
-        let directory = TempDir::new().expect("temporary runner leader-wire directory");
-        let ingress = FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
-            64,
-            512 * 1024 * 1024,
-            64 * 1024 * 1024,
-            super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
-            8 * 1024 * 1024,
-            8 * 1024 * 1024,
-            usize::MAX,
-            usize::MAX,
-            usize::MAX,
-            usize::MAX,
-            None,
-        );
-        ingress
-            .configure_roster_for_context(roster.clone(), &context.chain_id, context.da_layout)
-            .expect("configure runner leader-wire ingress");
-        ingress.require_leader_wire_lifecycle_gate();
-        let capacity = LeaderWireLifecycleStoreGate::derived_capacity(
-            roster.len(),
-            context.da_layout.max_chunk_count,
-        )
-        .expect("derive runner leader-wire capacity");
-        let owner = [0xD4; 32];
-        let recovery_authority =
-            super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
-                context.id(),
-                context.height,
-                owner,
-                round.view,
-                false,
-            );
-        let (gate, restore) = LeaderWireLifecycleStoreGate::open(
-            &directory.path().join("runner-leader-wire.wal"),
-            context.id(),
-            context.height,
-            owner,
-            roster.iter().cloned().collect(),
-            capacity,
-            context.da_layout.max_chunk_count,
-            recovery_authority,
-            &[],
-            &[],
-        )
-        .expect("open runner leader-wire gate");
-        ingress
-            .bind_leader_wire_lifecycle_gate(
-                Arc::clone(&gate),
-                restore,
-                super::super::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(64),
-                context.id(),
-                context.height,
-            )
-            .expect("bind runner leader-wire gate");
-        ingress.open().expect("open runner leader-wire ingress");
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
-                BlockMessage::V2(message.clone()),
-                Some(semantic_origin.clone()),
-            )),
-            Ok(super::super::FairV2IngressPushDisposition::Enqueued)
-        ));
-        let mut admitted = ingress
-            .try_recv()
-            .expect("drain runner leader-wire fixture");
-        let mut ownership = admitted
-            .take_ingress_ownership()
-            .expect("runner leader-wire fixture retains ingress ownership");
-        ingress
-            .bind_leader_wire_runtime_ownership(&mut ownership)
-            .expect("bind runner leader-wire runtime receipt");
-        (
-            directory,
-            ingress,
-            gate,
-            ownership,
-            message,
-            semantic_origin,
-        )
-    }
-
-    #[test]
-    fn fail_closed_authenticated_coalesce_releases_gate_and_suppresses_retry() {
-        let (_directory, ingress, gate, ownership, message, semantic_origin) =
-            leader_wire_runtime_ingress_fixture();
-        assert!(
-            ownership.leader_wire_runtime_receipt().is_some(),
-            "the synthetic stale Coalesce result carries a fresh runtime receipt"
-        );
-        assert_eq!(
-            gate.earliest_ingress_scheduler_ordinal()
-                .expect("read runner leader-wire minimum"),
-            None,
-            "a runtime-bound owner has already left the durable Ingress selector"
-        );
-
-        assert!(matches!(
-            complete_control_ingress_admission(
-                &ingress,
-                &ownership,
-                Err(NetworkIngressError::FailClosed),
-            ),
-            Err(V2RunnerError::RuntimeFailClosed)
-        ));
-        assert_eq!(
-            gate.earliest_ingress_scheduler_ordinal()
-                .expect("read retired runner leader-wire minimum"),
-            None
-        );
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
-                BlockMessage::V2(message),
-                Some(semantic_origin),
-            )),
-            Ok(super::super::FairV2IngressPushDisposition::Coalesced)
-        ));
-        assert_eq!(
-            gate.earliest_ingress_scheduler_ordinal()
-                .expect("retry retains the terminal tombstone"),
-            None
-        );
-    }
-
-    fn test_predecessor(
-        context: &wire::HeightContext,
-        label: &[u8],
-    ) -> DurableV2PredecessorIdentity {
-        DurableV2PredecessorIdentity::for_test(context.height, label)
-    }
-
-    fn test_successor_authority(
-        predecessor: DurableV2PredecessorIdentity,
-        successor_context_id: wire::HeightContextId,
-    ) -> DurableSuccessorActivationAuthority {
-        DurableSuccessorActivationAuthority::for_test(predecessor, successor_context_id)
-    }
-
-    fn valid_ingress_probe() -> BlockMessage {
-        let validator = PeerId::new(
-            KeyPair::try_from_seed(vec![0xD7; 32], Algorithm::BlsNormal)
-                .expect("deterministic ingress probe key")
-                .public_key()
-                .clone(),
-        );
-        super::super::v2_worker::tests::lane_commit_qc_block_message(validator)
-    }
-
-    fn runner_status(context: &wire::HeightContext) -> wire::SumeragiV2Status {
-        wire::SumeragiV2Status {
-            protocol_version: wire::PROTOCOL_VERSION,
-            node_fingerprint: Hash::new(b"runner status node"),
-            build_fingerprint: Hash::new(b"runner status build"),
-            config_fingerprint: Hash::new(b"runner status config"),
-            restart_required: false,
-            height_context_id: context.id(),
-            height: context.height,
-            view: 0,
-            phase: wire::SumeragiV2StatusPhase::AwaitingProposal,
-            leader: context.leader(0),
-            locked_prepare_qc: None,
-            highest_prepare_qc: None,
-            last_timeout_certificate: None,
-            body_state: wire::SumeragiV2BodyState::Missing,
-            pending_persistence_id: None,
-            last_committed_height: context.height.saturating_sub(1),
-            last_committed_subject: None,
-            height_context: wire::SumeragiV2HeightContextStatus {
-                epoch: context.epoch,
-                epoch_end_height: context.epoch_end_height,
-                mode: context.mode,
-                epoch_seed: context.leader_seed,
-                validator_count: u32::try_from(context.roster.len()).expect("validator count"),
-                quorum: context.quorum,
-            },
-            last_commit_qc: None,
-            liveness: Default::default(),
-        }
-    }
-
-    fn publish_applied_runner_status(context: &wire::HeightContext) {
-        let mut status = runner_status(context);
-        status.phase = wire::SumeragiV2StatusPhase::PendingApply;
-        status.body_state = wire::SumeragiV2BodyState::Applied;
-        status.liveness.generation = context.height;
-        status.liveness.work.application = wire::SumeragiV2LocalWorkStage::Complete;
-        status.liveness.work.successor_height = wire::SumeragiV2LocalWorkStage::Queued;
-        status.liveness.last_progress = Some(wire::SumeragiV2ProgressTransitionStatus {
-            generation: context.height,
-            round: wire::ConsensusRound {
-                context_id: context.id(),
-                height: context.height,
-                view: 0,
-            },
-            transition: wire::SumeragiV2ProgressTransition::Applied,
-            age_ms: 0,
-        });
-        super::super::status::set_v2_status(status);
-    }
-
-    fn labelled_lane_qc_message(peer: PeerId, label: &[u8]) -> BlockMessage {
-        let mut message = super::super::v2_worker::tests::lane_commit_qc_block_message(peer);
-        let BlockMessage::LaneBlockQc(qc) = &mut message else {
-            unreachable!("lane-QC fixture must return a lane CommitQC")
-        };
-        qc.body.proposal_hash = Hash::new(label);
-        message
-    }
-
-    fn lane_qc_label(message: &NetworkMessage) -> Hash {
-        let NetworkMessage::SumeragiBlock(wire) = message else {
-            panic!("runner scheduler fixture emitted a non-block network message")
-        };
-        let BlockMessage::LaneBlockQc(qc) = wire.as_message() else {
-            panic!("runner scheduler fixture emitted a non-lane-QC block message")
-        };
-        qc.body.proposal_hash.clone()
-    }
-
-    fn runner_sidecar_chunk(
-        local: PeerId,
-        requester: PeerId,
-        label: &[u8],
-    ) -> CertifiedMergeSidecarChunkV1 {
-        CertifiedMergeSidecarChunkV1 {
-            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-            service_generation: CertifiedMergeSidecarServiceGenerationV1::INITIAL,
-            stream_epoch: CertifiedMergeSidecarStreamEpochV1(
-                NonZeroU64::new(1).expect("runner sidecar stream epoch is non-zero"),
-            ),
-            semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1(
-                NonZeroU64::new(1).expect("runner semantic sequence is non-zero"),
-            ),
-            request_id: Hash::new(label),
-            entry_hash: HashOf::from_untyped_unchecked(Hash::new(b"runner sidecar entry")),
-            encoded_len: 4,
-            epoch_id: 7,
-            reference_digest: Hash::new(b"runner sidecar reference"),
-            requester,
-            responder: local,
-            chunk_index: 0,
-            chunk_count: 1,
-            bytes: vec![1, 2, 3, 4],
-        }
-    }
-
-    #[test]
-    fn reserved_lane_output_bypasses_unserviceable_head_without_losing_owner() {
-        let (mut services, keys) = super::super::v2_worker::tests::fixture();
-        services
-            .set_exact_output_shared_unit_capacity_for_test(1)
-            .expect("install one shared slot plus frozen-validator reservations");
-        let blocked = PeerId::new(keys[1].public_key().clone());
-        let responsive = PeerId::new(keys[2].public_key().clone());
-        let keep_blocked = Arc::new(AtomicBool::new(true));
-        let keep_blocked_for_hook = Arc::clone(&keep_blocked);
-        let blocked_for_hook = blocked.clone();
-        let admitted = Arc::new(Mutex::new(Vec::new()));
-        let admitted_for_hook = Arc::clone(&admitted);
-        services.set_exact_output_admission_hook(move |post, ticket| {
-            if post.peer_id == blocked_for_hook && keep_blocked_for_hook.load(Ordering::Acquire) {
-                return Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket,
-                    rank: 13,
-                });
-            }
-            admitted_for_hook
-                .lock()
-                .expect("record admitted lane output")
-                .push((post.peer_id.clone(), lane_qc_label(&post.data)));
-            Ok(())
-        });
-
-        let reserved_filler = Hash::new(b"runner reserved filler");
-        let shared_filler = Hash::new(b"runner shared filler");
-        for (label, expected) in [
-            (
-                b"runner reserved filler".as_slice(),
-                reserved_filler.clone(),
-            ),
-            (b"runner shared filler".as_slice(), shared_filler.clone()),
-        ] {
-            services
-                .post_lane_block(
-                    blocked.clone(),
-                    labelled_lane_qc_message(blocked.clone(), label),
-                )
-                .expect("blocked validator output remains exactly owned");
-            assert!(
-                services
-                    .has_pending_exact_output()
-                    .expect("inspect blocked exact output")
-            );
-            assert!(
-                admitted
-                    .lock()
-                    .expect("inspect admitted output")
-                    .iter()
-                    .all(|(_, actual)| actual != &expected)
-            );
-        }
-
-        let blocked_label = Hash::new(b"runner blocked effect A");
-        let responsive_label = Hash::new(b"runner reserved effect B");
-        let blocked_effect = V2LaneWorkEffect::PostLaneBlock {
-            peer: blocked.clone(),
-            message: labelled_lane_qc_message(blocked.clone(), b"runner blocked effect A"),
-        };
-        let responsive_effect = V2LaneWorkEffect::PostLaneBlock {
-            peer: responsive.clone(),
-            message: labelled_lane_qc_message(responsive.clone(), b"runner reserved effect B"),
-        };
-        let (mut lane_work, _) =
-            super::super::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned);
-        assert!(lane_work.requeue_effect(blocked_effect));
-        assert!(lane_work.requeue_effect(responsive_effect));
-
-        dispatch_lane_work_effects(&mut lane_work, &services, 1)
-            .expect("reserved work bypasses the unserviceable head");
-        assert_eq!(lane_work.effect_count(), 1);
-        match lane_work.next_effect() {
-            Some(V2LaneWorkEffect::PostLaneBlock {
-                peer,
-                message: BlockMessage::LaneBlockQc(qc),
-            }) => {
-                assert_eq!(peer, blocked);
-                assert_eq!(qc.body.proposal_hash, blocked_label);
-            }
-            other => panic!("blocked effect A must remain the exact queued owner: {other:?}"),
-        }
-        {
-            let admitted = admitted.lock().expect("inspect admitted output");
-            assert_eq!(
-                admitted
-                    .iter()
-                    .filter(|(peer, label)| peer == &responsive && label == &responsive_label)
-                    .count(),
-                1
-            );
-            assert!(admitted.iter().all(|(_, label)| label != &blocked_label));
-        }
-
-        keep_blocked.store(false, Ordering::Release);
-        assert!(
-            !services
-                .retry_pending_exact_output()
-                .expect("responsive retry drains both retained fillers")
-        );
-        dispatch_lane_work_effects(&mut lane_work, &services, 1)
-            .expect("the retained head dispatches after capacity reopens");
-        assert_eq!(lane_work.effect_count(), 0);
-        assert!(
-            !services
-                .has_pending_exact_output()
-                .expect("all exact lane output is admitted")
-        );
-        let admitted = admitted.lock().expect("inspect final admitted output");
-        for (peer, label) in [
-            (&blocked, &reserved_filler),
-            (&blocked, &shared_filler),
-            (&blocked, &blocked_label),
-            (&responsive, &responsive_label),
-        ] {
-            assert_eq!(
-                admitted
-                    .iter()
-                    .filter(|(actual_peer, actual_label)| {
-                        actual_peer == peer && actual_label == label
-                    })
-                    .count(),
-                1,
-                "each semantic output must be admitted exactly once"
-            );
-        }
-        assert_eq!(admitted.len(), 4);
-    }
-
-    #[test]
-    fn runner_dispatch_preserves_durable_lane_certificate_reply_routes() {
-        let history = super::super::v2_lane_work::tests::durable_lane_history_fixture();
-        let requester = history
-            .certificate
-            .commit_qc
-            .validator_set
-            .iter()
-            .find(|peer| peer.public_key() != history.validators[0].public_key())
-            .cloned()
-            .expect("durable lane fixture has a remote requester");
-        let mut services = super::super::v2_worker::tests::service_for_history_context(
-            Arc::clone(&history.kura),
-            history.context,
-            &history.validators,
-        );
-        let dispatch_attempts = Arc::new(AtomicUsize::new(0));
-        let dispatch_attempts_for_hook = Arc::clone(&dispatch_attempts);
-        services.set_exact_output_admission_hook(move |post, ticket| {
-            dispatch_attempts_for_hook.fetch_add(1, Ordering::Relaxed);
-            Err(NetworkActorAdmissionError::Backpressured {
-                message: post,
-                ticket,
-                rank: 1,
-            })
-        });
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let mut route_fixture =
-            NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
-        let route_a = route_fixture.mint_via(requester.clone(), hub_a.clone());
-        let route_b = route_fixture.mint_via(requester.clone(), hub_b.clone());
-        assert!(route_a.source_key() != route_b.source_key());
-
-        let mut reply_routes = NetworkReplyRoutes::try_from_route(route_a.clone())
-            .expect("first authenticated durable-response source");
-        reply_routes
-            .merge(
-                &NetworkReplyRoutes::try_from_route(route_b.clone())
-                    .expect("second authenticated durable-response source"),
-            )
-            .expect("attach the independent durable-response source");
-
-        let mut admitted_a = super::super::fair_v2_ingress_admit_for_test(
-            InboundBlockMessage::try_from_transport_with_reply_route(
-                BlockMessage::LaneBlockProposal(history.certificate.proposal.clone()),
-                requester.clone(),
-                hub_a,
-                route_a.clone(),
-            )
-            .expect("first durable request route binds its fair-ingress occurrence"),
-        );
-        let mut ingress_ownership = admitted_a
-            .take_ingress_ownership()
-            .expect("fair ingress supplies first exact durable-request ownership");
-        let mut admitted_b = super::super::fair_v2_ingress_admit_for_test(
-            InboundBlockMessage::try_from_transport_with_reply_route(
-                BlockMessage::LaneBlockProposal(history.certificate.proposal.clone()),
-                requester.clone(),
-                hub_b,
-                route_b.clone(),
-            )
-            .expect("second durable request route binds its fair-ingress occurrence"),
-        );
-        assert!(
-            ingress_ownership.merge_downstream(
-                admitted_b
-                    .take_ingress_ownership()
-                    .expect("fair ingress supplies second exact durable-request ownership")
-            ),
-            "independent authenticated sources merge under one semantic request identity"
-        );
-        assert!(ingress_ownership.validate_exact());
-        assert!(ingress_ownership.matches_reply_routes(Some(&reply_routes)));
-
-        let mut effect = V2LaneWorkEffect::PostDurableLaneCertificate {
-            peer: requester,
-            reply_routes: Some(reply_routes),
-            ingress_ownership: Some(ingress_ownership),
-            certificate: history.certificate,
-        };
-        assert!(retain_active_owned_reply_routes_after_snapshot(
-            &mut effect,
-            || assert!(route_fixture.retire(&route_a))
-        ));
-        assert!(!route_a.is_active());
-        assert!(route_b.is_active());
-        match &effect {
-            V2LaneWorkEffect::PostDurableLaneCertificate {
-                reply_routes: Some(routes),
-                ingress_ownership: Some(ownership),
-                ..
-            } => {
-                assert_eq!(routes.len(), 2);
-                assert!(routes.iter().any(|route| route.same_delivery(&route_a)));
-                assert!(routes.iter().any(|route| route.same_delivery(&route_b)));
-                assert!(ownership.validate_exact());
-                assert!(ownership.matches_reply_routes(Some(routes)));
-            }
-            other => panic!("durable response lost exact route ownership: {other:?}"),
-        }
-
-        dispatch_lane_work_effect(&services, effect)
-            .expect("runner hands the Kura-backed certificate to exact output");
-        assert!(
-            !services
-                .retains_reply_route_for_test(&route_a)
-                .expect("inspect retired durable certificate route")
-        );
-        assert!(
-            services
-                .retains_reply_route_for_test(&route_b)
-                .expect("inspect retained sibling durable certificate route")
-        );
-        assert_eq!(
-            dispatch_attempts.load(Ordering::Relaxed),
-            1,
-            "only the responsive authenticated source may reach exact-output dispatch"
-        );
-    }
-
-    #[test]
-    fn runner_dispatch_preserves_certified_sidecar_chunk_reply_routes() {
-        let (mut services, keys) = super::super::v2_worker::tests::fixture();
-        services.set_exact_output_admission_hook(|post, ticket| {
-            Err(NetworkActorAdmissionError::Backpressured {
-                message: post,
-                ticket,
-                rank: 1,
-            })
-        });
-        let local = PeerId::new(keys[0].public_key().clone());
-        let requester = PeerId::new(keys[1].public_key().clone());
-        let hub = PeerId::new(KeyPair::random().public_key().clone());
-        let mut route_fixture = NetworkReplyRouteTestFixture::new(hub);
-        let route = route_fixture.mint(requester.clone());
-        let reply_routes =
-            NetworkReplyRoutes::try_from_route(route.clone()).expect("live reply route set");
-        let chunk = runner_sidecar_chunk(local, requester.clone(), b"runner sidecar request");
-
-        dispatch_lane_work_effect(
-            &services,
-            V2LaneWorkEffect::PostCertifiedMergeSidecar {
-                peer: requester,
-                reply_routes: Some(reply_routes),
-                message: Arc::new(CertifiedMergeSidecarMessage::Chunk(chunk)),
-            },
-        )
-        .expect("runner hands the certified chunk to exact output");
-        assert!(
-            services
-                .retains_reply_route_for_test(&route)
-                .expect("inspect retained sidecar route")
-        );
-    }
-
-    #[test]
-    fn direct_close_ack_retains_reply_route_from_lane_through_worker() {
-        let super::super::v2_lane_work::tests::CertifiedSidecarServerFixture {
-            mut adapter,
-            validators,
-            kura,
-            context,
-            local_validator,
-            requester,
-            request,
-        } = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
-        let mut services =
-            super::super::v2_worker::tests::service_for_history_context_with_local_validator(
-                kura,
-                context,
-                &validators,
-                local_validator,
-            );
-        services.set_exact_output_admission_hook(|post, ticket| {
-            Err(NetworkActorAdmissionError::Backpressured {
-                message: post,
-                ticket,
-                rank: 1,
-            })
-        });
-        let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
-        let reply_route = routes.mint(requester.clone());
-        let mut close = CertifiedMergeSidecarCloseV1 {
-            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-            service_generation: request.service_generation,
-            stream_epoch: request.stream_epoch,
-            closed_through: request.semantic_sequence.get(),
-            close_id: Hash::prehashed([0; Hash::LENGTH]),
-            requester: requester.clone(),
-            responder: request.responder,
-        };
-        close.close_id = close.canonical_close_id();
-
-        assert_eq!(
-            adapter.accept_relay_message(
-                LaneRelayMessage::CertifiedMergeSidecar {
-                    sender: requester,
-                    reply_route: Some(reply_route.clone()),
-                    message: CertifiedMergeSidecarMessage::Close(close),
-                },
-                0,
-            ),
-            V2LaneIngressOutcome::Inserted
-        );
-        assert!(matches!(
-            adapter.next_effect(),
-            Some(V2LaneWorkEffect::PostCertifiedMergeSidecar {
-                reply_routes: Some(reply_routes),
-                message,
-                ..
-            }) if reply_routes
-                .iter()
-                .any(|route| route.same_delivery(&reply_route))
-                && matches!(
-                    message.as_ref(),
-                    CertifiedMergeSidecarMessage::CloseAck(_)
-                )
-        ));
-        let mut malformed = adapter
-            .next_effect()
-            .expect("the direct CloseAck remains lane-owned before dispatch");
-        let V2LaneWorkEffect::PostCertifiedMergeSidecar { reply_routes, .. } = &mut malformed
-        else {
-            unreachable!("the direct CloseAck keeps its sidecar effect kind")
-        };
-        *reply_routes = None;
-        assert!(
-            dispatch_lane_work_effect(&services, malformed)
-                .expect_err("a responder control without its return route is malformed")
-                .to_string()
-                .contains("reply-route ownership")
-        );
-
-        dispatch_lane_work_effects(&mut adapter, &services, 1)
-            .expect("dispatch the direct CloseAck through exact output");
-        assert_eq!(adapter.effect_count(), 0);
-        assert!(
-            services
-                .retains_reply_route_for_test(&reply_route)
-                .expect("inspect direct CloseAck route in worker ownership")
-        );
-    }
-
-    #[test]
-    fn closed_sidecar_prefix_handoff_requeues_only_failed_suffix() {
-        let fixture = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
-        let mut adapter = fixture.adapter;
-        let responder = fixture.request.responder.clone();
-        let second_requester = fixture
-            .context
-            .roster
-            .iter()
-            .map(|entry| entry.validator.clone())
-            .find(|peer| peer != &responder && peer != &fixture.requester)
-            .expect("runner prefix retry fixture has a second remote requester");
-        let mut second_request = fixture.request.clone();
-        second_request.requester = second_requester;
-        second_request.request_id = second_request.canonical_request_id();
-        let requests = [fixture.request, second_request];
-        let hub = PeerId::new(KeyPair::random().public_key().clone());
-        // The shared lane fixture reserves the production test corridor for
-        // eight authenticated sources. Each capability must advertise that
-        // exact geometry even though this case exercises one source.
-        let mut routes = NetworkReplyRouteTestFixture::new(hub.clone());
-
-        for request in &requests {
-            let reply_route = routes.mint_via(request.requester.clone(), hub.clone());
-            assert_eq!(
-                adapter
-                    .accept_certified_merge_sidecar_for_test(
-                        request.requester.clone(),
-                        reply_route.clone(),
-                        request.clone(),
-                    )
-                    .expect("admit the exact Kura-backed request before closing it"),
-                V2LaneIngressOutcome::Inserted
-            );
-            let mut close = CertifiedMergeSidecarCloseV1 {
-                version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-                service_generation: request.service_generation,
-                stream_epoch: request.stream_epoch,
-                closed_through: request.semantic_sequence.get(),
-                close_id: Hash::prehashed([0; Hash::LENGTH]),
-                requester: request.requester.clone(),
-                responder: responder.clone(),
-            };
-            close.close_id = close.canonical_close_id();
-            assert_eq!(
-                adapter.accept_relay_message(
-                    LaneRelayMessage::CertifiedMergeSidecar {
-                        sender: request.requester.clone(),
-                        reply_route: Some(reply_route),
-                        message: CertifiedMergeSidecarMessage::Close(close),
-                    },
-                    0,
-                ),
-                V2LaneIngressOutcome::Inserted
-            );
-        }
-
-        let mut first_applied = Vec::new();
-        let mut calls = 0usize;
-        let error = apply_certified_merge_sidecar_closed_prefixes_with(&mut adapter, |prefix| {
-            calls = calls.saturating_add(1);
-            if calls == 2 {
-                Err("injected exact-output close failure".to_owned())
-            } else {
-                first_applied.push(prefix.clone());
-                Ok(())
-            }
-        })
-        .expect_err("the second exact-output close fails");
-        assert!(matches!(
-            error,
-            V2RunnerError::Service(ref reason)
-                if reason == "injected exact-output close failure"
-        ));
-        assert_eq!(first_applied.len(), 1);
-
-        let mut retry_applied = Vec::new();
-        apply_certified_merge_sidecar_closed_prefixes_with(&mut adapter, |prefix| {
-            retry_applied.push(prefix.clone());
-            Ok(())
-        })
-        .expect("retry applies the retained failed suffix");
-        assert_eq!(retry_applied.len(), 1);
-        assert_ne!(
-            retry_applied[0], first_applied[0],
-            "the already-applied prefix must not be repeated"
-        );
-        let applied_requesters = first_applied
-            .iter()
-            .chain(&retry_applied)
-            .map(|prefix| prefix.requester.clone())
-            .collect::<BTreeSet<_>>();
-        let requesters = requests
-            .into_iter()
-            .map(|request| request.requester)
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            applied_requesters, requesters,
-            "the successful prefix plus the retried suffix cover the exact drained batch"
-        );
-
-        apply_certified_merge_sidecar_closed_prefixes_with(&mut adapter, |_| {
-            panic!("a confirmed handoff must leave no prefix for another retry")
-        })
-        .expect("the confirmed handoff is empty");
-    }
-
-    #[test]
-    fn relayed_generation_hint_preserves_reply_route_from_lane_through_worker() {
-        let super::super::v2_lane_work::tests::CertifiedSidecarServerFixture {
-            mut adapter,
-            validators,
-            kura,
-            context,
-            local_validator,
-            requester,
-            request,
-        } = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
-        let changed_roster =
-            super::super::v2_lane_work::tests::changed_merge_sidecar_server_roster();
-        adapter
-            .transition_merge_sidecar_responder_roster_for_test(&changed_roster)
-            .expect("advance the quiescent responder generation");
-        let mut services =
-            super::super::v2_worker::tests::service_for_history_context_with_local_validator(
-                kura,
-                context,
-                &validators,
-                local_validator,
-            );
-        services.set_exact_output_admission_hook(|post, ticket| {
-            Err(NetworkActorAdmissionError::Backpressured {
-                message: post,
-                ticket,
-                rank: 1,
-            })
-        });
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
-        let route_a = routes.mint_via(requester.clone(), hub_a);
-        let route_b = routes.mint_via(requester.clone(), hub_b);
-
-        assert_eq!(
-            adapter.accept_relay_message(
-                LaneRelayMessage::CertifiedMergeSidecar {
-                    sender: requester.clone(),
-                    reply_route: Some(route_a.clone()),
-                    message: CertifiedMergeSidecarMessage::Request(request.clone()),
-                },
-                0,
-            ),
-            V2LaneIngressOutcome::Inserted
-        );
-        assert_eq!(
-            adapter.accept_relay_message(
-                LaneRelayMessage::CertifiedMergeSidecar {
-                    sender: requester.clone(),
-                    reply_route: Some(route_b.clone()),
-                    message: CertifiedMergeSidecarMessage::Request(request),
-                },
-                0,
-            ),
-            V2LaneIngressOutcome::Inserted,
-            "an alternate authenticated delivery joins the same stateless Hint"
-        );
-        assert!(matches!(
-            adapter.next_effect(),
-            Some(V2LaneWorkEffect::PostCertifiedMergeSidecar {
-                reply_routes: Some(reply_routes),
-                message,
-                ..
-            }) if reply_routes.len() == 2
-                && reply_routes
-                    .iter()
-                    .any(|route| route.same_delivery(&route_a))
-                && reply_routes
-                    .iter()
-                    .any(|route| route.same_delivery(&route_b))
-                && matches!(
-                    message.as_ref(),
-                    CertifiedMergeSidecarMessage::GenerationHint(_)
-                )
-        ));
-
-        let mut malformed = adapter
-            .next_effect()
-            .expect("the routed GenerationHint remains lane-owned before dispatch");
-        let V2LaneWorkEffect::PostCertifiedMergeSidecar { reply_routes, .. } = &mut malformed
-        else {
-            unreachable!("the GenerationHint keeps its sidecar effect kind")
-        };
-        *reply_routes = None;
-        assert!(
-            dispatch_lane_work_effect(&services, malformed)
-                .expect_err("a GenerationHint without reply-route ownership is malformed")
-                .to_string()
-                .contains("reply-route ownership")
-        );
-
-        assert!(routes.retire(&route_a));
-        dispatch_lane_work_effects(&mut adapter, &services, 1)
-            .expect("dispatch the routed GenerationHint through exact output");
-        assert_eq!(adapter.effect_count(), 0);
-        assert!(
-            !services
-                .retains_reply_route_for_test(&route_a)
-                .expect("the retired Hint source must not reach worker ownership")
-        );
-        assert!(
-            services
-                .retains_reply_route_for_test(&route_b)
-                .expect("the live Hint sibling must remain in worker ownership")
-        );
-    }
-
-    #[test]
-    fn runner_dispatch_prunes_retired_sidecar_source_without_losing_live_sibling() {
-        let (mut services, keys) = super::super::v2_worker::tests::fixture();
-        services.set_exact_output_admission_hook(|post, ticket| {
-            Err(NetworkActorAdmissionError::Backpressured {
-                message: post,
-                ticket,
-                rank: 7,
-            })
-        });
-        let local = PeerId::new(keys[0].public_key().clone());
-        let requester = PeerId::new(keys[1].public_key().clone());
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let mut route_fixture =
-            NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
-        let route_a = route_fixture.mint_via(requester.clone(), hub_a);
-        let route_b = route_fixture.mint_via(requester.clone(), hub_b);
-        let mut reply_routes = NetworkReplyRoutes::try_from_route(route_a.clone())
-            .expect("first sidecar response source");
-        reply_routes
-            .merge(
-                &NetworkReplyRoutes::try_from_route(route_b.clone())
-                    .expect("second sidecar response source"),
-            )
-            .expect("attach independent sidecar response source");
-        let effect = V2LaneWorkEffect::PostCertifiedMergeSidecar {
-            peer: requester.clone(),
-            reply_routes: Some(reply_routes),
-            message: Arc::new(CertifiedMergeSidecarMessage::Chunk(runner_sidecar_chunk(
-                local,
-                requester,
-                b"runner prune retired source",
-            ))),
-        };
-        let (mut lane_work, _) =
-            super::super::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned);
-        assert!(lane_work.requeue_effect(effect));
-        assert!(route_fixture.retire(&route_a));
-
-        dispatch_lane_work_effects(&mut lane_work, &services, 1)
-            .expect("a retired owned route cannot poison its live sibling");
-        assert_eq!(lane_work.effect_count(), 0);
-        assert!(
-            !services
-                .retains_reply_route_for_test(&route_a)
-                .expect("inspect retired route ownership")
-        );
-        assert!(
-            services
-                .retains_reply_route_for_test(&route_b)
-                .expect("inspect live sibling ownership")
-        );
-    }
-
-    #[test]
-    fn runner_preflight_enqueue_race_retains_sidecar_source_until_capacity_reopens() {
-        let fixture = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
-        let local_peer = fixture.request.responder.clone();
-        let mut lane_work = fixture.adapter;
-        let mut services =
-            super::super::v2_worker::tests::service_for_history_context_with_local_validator(
-                fixture.kura,
-                fixture.context,
-                &fixture.validators,
-                fixture.local_validator,
-            );
-        services
-            .set_exact_output_shared_unit_capacity_for_test(1)
-            .expect("install one shared race slot plus frozen target reservations");
-
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_c = PeerId::new(KeyPair::random().public_key().clone());
-        // The lane fixture's production seam is configured for eight
-        // authenticated reply sources. Route capabilities advertise that
-        // exact geometry, even though this race uses only three sources.
-        let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
-        let actual_route = routes.mint_via(fixture.requester.clone(), hub_a);
-        assert_eq!(
-            lane_work
-                .accept_certified_merge_sidecar_for_test(
-                    fixture.requester.clone(),
-                    actual_route.clone(),
-                    fixture.request,
-                )
-                .expect("materialize the source-owned sidecar effect"),
-            V2LaneIngressOutcome::Inserted
-        );
-        let actual_effect = lane_work
-            .next_effect()
-            .expect("materialized chunk enters the lane queue");
-        assert!(
-            services
-                .can_retain_lane_work_effect(&actual_effect)
-                .expect("race preflight validates the empty corridor")
-        );
-        let _ = lane_work
-            .drain_effects(1)
-            .pop()
-            .expect("take the exact effect after successful preflight");
-
-        services.set_exact_output_admission_hook(|post, ticket| {
-            Err(NetworkActorAdmissionError::Backpressured {
-                message: post,
-                ticket,
-                rank: 5,
-            })
-        });
-        let filler_a = routes.mint_via(fixture.requester.clone(), hub_b);
-        let filler_b = routes.mint_via(fixture.requester.clone(), hub_c);
-        for (route, label) in [
-            (filler_a.clone(), b"runner race filler A".as_slice()),
-            (filler_b.clone(), b"runner race filler B".as_slice()),
-        ] {
-            let reply_routes =
-                NetworkReplyRoutes::try_from_route(route).expect("live filler source route");
-            assert!(matches!(
-                dispatch_lane_work_effect(
-                    &services,
-                    V2LaneWorkEffect::PostCertifiedMergeSidecar {
-                        peer: fixture.requester.clone(),
-                        reply_routes: Some(reply_routes),
-                        message: Arc::new(CertifiedMergeSidecarMessage::Chunk(
-                            runner_sidecar_chunk(
-                                local_peer.clone(),
-                                fixture.requester.clone(),
-                                label,
-                            )
-                        )),
-                    },
-                )
-                .expect("fill exact target/class ownership after preflight"),
-                LaneWorkEffectDispatch::Complete
-            ));
-        }
-
-        let retained_effect = match dispatch_lane_work_effect(&services, actual_effect)
-            .expect("the enqueue race is bounded source backpressure")
-        {
-            LaneWorkEffectDispatch::SourceRetained(effect) => effect,
-            LaneWorkEffectDispatch::Complete => {
-                panic!("post-preflight capacity race must return the exact source owner")
-            }
-        };
-        assert!(!services.exact_output_restart_required_for_test());
-
-        let filler_controls = Arc::new(Mutex::new(Vec::new()));
-        let filler_controls_for_hook = Arc::clone(&filler_controls);
-        let mut filler_routes = vec![
-            (Hash::new(b"runner race filler A"), filler_a),
-            (Hash::new(b"runner race filler B"), filler_b),
-        ];
-        services.set_exact_output_flush_admission_hook(move |post, ticket| {
-            assert!(ticket.is_none());
-            let request_id = match &post.data {
-                NetworkMessage::CertifiedMergeSidecar(message) => match message.as_ref() {
-                    CertifiedMergeSidecarMessage::Chunk(chunk) => &chunk.request_id,
-                    CertifiedMergeSidecarMessage::Request(_)
-                    | CertifiedMergeSidecarMessage::Close(_)
-                    | CertifiedMergeSidecarMessage::CloseAck(_)
-                    | CertifiedMergeSidecarMessage::GenerationHint(_) => {
-                        panic!("retained sidecar filler changed into a request")
-                    }
-                },
-                _ => panic!("retained sidecar filler changed its network message kind"),
-            };
-            let index = filler_routes
-                .iter()
-                .position(|(expected, _)| expected == request_id)
-                .expect("retained filler preserves its immutable request identity");
-            let (_, route) = filler_routes.remove(index);
-            let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply(&post, &route);
-            filler_controls_for_hook
-                .lock()
-                .expect("retain filler writer controls")
-                .push(control);
-            Ok(super::super::v2_worker::ExactOutputTestAdmission::SidecarFlush(ack))
-        });
-        services
-            .retry_pending_exact_output()
-            .expect("responsive filler writers release exact ownership capacity");
-        {
-            let mut controls = filler_controls.lock().expect("flush filler controls");
-            assert_eq!(controls.len(), 2);
-            for control in controls.iter_mut() {
-                assert!(control.flush());
-            }
-        }
-        assert!(
-            services
-                .retry_pending_exact_output()
-                .expect("flushed filler receipts remain owned until lane delivery")
-        );
-        assert_eq!(
-            services
-                .drain_certified_merge_sidecar_chunk_admissions(2)
-                .expect("drain both successfully flushed filler receipts")
-                .len(),
-            2
-        );
-        assert!(
-            !services
-                .has_pending_exact_output()
-                .expect("drained filler receipts release their exact ownership")
-        );
-
-        let actual_admissions = Arc::new(AtomicUsize::new(0));
-        let actual_admissions_for_hook = Arc::clone(&actual_admissions);
-        let actual_route_for_hook = actual_route.clone();
-        let actual_control = Arc::new(Mutex::new(None));
-        let actual_control_for_hook = Arc::clone(&actual_control);
-        services.set_exact_output_flush_admission_hook(move |post, ticket| {
-            assert!(ticket.is_none());
-            actual_admissions_for_hook.fetch_add(1, Ordering::Relaxed);
-            let (control, ack) =
-                NetworkReplyFlushAckTestFixture::for_reply(&post, &actual_route_for_hook);
-            assert!(
-                actual_control_for_hook
-                    .lock()
-                    .expect("retain actual writer control")
-                    .replace(control)
-                    .is_none()
-            );
-            Ok(super::super::v2_worker::ExactOutputTestAdmission::SidecarFlush(ack))
-        });
-        assert!(lane_work.requeue_effect(retained_effect));
-        dispatch_lane_work_effects(&mut lane_work, &services, 1)
-            .expect("retained source dispatches after capacity reopens");
-        assert_eq!(lane_work.effect_count(), 0);
-        assert_eq!(actual_admissions.load(Ordering::Relaxed), 1);
-        assert!(
-            actual_control
-                .lock()
-                .expect("lock actual writer control")
-                .as_mut()
-                .expect("actual source reached writer admission")
-                .flush()
-        );
-        dispatch_lane_work_effects(&mut lane_work, &services, 1)
-            .expect("actual writer flush advances the source exactly once");
-        assert_eq!(actual_admissions.load(Ordering::Relaxed), 1);
-        assert!(
-            !services
-                .has_pending_exact_output()
-                .expect("actual source receipt is fully applied")
-        );
-        assert!(!services.exact_output_restart_required_for_test());
-    }
-
-    #[test]
-    fn runner_dispatch_advances_certified_sidecar_only_after_writer_flush() {
-        let (mut services, keys) = super::super::v2_worker::tests::fixture();
-        let local = PeerId::new(keys[0].public_key().clone());
-        let requester = PeerId::new(keys[1].public_key().clone());
-        let hub = PeerId::new(KeyPair::random().public_key().clone());
-        let mut route_fixture = NetworkReplyRouteTestFixture::new(hub);
-        let route = route_fixture.mint(requester.clone());
-        let route_for_hook = route.clone();
-        let flush_control = Arc::new(Mutex::new(None));
-        let flush_control_for_hook = Arc::clone(&flush_control);
-        services.set_exact_output_flush_admission_hook(move |post, _| {
-            let (control, flush_ack) =
-                NetworkReplyFlushAckTestFixture::for_reply(&post, &route_for_hook);
-            assert!(
-                flush_control_for_hook
-                    .lock()
-                    .expect("lock exact test writer-flush control")
-                    .replace(control)
-                    .is_none(),
-                "one sidecar occurrence owns one exact writer-flush control"
-            );
-            Ok(super::super::v2_worker::ExactOutputTestAdmission::SidecarFlush(flush_ack))
-        });
-        let reply_routes = NetworkReplyRoutes::try_from_route(route).expect("live reply route set");
-        let chunk =
-            runner_sidecar_chunk(local, requester.clone(), b"runner admitted sidecar request");
-
-        dispatch_lane_work_effect(
-            &services,
-            V2LaneWorkEffect::PostCertifiedMergeSidecar {
-                peer: requester,
-                reply_routes: Some(reply_routes),
-                message: Arc::new(CertifiedMergeSidecarMessage::Chunk(chunk)),
-            },
-        )
-        .expect("runner hands the certified chunk to exact output");
-        assert!(
-            services
-                .has_pending_exact_output()
-                .expect("receipt remains process-locally owned")
-        );
-        assert!(
-            services
-                .retry_pending_exact_output()
-                .expect("pending writer completion remains visible to retry callers")
-        );
-        assert!(
-            services
-                .drain_certified_merge_sidecar_chunk_admissions(2)
-                .expect("poll pending sidecar writer completion")
-                .is_empty(),
-            "actor admission alone must not advance the source cursor"
-        );
-        assert!(
-            flush_control
-                .lock()
-                .expect("lock exact test writer-flush control")
-                .as_mut()
-                .expect("runner admission minted the exact writer-flush control")
-                .flush()
-        );
-        assert!(
-            services
-                .retry_pending_exact_output()
-                .expect("writer-flushed receipt remains owned until lane application")
-        );
-        assert_eq!(
-            services
-                .drain_certified_merge_sidecar_chunk_admissions(2)
-                .expect("drain writer-flushed sidecar receipt")
-                .len(),
-            1
-        );
-        assert!(
-            !services
-                .has_pending_exact_output()
-                .expect("receipt ownership is released after drain")
-        );
-
-        let (mut closed_services, keys) = super::super::v2_worker::tests::fixture();
-        let local = PeerId::new(keys[0].public_key().clone());
-        let requester = PeerId::new(keys[1].public_key().clone());
-        let hub = PeerId::new(KeyPair::random().public_key().clone());
-        let mut route_fixture = NetworkReplyRouteTestFixture::new(hub);
-        let route = route_fixture.mint(requester.clone());
-        let route_for_hook = route.clone();
-        let close_control = Arc::new(Mutex::new(None));
-        let close_control_for_hook = Arc::clone(&close_control);
-        closed_services.set_exact_output_flush_admission_hook(move |post, _| {
-            let (control, close_ack) =
-                NetworkReplyFlushAckTestFixture::for_reply(&post, &route_for_hook);
-            assert!(
-                close_control_for_hook
-                    .lock()
-                    .expect("lock exact test closed control")
-                    .replace(control)
-                    .is_none(),
-                "one closed occurrence owns one exact writer-flush control"
-            );
-            Ok(super::super::v2_worker::ExactOutputTestAdmission::SidecarFlush(close_ack))
-        });
-        let reply_routes =
-            NetworkReplyRoutes::try_from_route(route).expect("live closed-path reply route set");
-        dispatch_lane_work_effect(
-            &closed_services,
-            V2LaneWorkEffect::PostCertifiedMergeSidecar {
-                peer: requester.clone(),
-                reply_routes: Some(reply_routes),
-                message: Arc::new(CertifiedMergeSidecarMessage::Chunk(runner_sidecar_chunk(
-                    local,
-                    requester,
-                    b"runner closed sidecar request",
-                ))),
-            },
-        )
-        .expect("runner retains a second sidecar completion");
-        assert!(
-            close_control
-                .lock()
-                .expect("lock exact test closed control")
-                .as_mut()
-                .expect("runner admission minted the exact closed control")
-                .close()
-        );
-        assert!(
-            closed_services
-                .drain_certified_merge_sidecar_chunk_admissions(2)
-                .expect("closed writer completion is harmless")
-                .is_empty(),
-            "closed writer ownership must never produce a cursor receipt"
-        );
-        assert!(
-            closed_services
-                .has_pending_exact_output()
-                .expect("closed completion retains the current item for exact retry"),
-            "a closed writer acknowledgement cannot erase an active source's current item"
-        );
-    }
-
-    #[test]
-    fn runner_dispatch_retired_admission_race_emits_no_sidecar_receipt() {
-        let (mut services, keys) = super::super::v2_worker::tests::fixture();
-        let local = PeerId::new(keys[0].public_key().clone());
-        let requester = PeerId::new(keys[1].public_key().clone());
-        let hub = PeerId::new(KeyPair::random().public_key().clone());
-        let mut route_fixture = NetworkReplyRouteTestFixture::new(hub);
-        let route = route_fixture.mint(requester.clone());
-        let route_for_hook = route.clone();
-        services.set_exact_output_flush_admission_hook(move |_, _| {
-            assert!(route_fixture.retire(&route_for_hook));
-            Ok(super::super::v2_worker::ExactOutputTestAdmission::Retired)
-        });
-        let reply_routes =
-            NetworkReplyRoutes::try_from_route(route).expect("initially live reply route set");
-
-        dispatch_lane_work_effect(
-            &services,
-            V2LaneWorkEffect::PostCertifiedMergeSidecar {
-                peer: requester.clone(),
-                reply_routes: Some(reply_routes),
-                message: Arc::new(CertifiedMergeSidecarMessage::Chunk(runner_sidecar_chunk(
-                    local,
-                    requester,
-                    b"runner retired admission race",
-                ))),
-            },
-        )
-        .expect("tenure cancellation retires only the exact occurrence");
-        assert!(
-            services
-                .drain_certified_merge_sidecar_chunk_admissions(1)
-                .expect("retired occurrence owns no receipt")
-                .is_empty()
-        );
-        assert!(
-            !services
-                .has_pending_exact_output()
-                .expect("retired occurrence releases worker ownership")
-        );
-    }
-
-    #[test]
-    fn runner_closed_sidecar_flush_reconnect_retries_same_chunk_then_advances_once() {
-        let fixture = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
-        let mut lane_work = fixture.adapter;
-        let mut services =
-            super::super::v2_worker::tests::service_for_history_context_with_local_validator(
-                fixture.kura,
-                fixture.context,
-                &fixture.validators,
-                fixture.local_validator,
-            );
-        let hub = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::new(hub);
-        let first_route = routes.mint(fixture.requester.clone());
-        assert_eq!(
-            lane_work
-                .accept_certified_merge_sidecar_for_test(
-                    fixture.requester.clone(),
-                    first_route.clone(),
-                    fixture.request.clone(),
-                )
-                .expect("materialize the first Kura-backed chunk"),
-            V2LaneIngressOutcome::Inserted
-        );
-        let first_message = match lane_work.next_effect() {
-            Some(V2LaneWorkEffect::PostCertifiedMergeSidecar { message, .. })
-                if matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(_)) =>
-            {
-                message
-            }
-            other => panic!("expected first Kura-backed sidecar chunk, got {other:?}"),
-        };
-
-        let first_route_for_hook = first_route.clone();
-        let close_control = Arc::new(Mutex::new(None));
-        let close_control_for_hook = Arc::clone(&close_control);
-        services.set_exact_output_flush_admission_hook(move |post, _| {
-            let (control, close_ack) =
-                NetworkReplyFlushAckTestFixture::for_reply(&post, &first_route_for_hook);
-            assert!(
-                close_control_for_hook
-                    .lock()
-                    .expect("lock first exact sidecar control")
-                    .replace(control)
-                    .is_none(),
-                "first chunk owns one exact writer-flush control"
-            );
-            Ok(super::super::v2_worker::ExactOutputTestAdmission::SidecarFlush(close_ack))
-        });
-        dispatch_lane_work_effects(&mut lane_work, &services, 1)
-            .expect("dispatch first chunk without advancing its cursor");
-        assert!(routes.retire(&first_route));
-        let reconnected_route = routes.mint(fixture.requester.clone());
-        assert_eq!(
-            lane_work
-                .accept_certified_merge_sidecar_for_test(
-                    fixture.requester.clone(),
-                    reconnected_route.clone(),
-                    fixture.request,
-                )
-                .expect("reconnect rematerializes the retained current chunk"),
-            V2LaneIngressOutcome::Inserted
-        );
-        match lane_work.next_effect() {
-            Some(V2LaneWorkEffect::PostCertifiedMergeSidecar {
-                reply_routes: Some(reply_routes),
-                message,
-                ..
-            }) => {
-                assert!(matches!(
-                    message.as_ref(),
-                    CertifiedMergeSidecarMessage::Chunk(_)
-                ));
-                assert_eq!(
-                    message, first_message,
-                    "reconnect must preserve the exact current chunk even when its bounded transport cache was rematerialized"
-                );
-                assert!(
-                    reply_routes
-                        .iter()
-                        .any(|route| route.same_delivery(&reconnected_route))
-                );
-            }
-            other => panic!("expected reconnected current sidecar chunk, got {other:?}"),
-        }
-
-        dispatch_lane_work_effects(&mut lane_work, &services, 1)
-            .expect("the worker absorbs the reconnect into its retained source attempt");
-        assert_eq!(
-            lane_work.effect_count(),
-            0,
-            "the route capability transfers exactly once into worker ownership"
-        );
-        assert!(
-            services
-                .has_pending_exact_output()
-                .expect("old writer flush remains process-locally owned")
-        );
-
-        let reconnected_route_for_hook = reconnected_route.clone();
-        let flush_control = Arc::new(Mutex::new(None));
-        let flush_control_for_hook = Arc::clone(&flush_control);
-        services.set_exact_output_flush_admission_hook(move |post, _| {
-            let (control, flush_ack) =
-                NetworkReplyFlushAckTestFixture::for_reply(&post, &reconnected_route_for_hook);
-            assert!(
-                flush_control_for_hook
-                    .lock()
-                    .expect("lock reconnected exact sidecar control")
-                    .replace(control)
-                    .is_none(),
-                "reconnected chunk owns one exact writer-flush control"
-            );
-            Ok(super::super::v2_worker::ExactOutputTestAdmission::SidecarFlush(flush_ack))
-        });
-        assert!(
-            close_control
-                .lock()
-                .expect("lock first exact sidecar control")
-                .as_mut()
-                .expect("first chunk admission minted its exact closed control")
-                .close()
-        );
-        retry_exact_output_and_apply_sidecar_admissions(&mut lane_work, &services, 1)
-            .expect("closed old writer retries the retained current chunk on the reconnect");
-        assert_eq!(lane_work.effect_count(), 0);
-        assert!(
-            flush_control
-                .lock()
-                .expect("lock reconnected exact sidecar control")
-                .as_mut()
-                .expect("reconnected admission minted its exact flush control")
-                .flush()
-        );
-        retry_exact_output_and_apply_sidecar_admissions(&mut lane_work, &services, 1)
-            .expect("writer flush advances exactly the reconnected source cursor");
-        assert_eq!(lane_work.effect_count(), 0);
-        assert!(
-            !services
-                .has_pending_exact_output()
-                .expect("writer-flushed receipt is fully applied")
-        );
-    }
-
-    #[test]
-    fn runner_old_flushed_sidecar_receipt_cancels_queued_reconnect_retry() {
-        let fixture = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
-        let mut lane_work = fixture.adapter;
-        let mut services =
-            super::super::v2_worker::tests::service_for_history_context_with_local_validator(
-                fixture.kura,
-                fixture.context,
-                &fixture.validators,
-                fixture.local_validator,
-            );
-        let hub = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::new(hub);
-        let first_route = routes.mint(fixture.requester.clone());
-        assert_eq!(
-            lane_work
-                .accept_certified_merge_sidecar_for_test(
-                    fixture.requester.clone(),
-                    first_route.clone(),
-                    fixture.request.clone(),
-                )
-                .expect("materialize the first exact sidecar chunk"),
-            V2LaneIngressOutcome::Inserted
-        );
-
-        let first_route_for_hook = first_route.clone();
-        let flush_control = Arc::new(Mutex::new(None));
-        let flush_control_for_hook = Arc::clone(&flush_control);
-        services.set_exact_output_flush_admission_hook(move |post, _| {
-            let (control, ack) =
-                NetworkReplyFlushAckTestFixture::for_reply(&post, &first_route_for_hook);
-            assert!(
-                flush_control_for_hook
-                    .lock()
-                    .expect("lock old exact writer control")
-                    .replace(control)
-                    .is_none()
-            );
-            Ok(super::super::v2_worker::ExactOutputTestAdmission::SidecarFlush(ack))
-        });
-        dispatch_lane_work_effects(&mut lane_work, &services, 1)
-            .expect("dispatch the first route chunk");
-
-        assert!(routes.retire(&first_route));
-        let reconnected_route = routes.mint(fixture.requester.clone());
-        assert_eq!(
-            lane_work
-                .accept_certified_merge_sidecar_for_test(
-                    fixture.requester.clone(),
-                    reconnected_route.clone(),
-                    fixture.request,
-                )
-                .expect("reconnect retains the old current chunk"),
-            V2LaneIngressOutcome::Inserted
-        );
-        dispatch_lane_work_effects(&mut lane_work, &services, 1)
-            .expect("the worker absorbs the reconnect into its retained source attempt");
-        assert_eq!(lane_work.effect_count(), 0);
-        assert!(
-            services
-                .has_pending_exact_output()
-                .expect("the worker owns the reconnect while the old flush is pending")
-        );
-
-        assert!(
-            flush_control
-                .lock()
-                .expect("lock old exact writer control")
-                .as_mut()
-                .expect("first admission installed its writer control")
-                .flush()
-        );
-        retry_exact_output_and_apply_sidecar_admissions(&mut lane_work, &services, 1)
-            .expect("late old flush advances the rebound source without identity mismatch");
-
-        assert_eq!(
-            lane_work.effect_count(),
-            0,
-            "the terminal old flush must remove the queued reconnect current chunk"
-        );
-        assert!(
-            !services
-                .retains_reply_route_for_test(&reconnected_route)
-                .expect("reconnect was never transferred into worker ownership")
-        );
-        assert!(
-            !services
-                .has_pending_exact_output()
-                .expect("the terminal receipt is fully applied exactly once")
-        );
-        assert!(!services.exact_output_restart_required_for_test());
-    }
-
-    #[test]
-    fn runner_dispatch_rejects_certified_sidecar_chunk_without_reply_route() {
-        let (services, keys) = super::super::v2_worker::tests::fixture();
-        let local = PeerId::new(keys[0].public_key().clone());
-        let requester = PeerId::new(keys[1].public_key().clone());
-        let chunk = runner_sidecar_chunk(local, requester.clone(), b"runner missing sidecar route");
-
-        let error = dispatch_lane_work_effect(
-            &services,
-            V2LaneWorkEffect::PostCertifiedMergeSidecar {
-                peer: requester,
-                reply_routes: None,
-                message: Arc::new(CertifiedMergeSidecarMessage::Chunk(chunk)),
-            },
-        )
-        .expect_err("runner must reject a sidecar response without local reply authority");
-        assert!(error.to_string().contains("reply-route ownership"));
-    }
-
-    #[test]
-    fn runner_dispatch_rejects_durable_response_without_reply_routes() {
-        let history = super::super::v2_lane_work::tests::durable_lane_history_fixture();
-        let requester = history.certificate.commit_qc.validator_set[1].clone();
-        let services = super::super::v2_worker::tests::service_for_history_context(
-            history.kura,
-            history.context,
-            &history.validators,
-        );
-        let mut effect = V2LaneWorkEffect::PostDurableLaneCertificate {
-            peer: requester,
-            reply_routes: None,
-            ingress_ownership: None,
-            certificate: history.certificate,
-        };
-        assert!(
-            retain_active_owned_reply_routes(&mut effect),
-            "the scheduler prefilter must leave malformed ownership for strict dispatch"
-        );
-        let error = dispatch_lane_work_effect(&services, effect)
-            .expect_err("runner must reject a durable response without local reply authority");
-        assert!(
-            error
-                .to_string()
-                .contains("lost its authenticated reply routes")
-        );
-    }
-
-    #[test]
-    fn snapshot_successor_time_is_exact_bounded_and_restart_deterministic() {
-        let height_started_at = Instant::now();
-        let round_timeout = Duration::from_secs(20);
-        assert_eq!(
-            initial_block_sync_deadline(height_started_at, round_timeout, false),
-            deadline_after(height_started_at, round_timeout),
-            "an ordinary live height keeps the full quiet round before discovery"
-        );
-        assert_eq!(
-            initial_block_sync_deadline(height_started_at, round_timeout, true),
-            height_started_at,
-            "a recovered or historically synchronized height probes immediately"
-        );
-        assert!(!retain_eager_block_sync(false, false));
-        assert!(retain_eager_block_sync(true, false));
-        assert!(retain_eager_block_sync(false, true));
-
-        let anchor = wire::SnapshotBootstrapAnchor {
-            snapshot_height: 99,
-            snapshot_block_hash: HashOf::from_untyped_unchecked(Hash::new(b"snapshot tip")),
-            snapshot_block_creation_time_ms: 50_000,
-            snapshot_state_hash: Hash::new(b"snapshot state"),
-        };
-        let cadence = Duration::from_millis(750);
-        let first = snapshot_successor_logical_time(&anchor, cadence)
-            .expect("representable snapshot successor time");
-        let restarted = snapshot_successor_logical_time(&anchor, cadence)
-            .expect("restart derives the same successor time");
-        assert_eq!(first, Duration::from_millis(50_750));
-        assert_eq!(restarted, first);
-
-        assert!(matches!(
-            snapshot_successor_logical_time(&anchor, Duration::ZERO),
-            Err(V2RunnerError::InvalidSnapshotBootstrapCadence)
-        ));
-        assert!(matches!(
-            snapshot_successor_logical_time(&anchor, Duration::from_nanos(999_999)),
-            Err(V2RunnerError::InvalidSnapshotBootstrapCadence)
-        ));
-        let overflowing = wire::SnapshotBootstrapAnchor {
-            snapshot_block_creation_time_ms: u64::MAX,
-            ..anchor
-        };
-        assert!(matches!(
-            snapshot_successor_logical_time(&overflowing, Duration::from_millis(1)),
-            Err(V2RunnerError::V2BlockTimeOverflow)
-        ));
-    }
-
-    #[test]
-    fn unsupported_storage_platform_rejects_runner_voter_and_admits_observer() {
-        let admit_role =
-            |role| require_validator_storage_platform(role == NodeRole::Validator, false);
-        assert!(matches!(
-            admit_role(NodeRole::Validator),
-            Err(super::super::v2_lane_work::V2LaneWorkError::UnsupportedValidatorStoragePlatform)
-        ));
-        assert_eq!(
-            admit_role(NodeRole::Observer),
-            Ok(()),
-            "an unsupported host may enter only the explicitly non-voting runner path"
-        );
-    }
-
-    #[test]
-    fn global_voting_role_tracks_each_frozen_roster_without_losing_validator_processes() {
-        let (context, keys) = context();
-        let peer = PeerId::new(keys[0].public_key().clone());
-        assert_eq!(
-            local_validator_index(&context, &peer, NodeRole::Observer).expect("observer"),
-            None
-        );
-        assert_eq!(
-            local_validator_index(&context, &peer, NodeRole::Validator)
-                .expect("roster member remains a global validator"),
-            context
-                .roster
-                .iter()
-                .position(|entry| entry.validator == peer)
-                .map(|index| u32::try_from(index).expect("fixture roster index fits u32"))
-        );
-        assert_eq!(
-            local_validator_index(
-                &context,
-                &PeerId::new(
-                    KeyPair::try_from_seed(vec![0x55; 32], Algorithm::BlsNormal)
-                        .expect("deterministic non-member key")
-                        .public_key()
-                        .clone()
-                ),
-                NodeRole::Validator
-            )
-            .expect("a removed validator continues as a global observer"),
-            None
-        );
-    }
-
-    #[test]
-    fn runtime_queue_reserves_progress_and_completions() {
-        let config = SumeragiV2Config {
-            format_version: SUMERAGI_V2_CONFIG_FORMAT_VERSION,
-            protocol_version: wire::PROTOCOL_VERSION,
-            mode: wire::ConsensusMode::Permissioned,
-            block_cadence_ms: 1_000,
-            limits: SumeragiV2Limits {
-                max_transactions: 512,
-                max_payload_bytes: 16 * 1024 * 1024,
-                max_queue_scan: 2_048,
-                control_queue_capacity: 128,
-                runtime_command_capacity: 8,
-                runtime_progress_reserve: 2,
-                runtime_completion_reserve: 2,
-                body_queue_capacity: 16,
-                authenticated_non_validator_source_capacity: 2,
-                body_bytes: 160 * 1024 * 1024,
-                body_source_bytes: 32 * 1024 * 1024,
-                chunk_queue_capacity: 64,
-                effect_work_capacity: 2,
-                ready_body_capacity: 8,
-                ready_body_bytes: 32 * 1024 * 1024,
-                certified_request_capacity: 8,
-                authenticated_merge_qc_capacity: 64,
-                merge_leader_body_frame_headroom_bytes: 1024 * 1024,
-                autonomous_carrier_headroom_bytes: 1024 * 1024,
-                autonomous_producer_recheck_ms: 100,
-                historical_recovery_stuck_attempts: 32,
-                historical_recovery_retry_tier_attempts: 4,
-                historical_recovery_max_retry_tier: 6,
-                sidecar_service_burst: 8,
-                merge_sidecar_inbound_session_capacity: 32,
-                merge_sidecar_inbound_sessions_per_peer: 4,
-                merge_sidecar_inbound_assembly_bytes: 64 * 1024 * 1024,
-                merge_sidecar_inbound_assembly_bytes_per_peer: 32 * 1024 * 1024,
-                merge_sidecar_deferred_block_capacity: 128,
-                merge_sidecar_future_block_distance: 64,
-                merge_sidecar_request_timeout_ms: 10_000,
-                merge_sidecar_outbound_sessions_per_source: 2,
-                merge_sidecar_outbound_bytes_per_source: 16 * 1024 * 1024,
-                merge_sidecar_server_request_gates_per_source: 4,
-                pending_certified_merge_entry_capacity: 1_024,
-                pending_queue_plan_admission_capacity: 1_024,
-                pending_control_sidecar_bytes: 256 * 1024 * 1024,
-                merge_signing_guard_record_capacity: 1_024,
-                merge_signing_guard_record_bytes: 16 * 1024 * 1024 + 64 * 1024,
-                merge_signing_guard_total_bytes: 256 * 1024 * 1024,
-                native_amx_signing_guard_record_capacity: 524_288,
-                native_amx_signing_guard_record_bytes: 16 * 1024,
-                native_amx_signing_guard_anchor_bytes: 4 * 1024,
-            },
-            key_policy: SumeragiV2KeyPolicy {
-                activation_lead_blocks: 1,
-                overlap_grace_blocks: 1,
-                expiry_grace_blocks: 1,
-                require_hsm: false,
-                allowed_algorithms: vec![Algorithm::BlsNormal],
-                allowed_hsm_providers: Vec::new(),
-            },
-        };
-        assert!(runtime_queue_config(&config).is_ok());
-        assert!(effect_queue_config(&config).is_ok());
-
-        let mut invalid = config;
-        invalid.limits.effect_work_capacity = 3;
-        assert!(matches!(
-            effect_queue_config(&invalid),
-            Err(V2RunnerError::EffectWorkExceedsCompletionReserve {
-                pending: 3,
-                reserve: 2,
-            })
-        ));
-    }
-
-    #[test]
-    fn commit_certificate_runtime_backpressure_remains_retryable() {
-        let admission = Err(CommitCertificateAdmissionError::Enqueue(
-            NetworkIngressError::Backpressure(
-                crate::sumeragi::v2_runtime::EnqueueError::ReservedCapacity,
-            ),
-        ));
-        assert!(matches!(
-            commit_certificate_admission_completed(admission),
-            Ok(false)
-        ));
-        assert!(matches!(
-            commit_certificate_admission_completed(Ok(())),
-            Ok(true)
-        ));
-    }
-
-    #[test]
-    fn tag_roundtrip_rejects_another_height() {
-        let (context, _) = context();
-        let tag = EventTag::new(1, 3, Generation::new(7));
-        assert_eq!(round_for_tag(&context, tag).expect("round").view, 3);
-        assert!(matches!(
-            round_for_tag(&context, EventTag::new(2, 0, Generation::new(7))),
-            Err(V2RunnerError::StaleTag)
-        ));
-    }
-
-    fn proposal_owner(
-        context: &wire::HeightContext,
-        tag: EventTag,
-        lock: Option<(u64, wire::BlockSubject)>,
-        decided_subject: Option<wire::BlockSubject>,
-    ) -> LocalProposalOwner {
-        LocalProposalOwner {
-            tag,
-            locked_body: lock.map(|(view, subject)| {
-                (
-                    wire::ConsensusRound {
-                        context_id: context.id(),
-                        height: context.height,
-                        view,
-                    },
-                    subject,
-                )
-            }),
-            decided_subject,
-        }
-    }
-
-    fn proposal_subject(label: &[u8]) -> wire::BlockSubject {
-        wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(label)),
-            payload_hash: Hash::new(&[label, b" payload"].concat()),
-        }
-    }
-
-    #[test]
-    fn locked_body_recovery_is_independent_of_reproposal_gates() {
-        let (context, _) = context();
-        let tag = EventTag::new(context.height, 5, Generation::new(18));
-        let subject = proposal_subject(b"nonleader locked-body recovery");
-        let locked_round = wire::ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: 3,
-        };
-        let leader = context.leader(tag.view());
-        let nonleader = if leader == 0 { 1 } else { 0 };
-        let directive =
-            LocalProposalDirective::for_test(tag, leader, Some(locked_round), Some(subject), None);
-        let owner = LocalProposalOwner::from(directive);
-        let expected_request = Some((tag, locked_round, subject));
-
-        for (local_validator, attempted, can_admit) in [
-            (nonleader, None, true),
-            (leader, Some(owner), true),
-            (leader, None, false),
-        ] {
-            let plan = locked_body_recovery_plan(directive, local_validator, attempted, can_admit);
-            assert_eq!(plan.request, expected_request);
-            assert!(
-                !plan.may_repropose,
-                "body recovery must survive every local reproposal gate"
-            );
-        }
-
-        let eligible = locked_body_recovery_plan(directive, leader, None, true);
-        assert_eq!(eligible.request, expected_request);
-        assert!(eligible.may_repropose);
-
-        let decided = LocalProposalDirective::for_test(
-            tag,
-            leader,
-            Some(locked_round),
-            Some(subject),
-            Some(subject),
-        );
-        assert_eq!(
-            locked_body_recovery_plan(decided, leader, None, true),
-            LockedBodyRecoveryPlan {
-                request: None,
-                may_repropose: false,
-            }
-        );
-    }
-
-    #[test]
-    fn lane_production_duty_survives_successor_global_roster_removal() {
-        let (context, _) = context();
-        let tag = EventTag::new(context.height, 4, Generation::new(23));
-        let directive =
-            LocalProposalDirective::for_test(tag, context.leader(tag.view()), None, None, None);
-
-        assert_eq!(
-            local_consensus_duties(directive, None),
-            LocalConsensusDuties {
-                autonomous_lane_view: Some(tag.view()),
-                global_validator: None,
-            },
-            "successor-global observer status must not suppress independently frozen lane-author work"
-        );
-
-        let subject = proposal_subject(b"lane production duty lock");
-        let locked_round = wire::ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: 2,
-        };
-        let locked = LocalProposalDirective::for_test(
-            tag,
-            context.leader(tag.view()),
-            Some(locked_round),
-            Some(subject),
-            None,
-        );
-        assert_eq!(
-            local_consensus_duties(locked, None).autonomous_lane_view,
-            None,
-            "a global lock still suppresses fresh lane payload production"
-        );
-
-        let decided = LocalProposalDirective::for_test(
-            tag,
-            context.leader(tag.view()),
-            None,
-            None,
-            Some(subject),
-        );
-        assert_eq!(
-            local_consensus_duties(decided, None).autonomous_lane_view,
-            None,
-            "a terminal global decision retires fresh lane payload production"
-        );
-    }
-
-    #[test]
-    fn same_tag_higher_lock_retires_all_local_proposal_owners() {
-        let (context, _) = context();
-        let tag = EventTag::new(context.height, 5, Generation::new(11));
-        let subject_a = proposal_subject(b"local owner A");
-        let subject_b = proposal_subject(b"local owner B");
-        let owner_a = proposal_owner(&context, tag, Some((2, subject_a)), None);
-        let owner_b = proposal_owner(&context, tag, Some((4, subject_b)), None);
-        let now = Instant::now();
-        let mut state = LocalProposalState {
-            attempted: Some(owner_a),
-            submitted: Some((owner_a, subject_a)),
-            non_empty_retry: Some(owner_a),
-            candidate_work_wait: Some(CandidateWorkWait {
-                owner: owner_a,
-                started_at: now,
-                next_retry: now,
-            }),
-            pending_events: Some(PendingLocalEvents {
-                owner: owner_a,
-                subject: subject_a,
-                events: Vec::new(),
-            }),
-            global_selection: None,
-        };
-
-        state.reconcile(owner_b);
-
-        assert!(state.attempted.is_none());
-        assert!(state.submitted.is_none());
-        assert!(state.non_empty_retry.is_none());
-        assert!(state.candidate_work_wait.is_none());
-        assert!(state.pending_events.is_none());
-    }
-
-    #[test]
-    fn deferred_autonomous_work_timeout_arms_only_a_non_empty_retry() {
-        let (context, _) = context();
-        let owner = proposal_owner(
-            &context,
-            EventTag::new(context.height, 3, Generation::new(17)),
-            None,
-            None,
-        );
-        let started_at = Instant::now();
-        let wait_bound = Duration::from_secs(2);
-        let mut state = LocalProposalState::default();
-
-        state.defer_candidate_work(owner, started_at, wait_bound);
-        assert_eq!(state.non_empty_retry, None);
-        assert!(
-            state
-                .candidate_work_wait
-                .is_some_and(|wait| wait.owner == owner && wait.started_at == started_at)
-        );
-
-        let expired_at = started_at
-            .checked_add(wait_bound)
-            .expect("fixture wait deadline is representable");
-        state.defer_candidate_work(owner, expired_at, wait_bound);
-        assert_eq!(state.non_empty_retry, Some(owner));
-        assert!(state.candidate_work_wait.is_none());
-
-        state.defer_candidate_work(owner, expired_at, wait_bound);
-        assert_eq!(
-            state.non_empty_retry,
-            Some(owner),
-            "repeated timeout handling must retain the same single retry"
-        );
-        assert!(state.candidate_work_wait.is_none());
-
-        assert!(state.retire_unsubmitted_non_empty_retry(owner));
-        assert_eq!(state.non_empty_retry, None);
-        state.defer_candidate_work(owner, expired_at, wait_bound);
-        assert!(
-            state.candidate_work_wait.is_some_and(|wait| {
-                wait.owner == owner && wait.started_at == expired_at && wait.next_retry > expired_at
-            }),
-            "an unsubmitted retry must cross a fresh bounded observation window"
-        );
-        assert!(
-            !state.retire_unsubmitted_non_empty_retry(owner),
-            "a consumed retry cannot be retired twice"
-        );
-    }
-
-    #[test]
-    fn pre_submit_lane_binding_rejection_arms_one_non_empty_retry() {
-        let (context, _) = context();
-        let owner = proposal_owner(
-            &context,
-            EventTag::new(context.height, 3, Generation::new(19)),
-            None,
-            None,
-        );
-        let now = Instant::now();
-        let mut state = LocalProposalState {
-            attempted: Some(owner),
-            candidate_work_wait: Some(CandidateWorkWait {
-                owner,
-                started_at: now,
-                next_retry: now,
-            }),
-            ..LocalProposalState::default()
-        };
-
-        assert_eq!(
-            state.handle_candidate_binding_rejection(owner),
-            LocalValidationDisposition::RetryNonEmpty,
-            "an unsubmitted lane-binding rejection must not stop the process"
-        );
-        assert_eq!(state.attempted, None);
-        assert_eq!(state.non_empty_retry, Some(owner));
-        assert!(state.candidate_work_wait.is_none());
-        assert!(state.submitted.is_none());
-        assert!(state.pending_events.is_none());
-        assert!(state.global_selection.is_none());
-
-        assert_eq!(
-            state.handle_candidate_binding_rejection(owner),
-            LocalValidationDisposition::FatalNonEmpty,
-            "a rejected non-empty recovery retry still fails closed"
-        );
-    }
-
-    #[test]
-    fn first_same_subject_lock_preserves_pending_local_proposal_events() {
-        let (context, _) = context();
-        let tag = EventTag::new(context.height, 5, Generation::new(14));
-        let subject = proposal_subject(b"first lock keeps local subject");
-        let unlocked = proposal_owner(&context, tag, None, None);
-        let locked = proposal_owner(&context, tag, Some((5, subject)), None);
-        let mut state = LocalProposalState {
-            attempted: Some(unlocked),
-            submitted: Some((unlocked, subject)),
-            pending_events: Some(PendingLocalEvents {
-                owner: unlocked,
-                subject,
-                events: Vec::new(),
-            }),
-            ..LocalProposalState::default()
-        };
-
-        state.reconcile(locked);
-
-        assert_eq!(state.attempted, Some(locked));
-        assert_eq!(state.submitted, Some((locked, subject)));
-        assert!(
-            state
-                .pending_events
-                .as_ref()
-                .is_some_and(|pending| { pending.owner == locked && pending.subject == subject })
-        );
-    }
-
-    #[test]
-    fn higher_same_subject_lock_retires_prior_origin_work() {
-        let (context, _) = context();
-        let tag = EventTag::new(context.height, 5, Generation::new(15));
-        let subject = proposal_subject(b"higher lock retires old origin");
-        let lower = proposal_owner(&context, tag, Some((2, subject)), None);
-        let higher = proposal_owner(&context, tag, Some((4, subject)), None);
-        let mut state = LocalProposalState {
-            attempted: Some(lower),
-            submitted: Some((lower, subject)),
-            pending_events: Some(PendingLocalEvents {
-                owner: lower,
-                subject,
-                events: Vec::new(),
-            }),
-            ..LocalProposalState::default()
-        };
-
-        assert_ne!(lower, higher);
-        state.reconcile(higher);
-
-        assert!(state.attempted.is_none());
-        assert!(state.submitted.is_none());
-        assert!(state.pending_events.is_none());
-    }
-
-    #[test]
-    fn first_same_subject_lock_from_prior_view_retires_unlocked_work() {
-        let (context, _) = context();
-        let tag = EventTag::new(context.height, 5, Generation::new(16));
-        let subject = proposal_subject(b"old-origin first lock");
-        let unlocked = proposal_owner(&context, tag, None, None);
-        let locked = proposal_owner(&context, tag, Some((4, subject)), None);
-        let mut state = LocalProposalState {
-            attempted: Some(unlocked),
-            submitted: Some((unlocked, subject)),
-            pending_events: Some(PendingLocalEvents {
-                owner: unlocked,
-                subject,
-                events: Vec::new(),
-            }),
-            ..LocalProposalState::default()
-        };
-
-        state.reconcile(locked);
-
-        assert!(state.attempted.is_none());
-        assert!(state.submitted.is_none());
-        assert!(state.pending_events.is_none());
-    }
-
-    #[test]
-    fn late_old_rejection_cannot_arm_non_empty_retry_for_replacement_lock() {
-        let (context, _) = context();
-        let tag = EventTag::new(context.height, 5, Generation::new(12));
-        let subject_a = proposal_subject(b"rejected old A");
-        let subject_b = proposal_subject(b"current B");
-        let owner_a = proposal_owner(&context, tag, Some((2, subject_a)), None);
-        let owner_b = proposal_owner(&context, tag, Some((4, subject_b)), None);
-        let proposal_round = wire::ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: tag.view(),
-        };
-        let mut state = LocalProposalState {
-            submitted: Some((owner_a, subject_a)),
-            ..LocalProposalState::default()
-        };
-
-        assert_eq!(
-            state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_a,),
-            LocalValidationDisposition::Ignored
-        );
-        assert_eq!(state.non_empty_retry, None);
-
-        state.submitted = Some((owner_b, subject_b));
-        assert_eq!(
-            state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_b,),
-            LocalValidationDisposition::RetryNonEmpty
-        );
-        assert_eq!(state.non_empty_retry, Some(owner_b));
-
-        state.submitted = Some((owner_b, subject_b));
-        assert_eq!(
-            state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_b,),
-            LocalValidationDisposition::FatalNonEmpty
-        );
-    }
-
-    #[test]
-    fn decision_retires_local_work_before_prepared_delivery() {
-        let (context, _) = context();
-        let tag = EventTag::new(context.height, 6, Generation::new(13));
-        let subject = proposal_subject(b"decided proposal");
-        let active = proposal_owner(&context, tag, Some((4, subject)), None);
-        let decided = proposal_owner(&context, tag, Some((4, subject)), Some(subject));
-        let mut state = LocalProposalState {
-            attempted: Some(active),
-            submitted: Some((active, subject)),
-            non_empty_retry: None,
-            candidate_work_wait: None,
-            pending_events: Some(PendingLocalEvents {
-                owner: active,
-                subject,
-                events: Vec::new(),
-            }),
-            global_selection: None,
-        };
-
-        assert!(state.take_prepared_events(decided, tag, subject).is_none());
-        assert!(state.attempted.is_none());
-        assert!(state.submitted.is_none());
-        assert!(state.pending_events.is_none());
-    }
-
-    #[test]
-    fn height_one_proposal_projects_staged_genesis_to_resultless_wire() {
-        let key_pair = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519)
-            .expect("deterministic genesis key");
-        let transaction = TransactionBuilder::new(
-            ChainId::from("height-one-resultless-projection"),
-            AccountId::new(key_pair.public_key().clone()),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(Level::INFO, "staged genesis execution".to_owned())])
-        .sign(key_pair.private_key());
-        let entrypoint = transaction.hash_as_entrypoint();
-        let mut staged =
-            SignedBlock::genesis(vec![transaction], key_pair.private_key(), None, None);
-        staged
-            .set_transaction_results(
-                Vec::new(),
-                &[entrypoint],
-                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-            )
-            .expect("attach deterministic staged genesis results");
-        assert!(staged.has_results());
-        assert!(!staged.is_resultless_proposal());
-        assert!(staged.header().result_merkle_root().is_some());
-
-        let staged_header_hash = staged.header().hash();
-        let staged_hash = staged.hash();
-        let staged_signatures = staged.signatures().cloned().collect::<Vec<_>>();
-        let staged_result_root = staged.header().result_merkle_root();
-        let staged_execution_wire = staged.encode_wire().expect("encode staged execution image");
-        let wire = canonical_height_one_proposal_wire(&staged)
-            .expect("encode canonical height-one proposal");
-        let proposal = decode_framed_signed_block(&wire).expect("decode height-one proposal");
-
-        assert!(proposal.is_resultless_proposal());
-        assert!(!proposal.has_results());
-        assert!(proposal.header().result_merkle_root().is_none());
-        assert_eq!(proposal.header().hash(), staged_header_hash);
-        assert_eq!(proposal.hash(), staged_hash);
-        assert_eq!(
-            proposal.signatures().cloned().collect::<Vec<_>>(),
-            staged_signatures
-        );
-        assert_eq!(
-            staged.header().result_merkle_root(),
-            staged_result_root,
-            "proposal projection must not mutate the staged result root"
-        );
-        assert_eq!(
-            staged
-                .encode_wire()
-                .expect("re-encode staged execution image"),
-            staged_execution_wire,
-            "proposal projection must not mutate the staged execution image"
-        );
-        assert_eq!(
-            Hash::new(&wire),
-            staged
-                .canonical_proposal_wire_hash()
-                .expect("hash canonical staged-genesis proposal"),
-        );
-    }
-
-    #[test]
-    fn exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift() {
-        let (context, _) = context();
-        let key_pair = KeyPair::try_from_seed(vec![0x72; 32], Algorithm::Ed25519)
-            .expect("deterministic proposal key");
-        let transaction = TransactionBuilder::new(
-            ChainId::from("locked-reproposal-exact-body"),
-            AccountId::new(key_pair.public_key().clone()),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(Level::INFO, "immutable locked body".to_owned())])
-        .sign(key_pair.private_key());
-        let block = SignedBlock::genesis(vec![transaction], key_pair.private_key(), None, None)
-            .canonical_resultless_proposal();
-        assert!(block.is_resultless_proposal());
-        let canonical_wire = block.encode_wire().expect("encode exact proposal body");
-        let locked_subject = wire::BlockSubject {
-            parent_block_hash: block.header().prev_block_hash(),
-            block_hash: block.hash(),
-            payload_hash: Hash::new(&canonical_wire),
-        };
-        let tag = EventTag::new(context.height, 3, Generation::new(17));
-
-        let encoded = encode_exact_local_body(&context, tag, Some(locked_subject), &canonical_wire)
-            .expect("encode unchanged locked body at the reproposal round");
-        assert_eq!(
-            encoded.manifest().round,
-            round_for_tag(&context, tag).unwrap()
-        );
-        assert_eq!(encoded.manifest().subject, locked_subject);
-        let (_, chunks) = encoded.into_parts();
-        assert_eq!(chunks.concat(), canonical_wire);
-
-        let foreign_subject = proposal_subject(b"foreign locked subject");
-        assert!(matches!(
-            encode_exact_local_body(&context, tag, Some(foreign_subject), &canonical_wire,),
-            Err(V2RunnerError::LockedBodyMismatch)
-        ));
-    }
-
-    #[test]
-    fn replayed_proposal_sign_reserves_only_the_exact_current_lock_owner() {
-        let (context, _) = context();
-        let tag = EventTag::new(context.height, 3, Generation::new(9));
-        let round = wire::ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: tag.view(),
-        };
-        let body = b"replayed proposal payload";
-        let subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"replayed proposal block")),
-            payload_hash: Hash::new(body),
-        };
-        let manifest = encode_payload(&context, round, subject, body)
-            .expect("encode replayed proposal fixture payload")
-            .manifest()
-            .clone();
-        let proposal = wire::Proposal {
-            round,
-            proposer: context.leader(round.view),
-            subject,
-            manifest,
-            justification: wire::ProposalJustification::ParentCommit(
-                wire::ParentCommitJustification { certificate: None },
-            ),
-            signature: Vec::new(),
-        };
-        let effects = [
-            AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
-            )),
-            AdapterEffect::Sign {
-                tag,
-                request: SignRequest::Proposal(proposal),
-            },
-        ];
-
-        let replayed = replayed_proposal_sign(&effects).expect("extract exact replay owner");
-        assert_eq!(
-            replayed,
-            ReplayedProposalSign {
-                tag,
-                round,
-                subject,
-            }
-        );
-        assert_eq!(replayed_proposal_sign(&effects[..1]), None);
-        assert_eq!(replayed_proposal_sign(&[]), None);
-
-        let directive = |locked_subject: Option<wire::BlockSubject>,
-                         decided_subject: Option<wire::BlockSubject>| {
-            LocalProposalDirective::for_test(
-                tag,
-                context.leader(tag.view()),
-                locked_subject.map(|_| wire::ConsensusRound {
-                    context_id: context.id(),
-                    height: context.height,
-                    view: 1,
-                }),
-                locked_subject,
-                decided_subject,
-            )
-        };
-        let unlocked = directive(None, None);
-        assert_eq!(
-            LocalProposalState::from_replayed_proposal(Some(replayed), unlocked).attempted,
-            Some(LocalProposalOwner::from(unlocked))
-        );
-
-        let exact_lock = directive(Some(subject), None);
-        assert_eq!(
-            LocalProposalState::from_replayed_proposal(Some(replayed), exact_lock).attempted,
-            Some(LocalProposalOwner::from(exact_lock)),
-            "the exact replayed subject owns current locked-body work"
-        );
-
-        let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);
-        assert!(
-            LocalProposalState::from_replayed_proposal(Some(replayed), foreign_lock)
-                .attempted
-                .is_none(),
-            "an equal-tag proposal for another subject cannot reserve the current lock owner"
-        );
-
-        let mismatched_round = ReplayedProposalSign {
-            round: wire::ConsensusRound { view: 2, ..round },
-            ..replayed
-        };
-        assert!(
-            LocalProposalState::from_replayed_proposal(Some(mismatched_round), unlocked)
-                .attempted
-                .is_none(),
-            "the replayed proposal round must match its reducer tag"
-        );
-
-        let decided = directive(Some(subject), Some(subject));
-        assert!(
-            LocalProposalState::from_replayed_proposal(Some(replayed), decided)
-                .attempted
-                .is_none(),
-            "a decision retires every replayed proposal reservation"
-        );
-    }
-
-    #[test]
-    fn outer_ingress_batch_services_completions_and_runtime_before_every_ingress() {
-        assert_eq!(
-            outer_ingress_turns(3).collect::<Vec<_>>(),
-            vec![
-                OuterIngressTurn::Completion,
-                OuterIngressTurn::Runtime,
-                OuterIngressTurn::Ingress,
-                OuterIngressTurn::Completion,
-                OuterIngressTurn::Runtime,
-                OuterIngressTurn::Ingress,
-                OuterIngressTurn::Completion,
-                OuterIngressTurn::Runtime,
-                OuterIngressTurn::Ingress,
-            ]
-        );
-        assert_eq!(
-            outer_ingress_turns(0).collect::<Vec<_>>(),
-            vec![
-                OuterIngressTurn::Completion,
-                OuterIngressTurn::Runtime,
-                OuterIngressTurn::Ingress,
-            ],
-            "a zero-sized batch still owes completion and runtime service opportunities"
-        );
-    }
-
-    #[test]
-    fn terminal_ingress_discards_commit_discovery_and_losing_current_body_requests() {
-        let (context, keys) = context();
-        let round = wire::ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: 0,
-        };
-        let body = b"terminal ingress exact body".to_vec();
-        let subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"terminal ingress block")),
-            payload_hash: Hash::new(&body),
-        };
-        let certificate = wire::QuorumCertificate {
-            round,
-            proposal_round: round,
-            phase: wire::GlobalPhase::Commit,
-            subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups(
-                Hash::new(b"terminal ingress parent state"),
-                Hash::new(b"terminal ingress post state"),
-                Hash::new(b"terminal ingress writes"),
-                Hash::new(b"terminal ingress executed block"),
-            ),
-            signers: vec![0, 1, 2],
-            aggregate_signature: vec![1],
-        };
-        let response = wire::ConsensusMessageV2Payload::CommitCertificateResponse(
-            wire::CommitCertificateResponse {
-                request_hash: HashOf::from_untyped_unchecked(Hash::new(
-                    b"terminal ingress commit request",
-                )),
-                certificate: certificate.clone(),
-                responder: PeerId::new(keys[0].public_key().clone()),
-                signature: vec![1],
-            },
-        );
-        assert!(v2_payload_is_terminal_reducer_control(&response));
-
-        let manifest = encode_payload(&context, round, subject, &body)
-            .expect("encode terminal body fixture payload")
-            .manifest()
-            .clone();
-        assert!(!v2_payload_is_terminal_reducer_control(
-            &wire::ConsensusMessageV2Payload::PayloadManifest(manifest)
-        ));
-
-        let exact_request = wire::CertifiedBodyRequest {
-            round,
-            subject,
-            certificate: certificate.clone(),
-            requester: PeerId::new(keys[1].public_key().clone()),
-            signature: vec![1],
-        };
-        assert!(!certified_body_request_is_superseded_after_decision(
-            &exact_request,
-            Some(subject),
-            context.height,
-        ));
-
-        let losing_subject = wire::BlockSubject {
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"losing terminal block")),
-            ..subject
-        };
-        let mut losing_request = exact_request.clone();
-        losing_request.subject = losing_subject;
-        losing_request.certificate.subject = losing_subject;
-        assert!(certified_body_request_is_superseded_after_decision(
-            &losing_request,
-            Some(subject),
-            context.height,
-        ));
-
-        losing_request.round.height = context.height.saturating_sub(1);
-        losing_request.certificate.round.height = losing_request.round.height;
-        losing_request.certificate.proposal_round.height = losing_request.round.height;
-        assert!(!certified_body_request_is_superseded_after_decision(
-            &losing_request,
-            Some(subject),
-            context.height,
-        ));
-    }
-
-    #[test]
-    fn finalized_rollover_closes_ingress_before_successor_replay() {
-        let ready = AtomicBool::new(true);
-        let ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
-        ingress
-            .configure_roster(std::iter::empty())
-            .expect("configure untrusted test lane");
-        ingress.open().expect("open test ingress");
-        close_ingress_for_rollover(&ready, &ingress);
-        assert!(!ready.load(Ordering::Acquire));
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(valid_ingress_probe(), None)),
-            Err(FairV2IngressPushError::Closed(_))
-        ));
-    }
-
-    #[test]
-    fn synthesized_durable_rollover_contract_allows_successor_after_dead_target_handoff() {
-        // This narrow rollover contract starts from a synthesized, internally
-        // consistent Kura receipt/finality artifact. It does not exercise the
-        // QC -> body recovery -> store -> validation -> application pipeline or
-        // claim end-to-end catch-up coverage.
-        let _guard = super::super::status::rbc_status_test_guard();
-        super::super::status::clear_v2_status();
-        let context = super::super::v2_worker::tests::production_output_handoff_with_dead_target();
-        publish_applied_runner_status(&context);
-
-        let predecessor = test_predecessor(&context, b"dead target rollover");
-        let construction =
-            PendingSuccessorConstruction::begin(predecessor).expect("begin successor handoff");
-        let ready = AtomicBool::new(false);
-        let ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
-        ingress
-            .configure_roster(std::iter::empty())
-            .expect("configure successor ingress");
-        let mut successor_context = context.clone();
-        successor_context.height = successor_context.height.saturating_add(1);
-        let mut successor = runner_status(&successor_context);
-        successor.last_committed_height = context.height;
-        successor.liveness.generation = successor_context.height;
-        successor.liveness.last_progress = Some(wire::SumeragiV2ProgressTransitionStatus {
-            generation: successor.liveness.generation,
-            round: wire::ConsensusRound {
-                context_id: successor.height_context_id,
-                height: successor.height,
-                view: successor.view,
-            },
-            transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
-            age_ms: 0,
-        });
-        let activation = construction
-            .bind(test_successor_authority(
-                predecessor,
-                successor.height_context_id,
-            ))
-            .expect("bind exact predecessor authority");
-        let output_guard = ConsensusOutputGuard::isolated();
-
-        open_ingress_for_active_height(
-            output_guard.as_ref(),
-            &ready,
-            &ingress,
-            Some((activation, successor.clone())),
-        )
-        .expect("dead-target durable handoff permits successor activation");
-
-        assert!(ready.load(Ordering::Acquire));
-        let active = super::super::status::v2_status().expect("active successor status");
-        assert_eq!(active.height, successor.height);
-        assert_eq!(active.last_committed_height, context.height);
-        assert!(matches!(
-            active.liveness.last_progress,
-            Some(wire::SumeragiV2ProgressTransitionStatus {
-                transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
-                ..
-            })
-        ));
-        close_ingress_for_rollover(&ready, &ingress);
-        super::super::status::clear_v2_status();
-    }
-
-    #[test]
-    fn successor_activation_is_published_only_after_ingress_is_open() {
-        let _guard = super::super::status::rbc_status_test_guard();
-        super::super::status::clear_v2_status();
-        let (context, _) = context();
-        publish_applied_runner_status(&context);
-        let predecessor = test_predecessor(&context, b"live ingress rollover");
-        let construction =
-            PendingSuccessorConstruction::begin(predecessor).expect("begin successor handoff");
-        let ready = AtomicBool::new(false);
-        let ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
-        ingress
-            .configure_roster(std::iter::empty())
-            .expect("configure untrusted test lane");
-        let before = super::super::status::v2_status().expect("predecessor status");
-        assert_eq!(before.height, context.height);
-        assert_eq!(
-            before.liveness.work.successor_height,
-            wire::SumeragiV2LocalWorkStage::Running
-        );
-        assert_eq!(
-            before
-                .liveness
-                .last_progress
-                .expect("application marker")
-                .transition,
-            wire::SumeragiV2ProgressTransition::Applied
-        );
-        assert!(!ready.load(Ordering::Acquire));
-        assert!(
-            matches!(
-                ingress.try_push(InboundBlockMessage::new(valid_ingress_probe(), None)),
-                Err(FairV2IngressPushError::Closed(_))
-            ),
-            "closed ingress must precede activation publication"
-        );
-
-        let mut successor_context = context.clone();
-        successor_context.height += 1;
-        let mut successor = runner_status(&successor_context);
-        successor.last_committed_height = context.height;
-        successor.liveness.generation = successor_context.height;
-        successor.liveness.last_progress = Some(wire::SumeragiV2ProgressTransitionStatus {
-            generation: successor.liveness.generation,
-            round: wire::ConsensusRound {
-                context_id: successor.height_context_id,
-                height: successor.height,
-                view: successor.view,
-            },
-            transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
-            age_ms: 0,
-        });
-        let activation = construction
-            .bind(test_successor_authority(
-                predecessor,
-                successor.height_context_id,
-            ))
-            .expect("bind exact predecessor authority");
-        let output_guard = ConsensusOutputGuard::isolated();
-        open_ingress_for_active_height(
-            output_guard.as_ref(),
-            &ready,
-            &ingress,
-            Some((activation, successor.clone())),
-        )
-        .expect("open ingress and publish one activation");
-
-        assert!(ready.load(Ordering::Acquire));
-        ingress
-            .try_push(InboundBlockMessage::new(valid_ingress_probe(), None))
-            .expect("activation publication follows open ingress");
-        let active = super::super::status::v2_status().expect("active successor status");
-        assert_eq!(active.height, successor.height);
-        let marker = active
-            .liveness
-            .last_progress
-            .expect("successor activation marker");
-        assert_eq!(
-            marker.transition,
-            wire::SumeragiV2ProgressTransition::SuccessorHeightActivated
-        );
-        assert_eq!(marker.generation, successor.liveness.generation);
-        assert_eq!(marker.round.context_id, successor.height_context_id);
-        assert_eq!(marker.round.height, successor.height);
-        close_ingress_for_rollover(&ready, &ingress);
-        super::super::status::clear_v2_status();
-
-        publish_applied_runner_status(&context);
-        let predecessor = test_predecessor(&context, b"foreign successor context");
-        let construction = PendingSuccessorConstruction::begin(predecessor)
-            .expect("begin mismatched-context handoff");
-        let foreign_context_id =
-            wire::HeightContextId(HashOf::<wire::HeightContext>::from_untyped_unchecked(
-                Hash::new(b"foreign successor context"),
-            ));
-        let activation = construction
-            .bind(test_successor_authority(predecessor, foreign_context_id))
-            .expect("bind the exact predecessor but foreign successor context");
-        let rejected_ready = AtomicBool::new(false);
-        let rejected_ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
-        rejected_ingress
-            .configure_roster(std::iter::empty())
-            .expect("configure rejected test lane");
-        assert!(
-            open_ingress_for_active_height(
-                output_guard.as_ref(),
-                &rejected_ready,
-                &rejected_ingress,
-                Some((activation, successor)),
-            )
-            .is_err(),
-            "an activation token cannot authorize another successor context"
-        );
-        assert!(!rejected_ready.load(Ordering::Acquire));
-        assert!(
-            matches!(
-                rejected_ingress.try_push(InboundBlockMessage::new(valid_ingress_probe(), None)),
-                Err(FairV2IngressPushError::Closed(_))
-            ),
-            "foreign-context rejection must close ingress again"
-        );
-        let predecessor = super::super::status::v2_status()
-            .expect("foreign-context rejection retains the predecessor");
-        assert_eq!(predecessor.height, context.height);
-        assert_eq!(
-            predecessor.liveness.work.successor_height,
-            wire::SumeragiV2LocalWorkStage::Running
-        );
-        assert_eq!(
-            predecessor
-                .liveness
-                .last_progress
-                .expect("application remains authoritative")
-                .transition,
-            wire::SumeragiV2ProgressTransition::Applied
-        );
-        super::super::status::clear_v2_status();
-    }
-
-    #[test]
-    fn complete_tip_recovery_uses_the_same_live_successor_boundary() {
-        let _guard = super::super::status::rbc_status_test_guard();
-        super::super::status::clear_v2_status();
-        let (parent_context, _) = context();
-        let ready = AtomicBool::new(false);
-        let ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
-        ingress
-            .configure_roster(std::iter::empty())
-            .expect("configure untrusted test lane");
-
-        let mut successor_context = parent_context.clone();
-        successor_context.height += 1;
-        let mut successor = runner_status(&successor_context);
-        successor.last_committed_height = parent_context.height;
-        successor.liveness.generation = successor_context.height;
-        successor.liveness.last_progress = Some(wire::SumeragiV2ProgressTransitionStatus {
-            generation: successor.liveness.generation,
-            round: wire::ConsensusRound {
-                context_id: successor.height_context_id,
-                height: successor.height,
-                view: successor.view,
-            },
-            transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
-            age_ms: 0,
-        });
-        let output_guard = ConsensusOutputGuard::isolated();
-        let foreign_context_id =
-            wire::HeightContextId(HashOf::<wire::HeightContext>::from_untyped_unchecked(
-                Hash::new(b"foreign recovered successor context"),
-            ));
-        let predecessor = test_predecessor(&parent_context, b"complete tip recovery");
-        let foreign_activation = PendingSuccessorActivation::recovered(
-            RecoveredSuccessorActivationAuthority::CompleteTip(test_successor_authority(
-                predecessor,
-                foreign_context_id,
-            )),
-        )
-        .expect("authenticate complete-tip retry lifecycle");
-        assert!(
-            open_ingress_for_active_height(
-                output_guard.as_ref(),
-                &ready,
-                &ingress,
-                Some((foreign_activation, successor.clone())),
-            )
-            .is_err(),
-            "recovery cannot authorize a same-height snapshot from another context"
-        );
-        assert!(!ready.load(Ordering::Acquire));
-        assert!(
-            super::super::status::v2_status().is_none(),
-            "rejected recovery must not publish a successor"
-        );
-
-        let activation = PendingSuccessorActivation::recovered(
-            RecoveredSuccessorActivationAuthority::CompleteTip(test_successor_authority(
-                predecessor,
-                successor.height_context_id,
-            )),
-        )
-        .expect("authenticate complete-tip retry lifecycle");
-        open_ingress_for_active_height(
-            output_guard.as_ref(),
-            &ready,
-            &ingress,
-            Some((activation, successor.clone())),
-        )
-        .expect("open recovered successor");
-
-        assert!(ready.load(Ordering::Acquire));
-        let active = super::super::status::v2_status().expect("recovered successor status");
-        assert_eq!(active.height, successor.height);
-        assert_eq!(active.last_committed_height, parent_context.height);
-        assert!(matches!(
-            active.liveness.last_progress,
-            Some(wire::SumeragiV2ProgressTransitionStatus {
-                transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
-                ..
-            })
-        ));
-        close_ingress_for_rollover(&ready, &ingress);
-        super::super::status::clear_v2_status();
-    }
-
-    #[test]
-    fn successor_construction_rejects_foreign_same_height_predecessor_authority() {
-        let _guard = super::super::status::rbc_status_test_guard();
-        super::super::status::clear_v2_status();
-        let (context, _) = context();
-        publish_applied_runner_status(&context);
-        let expected = test_predecessor(&context, b"expected predecessor");
-        let foreign = test_predecessor(&context, b"foreign same-height predecessor");
-        assert_eq!(expected.height(), foreign.height());
-        assert_ne!(expected, foreign);
-
-        let construction =
-            PendingSuccessorConstruction::begin(expected).expect("begin exact predecessor handoff");
-        let mut successor_context = context.clone();
-        successor_context.height += 1;
-        let error = construction
-            .bind(test_successor_authority(foreign, successor_context.id()))
-            .expect_err("same-height foreign predecessor must not bind activation");
-        assert!(matches!(
-            error,
-            V2RunnerError::SuccessorPredecessorAuthorityMismatch {
-                expected: actual_expected,
-                actual,
-            } if actual_expected == expected && actual == foreign
-        ));
-        let predecessor = super::super::status::v2_status().expect("predecessor remains visible");
-        assert_eq!(
-            predecessor.liveness.work.successor_height,
-            wire::SumeragiV2LocalWorkStage::Running
-        );
-        super::super::status::clear_v2_status();
-    }
-
-    #[test]
-    fn successor_startup_failure_stays_running_and_fails_closed_without_activation() {
-        let _guard = super::super::status::rbc_status_test_guard();
-        super::super::status::clear_v2_status();
-        let (context, keys) = context();
-        publish_applied_runner_status(&context);
-        let activation = PendingSuccessorConstruction::begin(test_predecessor(
-            &context,
-            b"failed successor startup",
-        ))
-        .expect("begin successor handoff");
-        let ready = Arc::new(AtomicBool::new(false));
-        let ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
-        ingress
-            .configure_roster(std::iter::empty())
-            .expect("configure untrusted test lane");
-        let output_guard = ConsensusOutputGuard::isolated();
-
-        // Force the real adapter constructor to fail on an existing directory
-        // where it requires a WAL file. Runtime, service, and later startup
-        // failures return through the same armed token/runner-guard boundary.
-        let failure_guard = V2RunnerFailureGuard::new(Arc::clone(&output_guard));
-        let proofs = keys
-            .iter()
-            .map(|key| {
-                iroha_crypto::bls_normal_pop_prove(key.private_key())
-                    .expect("validator proof of possession")
-            })
-            .collect::<Vec<_>>();
-        let verified = super::super::v2::VerifiedHeightContext::genesis(context.clone(), proofs)
-            .expect("verified constructor context");
-        let directory = TempDir::new().expect("temporary directory");
-        let constructor = SumeragiV2Adapter::open_deferred_status(
-            directory.path(),
-            verified,
-            None,
-            Generation::new(context.height),
-            [0xA7; 32],
-            AdapterFingerprints {
-                node: Hash::new(b"failed constructor node"),
-                build: Hash::new(b"failed constructor build"),
-                config: Hash::new(b"failed constructor config"),
-            },
-            DeferredAdmissionOrdinalSource::new(0),
-        );
-        assert!(
-            constructor.is_err(),
-            "a directory cannot be opened as a WAL"
-        );
-        drop(activation);
-        drop(failure_guard);
-
-        assert!(output_guard.restart_required());
-        assert!(!ready.load(Ordering::Acquire));
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(valid_ingress_probe(), None)),
-            Err(FairV2IngressPushError::Closed(_))
-        ));
-        let stalled = super::super::status::v2_status().expect("stalled predecessor status");
-        assert_eq!(stalled.height, context.height);
-        assert_eq!(
-            stalled.liveness.work.successor_height,
-            wire::SumeragiV2LocalWorkStage::Running
-        );
-        assert_eq!(
-            stalled
-                .liveness
-                .last_progress
-                .expect("application remains the final progress marker")
-                .transition,
-            wire::SumeragiV2ProgressTransition::Applied,
-            "dropping an incomplete activation token must not claim successor activation"
-        );
-        super::super::status::clear_v2_status();
-    }
-
-    #[test]
-    fn status_guard_retains_failure_snapshot_and_clears_clean_shutdown() {
-        let _guard = super::super::status::rbc_status_test_guard();
-        super::super::status::clear_v2_status();
-        let (context, _) = context();
-
-        let failure_status_guard = V2StatusClearGuard::new();
-        publish_applied_runner_status(&context);
-        super::super::status::mark_v2_restart_required();
-        drop(failure_status_guard);
-        let retained = super::super::status::v2_status().expect("retained failure snapshot");
-        assert_eq!(retained.height, context.height);
-        assert!(retained.restart_required);
-
-        let mut clean_status_guard = V2StatusClearGuard::new();
-        publish_applied_runner_status(&context);
-        clean_status_guard.clear_on_drop();
-        drop(clean_status_guard);
-        assert!(super::super::status::v2_status().is_none());
-    }
-
-    #[test]
-    fn ingress_capacity_error_preserves_message_and_byte_units() {
-        let (context, _) = context();
-        let validators = context
-            .roster
-            .iter()
-            .take(2)
-            .map(|validator| validator.validator.clone())
-            .collect::<Vec<_>>();
-
-        let count_error = FairV2Ingress::new(8, 3 * 1024, 1024, 0, 0)
-            .configure_roster(validators.clone())
-            .expect_err("two validators require ten protected message slots");
-        assert!(matches!(
-            ingress_capacity_error(count_error),
-            V2RunnerError::IngressCapacity {
-                configured: 8,
-                required: 10,
-            }
-        ));
-
-        let byte_error = FairV2Ingress::new(10, 2 * 1024, 1024, 0, 0)
-            .configure_roster(validators)
-            .expect_err("two validators and untrusted traffic require three byte partitions");
-        assert!(matches!(
-            ingress_capacity_error(byte_error),
-            V2RunnerError::IngressByteCapacity {
-                configured: 2048,
-                required: 3072,
-            }
-        ));
-    }
-
-    #[test]
-    fn ingress_guard_fails_closed_during_unwind() {
-        let ready = Arc::new(AtomicBool::new(true));
-        let ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
-        ingress
-            .configure_roster(std::iter::empty())
-            .expect("configure untrusted test lane");
-        ingress.open().expect("open test ingress");
-        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
-            let ready = Arc::clone(&ready);
-            let ingress = Arc::clone(&ingress);
-            move || {
-                let _guard = V2IngressClearGuard::new(Arc::clone(&ready), Arc::clone(&ingress));
-                ingress.open().expect("reopen inside guarded runner");
-                ready.store(true, Ordering::Release);
-                panic!("model runner panic");
-            }
-        }));
-        assert!(unwind.is_err());
-        assert!(!ready.load(Ordering::Acquire));
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(valid_ingress_probe(), None)),
-            Err(FairV2IngressPushError::Closed(_))
-        ));
-    }
-
-    #[test]
-    fn runner_failure_guard_latches_restart_required_during_unwind() {
-        let output_guard = ConsensusOutputGuard::isolated();
-        let admitted_output = output_guard.acquire().expect("admit earlier output");
-        let unwind = std::panic::catch_unwind({
-            let output_guard = Arc::clone(&output_guard);
-            move || {
-                let _failure_guard = V2RunnerFailureGuard::new(output_guard);
-                panic!("model runner panic before production services start");
-            }
-        });
-
-        assert!(unwind.is_err(), "runner panic must continue unwinding");
-        assert!(output_guard.restart_required());
-        assert!(output_guard.acquire().is_none());
-        drop(admitted_output);
-        assert!(output_guard.acquire().is_none());
-    }
-
-    #[test]
-    fn clean_runner_completion_leaves_output_guard_open() {
-        let output_guard = ConsensusOutputGuard::isolated();
-        let mut failure_guard = V2RunnerFailureGuard::new(Arc::clone(&output_guard));
-        failure_guard.disarm();
-        drop(failure_guard);
-
-        assert!(!output_guard.restart_required());
-        assert!(output_guard.acquire().is_some());
-    }
-
-    #[test]
-    fn bound_block_sync_finalization_retires_only_nonfatal_no_output_paths() {
-        let output_guard = ConsensusOutputGuard::isolated();
-        let calls = RefCell::new(Vec::new());
-        let served = serve_block_sync_while_guarded(
-            output_guard.as_ref(),
-            || Ok(Some(())),
-            |(), _permit| {
-                calls.borrow_mut().push("post");
-                Ok(())
-            },
-        );
-        let posted = finalize_bound_block_sync_serve(
-            served,
-            || {
-                calls.borrow_mut().push("volatile");
-                Ok(())
-            },
-            |_| calls.borrow_mut().push("remote-rejection"),
-        )
-        .expect("posted response owns its bound runtime receipt");
-        assert_eq!(posted, BoundBlockSyncServeOutcome::Posted);
-        assert_eq!(
-            calls.borrow().as_slice(),
-            ["post"],
-            "posted exact output, not VolatileTerminal, owns the runtime receipt"
-        );
-        calls.borrow_mut().clear();
-
-        let served = serve_block_sync_while_guarded(
-            output_guard.as_ref(),
-            || Ok::<Option<()>, V2BlockSyncError>(None),
-            |(), _permit| {
-                calls.borrow_mut().push("unexpected-post");
-                Ok(())
-            },
-        );
-        let no_response = finalize_bound_block_sync_serve(
-            served,
-            || {
-                calls.borrow_mut().push("volatile");
-                Ok(())
-            },
-            |_| calls.borrow_mut().push("remote-rejection"),
-        )
-        .expect("no-response history retires through VolatileTerminal");
-        assert_eq!(no_response, BoundBlockSyncServeOutcome::VolatileNoResponse);
-        assert_eq!(calls.borrow().as_slice(), ["volatile"]);
-        calls.borrow_mut().clear();
-
-        let served = serve_block_sync_while_guarded(
-            output_guard.as_ref(),
-            || {
-                Err::<Option<()>, _>(V2BlockSyncError::Wire(
-                    wire::ValidationError::WrongHeightContext,
-                ))
-            },
-            |(), _permit| {
-                calls.borrow_mut().push("unexpected-post");
-                Ok(())
-            },
-        );
-        let remote_rejection = finalize_bound_block_sync_serve(
-            served,
-            || {
-                calls.borrow_mut().push("volatile");
-                Ok(())
-            },
-            |_| calls.borrow_mut().push("remote-rejection"),
-        )
-        .expect("remote rejection retires through VolatileTerminal");
-        assert_eq!(
-            remote_rejection,
-            BoundBlockSyncServeOutcome::VolatileRemoteRejection
-        );
-        assert_eq!(
-            calls.borrow().as_slice(),
-            ["volatile", "remote-rejection"],
-            "runtime retirement precedes nonfatal rejection observation"
-        );
-        calls.borrow_mut().clear();
-
-        let fatal = finalize_bound_block_sync_serve(
-            Err(V2BlockSyncError::RestartRequired),
-            || {
-                calls.borrow_mut().push("volatile");
-                Ok(())
-            },
-            |_| calls.borrow_mut().push("remote-rejection"),
-        );
-        assert!(matches!(
-            fatal,
-            Err(V2RunnerError::BlockSync(V2BlockSyncError::RestartRequired))
-        ));
-        assert!(
-            calls.borrow().is_empty(),
-            "fatal service failure leaves the durable Runtime owner for restart recovery"
-        );
-    }
-
-    #[test]
-    fn prelatched_historical_serve_invokes_no_signer_cache_or_network() {
-        let output_guard = ConsensusOutputGuard::isolated();
-        output_guard.activate_restart_required();
-        let signer_calls = Cell::new(0_u8);
-        let cache_writes = Cell::new(0_u8);
-        let network_posts = Cell::new(0_u8);
-
-        let result = serve_block_sync_while_guarded(
-            output_guard.as_ref(),
-            || {
-                signer_calls.set(signer_calls.get().saturating_add(1));
-                cache_writes.set(cache_writes.get().saturating_add(1));
-                Ok(Some(()))
-            },
-            |(), _permit| {
-                network_posts.set(network_posts.get().saturating_add(1));
-                Ok(())
-            },
-        );
-
-        assert!(matches!(result, Err(V2BlockSyncError::RestartRequired)));
-        assert_eq!(signer_calls.get(), 0);
-        assert_eq!(cache_writes.get(), 0);
-        assert_eq!(network_posts.get(), 0);
-    }
-}
+#[path = "v2_runner_tests.rs"]
+mod tests;

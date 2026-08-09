@@ -497,7 +497,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas: iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         },
         sumeragi: A::Sumeragi::default(),
         block_sync: A::BlockSync {
@@ -3037,36 +3037,4 @@ async fn connect_ws_rejects_query_token() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
-#[cfg(feature = "ws_integration_tests")]
-#[tokio::test]
-async fn connect_ws_handshake_fails_when_disabled() {
-    use tokio::net::TcpListener;
-    // Build disabled config and Torii router
-    let cfg = minimal_actual_config(false);
-    let torii = build_torii(&cfg);
-    let app = torii.api_router_for_tests();
-    // Serve
-    let listener = match TcpListener::bind("127.0.0.1:0").await {
-        Ok(listener) => listener,
-        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-            eprintln!("skipping connect_ws_handshake_fails_when_disabled: {err}");
-            return;
-        }
-        Err(err) => panic!("failed to bind test listener: {err}"),
-    };
-    let addr = listener.local_addr().unwrap();
-    spawn_test_server(listener, app);
-    // Attempt WS connect directly; expect failure
-    let url = format!(
-        "ws://{}/v1/connect/ws?sid={}&role=app",
-        addr, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-    );
-    let err = tokio_tungstenite::connect_async(&url)
-        .await
-        .expect_err("ws handshake should fail when connect disabled");
-    let status = match err {
-        tokio_tungstenite::tungstenite::Error::Http(response) => response.status(),
-        other => panic!("unexpected WebSocket error: {other:?}"),
-    };
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-}
+include!("connect_gating_disabled_ws_test.rs");

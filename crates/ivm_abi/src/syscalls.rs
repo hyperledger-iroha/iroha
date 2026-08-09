@@ -3826,6 +3826,10 @@ pub fn compute_abi_hash(policy: crate::SyscallPolicy) -> [u8; 32] {
 }
 
 #[cfg(test)]
+#[path = "syscalls/access_profile_tests.rs"]
+mod access_profile_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -5481,23 +5485,6 @@ mod tests {
         assert!(sentinels.iter().all(|sentinel| sentinel[31] & 1 == 0));
         sentinels.sort_unstable();
         assert!(sentinels.windows(2).all(|pair| pair[0] != pair[1]));
-    }
-
-    #[test]
-    fn gas_text_is_not_part_of_the_abi_surface_hash() {
-        let canonical = &syscalls_doc_gen::DOCS[0];
-        let changed_gas = SyscallDoc {
-            number: canonical.number,
-            args: canonical.args,
-            ret: canonical.ret,
-            gas: "a deliberately different gas schedule",
-        };
-        let canonical_surface =
-            collect_abi_syscall_surface(&[canonical.number], std::slice::from_ref(canonical))
-                .expect("single canonical row");
-        let changed_surface = collect_abi_syscall_surface(&[canonical.number], &[changed_gas])
-            .expect("single altered-gas row");
-        assert_eq!(canonical_surface, changed_surface);
     }
 
     #[test]

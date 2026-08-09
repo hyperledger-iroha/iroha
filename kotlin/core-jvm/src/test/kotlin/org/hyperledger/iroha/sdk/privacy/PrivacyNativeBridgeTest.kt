@@ -187,15 +187,11 @@ class PrivacyNativeBridgeTest {
     }
 
     @Test
-    fun compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesWhenAvailable() {
-        val available = PrivacyNativeBridge.isNativeAvailable()
-        if (System.getenv("IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE") == "1") {
-            assertTrue(
-                available,
-                "ABI-21 connect_norito_bridge with compiled-profile catalog JNI exports is required",
-            )
-        }
-        if (!available) return
+    fun compiledProfileCatalogRoundTripsAndRejectsAdversarialBytes() {
+        assertTrue(
+            PrivacyNativeBridge.isNativeAvailable(),
+            "ABI-21 connect_norito_bridge with compiled-profile catalog JNI exports is required",
+        )
 
         val canonical = PrivacyNativeBridge.compiledProfileCatalogV1()
         assertTrue(canonical.isNotEmpty())
@@ -260,15 +256,11 @@ class PrivacyNativeBridgeTest {
     }
 
     @Test
-    fun exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesWhenAvailable() {
-        val available = PrivacyNativeBridge.isNativeAvailable()
-        if (System.getenv("IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE") == "1") {
-            assertTrue(
-                available,
-                "ABI-21 connect_norito_bridge with exact-12 fixture JNI exports is required",
-            )
-        }
-        if (!available) return
+    fun exact12FixtureBundleRoundTripsAndRejectsAdversarialBytes() {
+        assertTrue(
+            PrivacyNativeBridge.isNativeAvailable(),
+            "ABI-21 connect_norito_bridge with exact-12 fixture JNI exports is required",
+        )
 
         val fetched = PrivacyNativeBridge.exact12FixtureBundleV1()
         val canonical = fetched.copyOf()

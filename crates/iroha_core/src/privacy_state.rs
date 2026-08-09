@@ -1826,7 +1826,7 @@ pub(crate) fn load_privacy_zk_x509_certificate_policy_v1(
 }
 
 /// Load the current self-chained signed-CRL record for one policy lineage.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn load_privacy_zk_x509_crl_v1(
     trust_anchor_id: PrivacyIssuerIdV1,
     policy_id: PrivacyPolicyIdV1,
@@ -2669,60 +2669,7 @@ pub(crate) fn load_privacy_zk_ams_registry_snapshot_v1(
     })
 }
 
-fn fcmp_output_to_native_v1(
-    output: PrivacyFcmpOutputTupleV1,
-) -> Result<crate::privacy_engines::fcmp_plus_plus::FcmpOutputTupleV1, &'static str> {
-    crate::privacy_engines::fcmp_plus_plus::FcmpOutputTupleV1::new(
-        output.output_key,
-        output.linking_tag_generator,
-        output.amount_commitment,
-    )
-    .map_err(|_| "FCMP++ output tuple is not a canonical prime-order Edwards tuple")
-}
-
-fn fcmp_output_from_native_v1(
-    output: crate::privacy_engines::fcmp_plus_plus::FcmpOutputTupleV1,
-) -> PrivacyFcmpOutputTupleV1 {
-    let (output_key, linking_tag_generator, amount_commitment) = output.components();
-    PrivacyFcmpOutputTupleV1 {
-        output_key,
-        linking_tag_generator,
-        amount_commitment,
-    }
-}
-
-fn fcmp_root_to_native_v1(
-    root: PrivacyFcmpTreeRootV1,
-) -> Result<crate::privacy_engines::fcmp_plus_plus::FcmpTreeRootV1, &'static str> {
-    crate::privacy_engines::fcmp_plus_plus::FcmpTreeRootV1::new(root.layers, root.point)
-        .map_err(|_| "FCMP++ root is not canonical for its layer-selected curve")
-}
-
-fn fcmp_root_from_native_v1(
-    root: crate::privacy_engines::fcmp_plus_plus::FcmpTreeRootV1,
-) -> PrivacyFcmpTreeRootV1 {
-    PrivacyFcmpTreeRootV1 {
-        layers: root.layers(),
-        point: root.point(),
-    }
-}
-
-/// Validator-owned alternating Selene/Helios frontier for one FCMP++ pool.
-///
-/// The complete typed root, active `(O, I, C)` branch, and every mixed-radix
-/// level are durable. Restore validates the native frontier and independently
-/// rebuilds it from the complete position-bound output registry.
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
-#[norito(deny_unknown_fields)]
-pub struct PrivacyFcmpAccumulatorStateV1 {
-    namespace: PrivacyNamespaceV1,
-    bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1,
-    epoch: u64,
-    root: PrivacyFcmpTreeRootV1,
-    tree_size: u64,
-    active_outputs: Vec<PrivacyFcmpOutputTupleV1>,
-    levels: Vec<Vec<[u8; 32]>>,
-}
+include!("privacy_state/fcmp_state.rs");
 
 impl PrivacyFcmpAccumulatorStateV1 {
     fn bootstrap(
@@ -6176,8 +6123,8 @@ impl PrivacyNullifierKeyV1 {
     }
 
     /// Return the exact X.509 policy namespace and certificate nullifier.
-    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
+    #[cfg(test)]
     pub(crate) const fn zk_x509_certificate_identity(
         self,
     ) -> Option<(PrivacyNamespaceV1, PrivacyNullifierV1)> {
@@ -6195,8 +6142,8 @@ impl PrivacyNullifierKeyV1 {
     }
 
     /// Return the proof-managed pool namespace and nullifier, if present.
-    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
+    #[cfg(test)]
     pub(crate) const fn proof_managed_identity(
         self,
     ) -> Option<(PrivacyNamespaceV1, PrivacyNullifierV1)> {
@@ -6214,8 +6161,8 @@ impl PrivacyNullifierKeyV1 {
     }
 
     /// Return the exact FCMP++ namespace and typed key image, if present.
-    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
+    #[cfg(test)]
     pub(crate) const fn fcmp_identity(self) -> Option<(PrivacyNamespaceV1, PrivacyFcmpKeyImageV1)> {
         match self {
             Self::FcmpKeyImage {
@@ -6258,8 +6205,8 @@ impl PrivacyNullifierKeyV1 {
     }
 
     /// Ordered bounds covering consumed certificate nullifiers in one X.509 policy.
-    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn zk_x509_certificate_nullifier_range(
         namespace: PrivacyNamespaceV1,
     ) -> core::ops::RangeInclusive<Self> {
@@ -6670,8 +6617,8 @@ impl PrivacyCommitmentKeyV1 {
     }
 
     /// Return the proof-managed pool namespace, if this key belongs to one.
-    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
+    #[cfg(test)]
     pub(crate) const fn proof_managed_namespace(self) -> Option<PrivacyNamespaceV1> {
         match self {
             Self::ProofManagedPoolConfig { namespace }
@@ -9788,7 +9735,7 @@ mod tests {
                 .collect(),
         });
         let issuer_public_matrix =
-            BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(first_column)
+            BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&first_column)
                 .expect("canonical degree-512 multiplication matrix");
         let mut policy = BootleLanternIssuerPolicyV1 {
             issuer_id: PrivacyIssuerIdV1::new(nonzero(issuer_byte)),
@@ -16166,132 +16113,5 @@ mod tests {
         );
     }
 
-    #[test]
-    fn compiled_limits_keep_bounded_root_history() {
-        assert_eq!(
-            PrivacyConsensusLimitsV1::taira_default().retained_root_count,
-            2_048
-        );
-    }
-
-    #[test]
-    fn root_history_prunes_independently_per_namespace() {
-        let mut roots = Storage::new();
-        let record = root_provenance();
-        let independent_namespace = pgc_namespace(0xE1);
-        for epoch in 1..=2_048 {
-            let root_byte = (epoch % 251 + 1) as u8;
-            roots.insert(
-                x509_root_key(
-                    PrivacyRootRoleV1::CertificateAuthorityMembership,
-                    epoch,
-                    root_byte,
-                ),
-                record,
-            );
-            roots.insert(
-                PrivacyRootKeyV1::new(
-                    independent_namespace,
-                    PrivacyRootRoleV1::PgcAccountState,
-                    epoch,
-                    PrivacyRootV1::new(nonzero(root_byte)),
-                )
-                .expect("independent root key"),
-                record,
-            );
-        }
-
-        let added = x509_root_key(PrivacyRootRoleV1::CertificateAuthorityMembership, 2_049, 43);
-        let removals = plan_privacy_root_history_update_v1(&roots.view(), &[added], 2_048)
-            .expect("valid plan");
-
-        assert_eq!(
-            removals,
-            vec![x509_root_key(
-                PrivacyRootRoleV1::CertificateAuthorityMembership,
-                1,
-                2
-            )]
-        );
-        assert!(
-            roots
-                .view()
-                .get(
-                    &PrivacyRootKeyV1::new(
-                        independent_namespace,
-                        PrivacyRootRoleV1::PgcAccountState,
-                        1,
-                        PrivacyRootV1::new(nonzero(2)),
-                    )
-                    .expect("independent root key")
-                )
-                .is_some(),
-            "planning one namespace must not prune another namespace"
-        );
-    }
-
-    #[test]
-    fn root_history_rejects_replays_epoch_conflicts_and_stale_epochs() {
-        let mut roots = Storage::new();
-        roots.insert(
-            x509_root_key(PrivacyRootRoleV1::CertificateAuthorityMembership, 7, 70),
-            root_provenance(),
-        );
-
-        let exact_replay = x509_root_key(PrivacyRootRoleV1::CertificateAuthorityMembership, 7, 70);
-        assert!(matches!(
-            plan_privacy_root_history_update_v1(&roots.view(), &[exact_replay], 8),
-            Err(PrivacyRootHistoryErrorV1::ExistingRoot { key }) if key == exact_replay
-        ));
-
-        assert!(matches!(
-            plan_privacy_root_history_update_v1(
-                &roots.view(),
-                &[x509_root_key(
-                    PrivacyRootRoleV1::CertificateAuthorityMembership,
-                    7,
-                    71,
-                )],
-                8,
-            ),
-            Err(PrivacyRootHistoryErrorV1::EpochConflict { epoch: 7, .. })
-        ));
-
-        assert!(matches!(
-            plan_privacy_root_history_update_v1(
-                &roots.view(),
-                &[x509_root_key(
-                    PrivacyRootRoleV1::CertificateAuthorityMembership,
-                    6,
-                    60,
-                )],
-                8,
-            ),
-            Err(PrivacyRootHistoryErrorV1::NonMonotonicEpoch {
-                latest_epoch: 7,
-                added_epoch: 6,
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn root_history_rejects_duplicate_and_over_capacity_effects() {
-        let roots = Storage::new();
-        let duplicate = x509_root_key(PrivacyRootRoleV1::CertificateAuthorityMembership, 1, 10);
-        assert!(matches!(
-            plan_privacy_root_history_update_v1(&roots.view(), &[duplicate, duplicate], 8),
-            Err(PrivacyRootHistoryErrorV1::DuplicateAddedRoot { key }) if key == duplicate
-        ));
-
-        let additions = [
-            x509_root_key(PrivacyRootRoleV1::CertificateAuthorityMembership, 1, 10),
-            x509_root_key(PrivacyRootRoleV1::CertificateAuthorityMembership, 2, 20),
-            x509_root_key(PrivacyRootRoleV1::CertificateAuthorityMembership, 3, 30),
-        ];
-        assert!(matches!(
-            plan_privacy_root_history_update_v1(&roots.view(), &additions, 2),
-            Err(PrivacyRootHistoryErrorV1::AddedRootsExceedRetention { count: 3, max: 2 })
-        ));
-    }
+    include!("privacy_state_root_history_tests.rs");
 }

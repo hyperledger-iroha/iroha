@@ -173,10 +173,12 @@ implemented helpers and the remaining service gates.
   report/weekly-rollup/settlement-receipt publication freshness, publication
   failures, payload throughput, rollup lag, receipt/report lag, and Governance
   DAG backlog.
-- `POST /v1/sorafs/appeals/finance/reports` and
-  `POST /v1/sorafs/appeals/finance/weekly-rollups` require canonical
-  `X-Iroha-*` request authentication and publish validated report/rollup JSON
-  into the configured local Governance DAG publisher.
+- Caller-supplied `POST /v1/sorafs/appeals/finance/reports` and
+  `POST /v1/sorafs/appeals/finance/weekly-rollups` are intentionally absent.
+  Canonical request authentication proves only the caller identity; it does not
+  make caller-provided finance totals authoritative. Report and rollup
+  publication remains blocked on a supervised worker that derives every value
+  from one immutable finalized view and obtains the configured external signer.
 - `POST /v1/sorafs/appeals/finance/deposits` requires canonical `X-Iroha-*`
   request authentication, verifies that `payer_account` matches the
   authenticated account, derives a stable appeal escrow id from the case,
@@ -344,10 +346,6 @@ The app API publishes the deterministic baseline through JSON endpoints:
   `settled`, or `mismatch` with expected and observed lifecycle/remaining
   amounts, mismatch details, and `reconciliation_digest_hex` for deterministic
   audit comparison across operators or peers.
-- `POST /v1/sorafs/appeals/finance/reports` accepts a
-  `SoraFsAppealFinanceReportV1` JSON payload and publishes it to the configured
-  local Governance DAG filesystem/runtime publication pipeline. The request must
-  be signed with canonical app authentication.
 - `GET /v1/sorafs/appeals/finance/reports` returns the local published report
   count, outcome summaries, distinct case count, juror payout and no-show
   counts, finance totals, latest publication timestamp, and matching
@@ -358,9 +356,10 @@ The app API publishes the deterministic baseline through JSON endpoints:
   timestamp, and matching publish-index entries. The response includes
   published/returned counts, applied `limit`, and a truncation flag for the
   bounded `entries` array.
-- `POST /v1/sorafs/appeals/finance/weekly-rollups` accepts a
-  `SoraFsAppealFinanceWeeklyRollupV1` JSON payload and publishes it through the
-  same authenticated local Governance DAG pipeline.
+- Finance reports and weekly rollups are not accepted from public callers.
+  Weekly totals must be derived server-side from the exact authenticated report
+  set after finalized reconciliation; unavailable, stale, revoked, substituted,
+  or test-marked signers must leave the publication outbox unchanged.
 
 Example quote request:
 

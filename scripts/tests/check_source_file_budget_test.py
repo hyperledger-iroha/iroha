@@ -140,15 +140,29 @@ def test_source_line_count_uses_logical_lines_and_rejects_symlinks(
         MODULE.source_line_count(tmp_path, "link.rs")
 
 
-def test_tracked_paths_uses_the_candidate_tree(
+def test_tracked_paths_uses_the_complete_nonignored_candidate_tree(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     (tmp_path / "present.rs").write_text("//! Present.\n", encoding="utf-8")
-    monkeypatch.setattr(
-        MODULE.subprocess,
-        "check_output",
-        lambda *_args, **_kwargs: b"missing.rs\0present.rs\0",
-    )
+    observed: dict[str, object] = {}
+
+    def check_output(arguments: list[str], *, cwd: Path) -> bytes:
+        observed["arguments"] = arguments
+        observed["cwd"] = cwd
+        return b"missing.rs\0present.rs\0"
+
+    monkeypatch.setattr(MODULE.subprocess, "check_output", check_output)
 
     assert MODULE.tracked_paths(tmp_path) == ["present.rs"]
+    assert observed == {
+        "arguments": [
+            "git",
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ],
+        "cwd": tmp_path,
+    }

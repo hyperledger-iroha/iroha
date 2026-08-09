@@ -782,6 +782,7 @@ mod tests {
         OrderbookTransactionContextV1, OrderbookTransactionForwarder,
         OrderbookTransactionForwarderPolicyV1,
     };
+    use tempfile::TempDir;
 
     use super::*;
 
@@ -842,16 +843,21 @@ mod tests {
         }
     }
 
-    fn forwarder() -> OrderbookTransactionForwarder {
-        OrderbookTransactionForwarder::in_memory(OrderbookTransactionForwarderPolicyV1 {
-            max_pending: 16,
-            max_completed: 16,
-            max_dead_letters: 16,
-            max_attempts: 3,
-            max_transaction_bytes: 512 * 1024,
-            checkpoint_max_bytes: 4 * 1024 * 1024,
-        })
-        .expect("forwarder")
+    fn forwarder() -> (OrderbookTransactionForwarder, TempDir) {
+        let state_dir = tempfile::tempdir().expect("orderbook forwarder state directory");
+        let forwarder = OrderbookTransactionForwarder::open(
+            state_dir.path(),
+            OrderbookTransactionForwarderPolicyV1 {
+                max_pending: 16,
+                max_completed: 16,
+                max_dead_letters: 16,
+                max_attempts: 3,
+                max_transaction_bytes: 512 * 1024,
+                checkpoint_max_bytes: 4 * 1024 * 1024,
+            },
+        )
+        .expect("durable orderbook forwarder");
+        (forwarder, state_dir)
     }
 
     fn match_operation(context: &OrderbookTransactionContextV1) -> OrderbookOperationV1 {
@@ -939,7 +945,7 @@ mod tests {
         OrderbookTransactionPendingV1,
         OrderbookTransactionSigningRequestV1,
     ) {
-        let forwarder = forwarder();
+        let (forwarder, _state_dir) = forwarder();
         let operation_id = enqueue_test_operation(&forwarder, operation, context)
             .expect("enqueue")
             .operation_id();
@@ -1170,7 +1176,7 @@ mod tests {
             },
         );
 
-        let duplicate = forwarder();
+        let (duplicate, _duplicate_state_dir) = forwarder();
         let first =
             enqueue_test_operation(&duplicate, operation.clone(), &context).expect("first enqueue");
         let replay =

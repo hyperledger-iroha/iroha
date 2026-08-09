@@ -146,4 +146,11 @@ test("appeal-finance validation wrapper rejects unsafe boundary inputs", () => {
       }),
     /safe integer/u,
   );
+  assert.throws(
+    () =>
+      validateAppealFinanceCancelAssetLock(canonical, {
+        generated_at: 1,
+      }),
+    /unsupported fields/u,
+  );
 });

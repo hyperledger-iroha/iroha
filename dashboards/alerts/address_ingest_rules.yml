@@ -3,7 +3,7 @@ groups:
     interval: 1m
     rules:
       - alert: AddressLocal12Collision
-        expr: sum by (context) (increase(torii_address_collision_total{kind="local12_digest",context!~"/tests/.*"}[5m])) > bool 0
+        expr: sum by (context) (increase(torii_address_collision_total{kind="local12_digest",context!~"/tests/.*"}[15m])) > 0
         for: 5m
         labels:
           severity: page
@@ -14,7 +14,7 @@ groups:
             Halt manifest promotions, audit the Local-12 registry entry, and follow the collision
             playbook before resuming CI/CD rollouts.
       - alert: AddressLocal12Traffic
-        expr: sum by (context) (increase(torii_address_domain_total{domain_kind="local12",context!~"/tests/.*"}[15m])) > bool 0
+        expr: sum by (context) (increase(torii_address_domain_total{domain_kind="local12",context!~"/tests/.*"}[15m])) > 0
         for: 10m
         labels:
           severity: page

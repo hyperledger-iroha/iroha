@@ -61,6 +61,9 @@ function createPackedLayout({ includeNodeTypes }) {
   fs.cpSync(path.join(PACKAGE_ROOT, "dist"), path.join(packagePath, "dist"), {
     recursive: true,
   });
+  fs.cpSync(path.join(PACKAGE_ROOT, "src"), path.join(packagePath, "src"), {
+    recursive: true,
+  });
   fs.symlinkSync(
     path.join(PACKAGE_ROOT, "node_modules", "buffer"),
     path.join(nodeModules, "buffer"),
@@ -243,6 +246,7 @@ test("published recipe documentation exactly matches the portable allowlist", ()
 test("package smoke rejects every non-portable or missing required recipe", () => {
   const requiredPaths = [
     "package.json",
+    "browser.d.ts",
     "ivm-artifact.d.ts",
     "kotodama-compiler.d.ts",
     "privacy-capabilities.d.ts",
@@ -423,8 +427,10 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
   const indexOfSubpath = (subpath) => Object.keys(packageJson.exports).indexOf(subpath);
   const noritoIndex = indexOfSubpath("./norito");
   const cryptoIndex = indexOfSubpath("./crypto");
+  const browserIndex = indexOfSubpath("./browser");
   assert.notEqual(noritoIndex, -1);
   assert.notEqual(cryptoIndex, -1);
+  assert.notEqual(browserIndex, -1);
   const { tempRoot } = createPackedLayout({ includeNodeTypes: true });
   try {
     const imports = Object.keys(packageJson.exports).map((subpath, index) => {
@@ -437,13 +443,13 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
       [
         ...imports,
         `import * as RootSdk from ${JSON.stringify(PACKAGE_NAME)};`,
-        `import { Crypto, Norito, NumericV1, Torii, ToriiBrowserClient, ToriiClient, CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1, buildCancelAssetLockInstruction, buildSetAssetTransferAvailabilityInstruction, decodeCancelAssetLockV1, encodeCancelAssetLockV1, validateAppealFinanceCancelAssetLock, type AssetTransferAvailability, type CancelAssetLockInstruction, type CancelAssetLockV1, type ContractEntrypointValueKindName, type CryptoAlgorithm, type IdentifierClaimLookupResponse, type IdentifierPolicyListResponse, type IdentifierResolutionReceipt, type PrivacyEngineIdV1, type PrivacyProofSystemIdV1, type RamLfeExecuteResponse, type RamLfeOutputOpening, type SetAssetTransferAvailabilityInstruction, type SorafsValidationOutcome, type ToriiRepoAgreement, type ToriiVerifierBackendLabelV1 } from ${JSON.stringify(PACKAGE_NAME)};`,
+        `import { Crypto, Norito, NumericV1, Torii, ToriiBrowserClient, ToriiClient, CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1, buildCancelAssetLockInstruction, buildSetAssetTransferAvailabilityInstruction, decodeCancelAssetLockV1, encodeCancelAssetLockV1, validateAppealFinanceCancelAssetLock, type AssetTransferAvailability, type CancelAssetLockInstruction, type CancelAssetLockV1, type CancelAssetLockV1Archive, type ContractEntrypointValueKindName, type CryptoAlgorithm, type IdentifierClaimLookupResponse, type IdentifierPolicyListResponse, type IdentifierResolutionReceipt, type PrivacyEngineIdV1, type PrivacyProofSystemIdV1, type RamLfeExecuteResponse, type RamLfeOutputOpening, type SetAssetTransferAvailabilityInstruction, type SorafsValidationOutcome, type ToriiRepoAgreement, type ToriiVerifierBackendLabelV1 } from ${JSON.stringify(PACKAGE_NAME)};`,
         `import { getPrivacyCapabilitiesV1, parsePrivacyCapabilitySnapshotV1, type PrivacyCapabilitySnapshotV1 } from ${JSON.stringify(`${PACKAGE_NAME}/privacy-capabilities`)};`,
         'const algorithm: CryptoAlgorithm = "ed25519";',
         "const cancelAssetLockMaxLockIdUtf8BytesV1: 4096 = CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1;",
         'const cancelAssetLock: CancelAssetLockInstruction = buildCancelAssetLockInstruction({ lockId: "merchant-lock-001", expectedRemainingAmount: "15" });',
         'const bareCancelAssetLock: CancelAssetLockV1 = { escrow_id: "hash:73CCD4E0DD69AD434DB75056B600AA4F74C8FC5556B11BDC799DFDB7EA29851F#434B", expected_remaining_amount: "20" };',
-        "const bareCancelAssetLockArchive: Buffer = encodeCancelAssetLockV1(bareCancelAssetLock);",
+        "const bareCancelAssetLockArchive: CancelAssetLockV1Archive = encodeCancelAssetLockV1(bareCancelAssetLock);",
         "const decodedBareCancelAssetLock: CancelAssetLockV1 = decodeCancelAssetLockV1(bareCancelAssetLockArchive);",
         "const appealFinanceOutcome: SorafsValidationOutcome = validateAppealFinanceCancelAssetLock(bareCancelAssetLockArchive, { label: 'cancel_asset_lock_v1.to', generatedAtUnix: 41n });",
         "// @ts-expect-error bare V1 quantities must be canonical strings.",
@@ -457,6 +463,9 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         "const toriiConstructor: typeof ToriiClient = Torii.ToriiClient;",
         `const encodeInstruction: typeof export${noritoIndex}.noritoEncodeInstruction = Norito.noritoEncodeInstruction;`,
         `const validateFrame: typeof export${noritoIndex}.validateNoritoFrame = Norito.validateNoritoFrame;`,
+        `const exact12Decoder: typeof export${noritoIndex}.noritoDecodePrivacyExact12FixtureBundleBase64V1 = Norito.noritoDecodePrivacyExact12FixtureBundleBase64V1;`,
+        "// @ts-expect-error fixture-only Exact12 codecs are not retained by the broad browser facade.",
+        `void export${browserIndex}.noritoDecodePrivacyExact12FixtureBundleBase64V1;`,
         `const generateKeyPair: typeof export${cryptoIndex}.generateKeyPair = Crypto.generateKeyPair;`,
         "const privacySnapshot: PrivacyCapabilitySnapshotV1 = parsePrivacyCapabilitySnapshotV1({});",
         "const privacyCommittedHeight: bigint = privacySnapshot.committed_height;",
@@ -521,7 +530,7 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         "// @ts-expect-error Norito does not expose crypto helpers.",
         "void Norito.generateKeyPair;",
         `void [${bindings.join(", ")}];`,
-        "void algorithm; void cancelAssetLock; void toriiConstructor; void encodeInstruction; void validateFrame; void generateKeyPair; void privacySnapshot; void privacyNodeResult; void privacyBrowserResult; void privacyProofSystems; void privacyEngines; void retiredPrivacyProofSystem; void caseShiftedPrivacyProofSystem; void paddedPrivacyProofSystem; void retiredPrivacyEngine; void caseShiftedPrivacyEngine; void confusablePrivacyEngine; void repoLifecycle; void verifierBackend; void retiredVerifierBackend; void caseShiftedVerifierBackend; void paddedVerifierBackend; void confusableVerifierBackend; void quantityFrame; void quantityEnvelope; void quantityJson; void rootNumericKinds; void retiredRootAmount; void retiredRootU128; void checkIdentifierApiTypes;",
+        "void algorithm; void cancelAssetLock; void toriiConstructor; void encodeInstruction; void validateFrame; void exact12Decoder; void generateKeyPair; void privacySnapshot; void privacyNodeResult; void privacyBrowserResult; void privacyProofSystems; void privacyEngines; void retiredPrivacyProofSystem; void caseShiftedPrivacyProofSystem; void paddedPrivacyProofSystem; void retiredPrivacyEngine; void caseShiftedPrivacyEngine; void confusablePrivacyEngine; void repoLifecycle; void verifierBackend; void retiredVerifierBackend; void caseShiftedVerifierBackend; void paddedVerifierBackend; void confusableVerifierBackend; void quantityFrame; void quantityEnvelope; void quantityJson; void rootNumericKinds; void retiredRootAmount; void retiredRootU128; void checkIdentifierApiTypes;",
       ].join("\n"),
       "utf8",
     );

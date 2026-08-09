@@ -1239,142 +1239,168 @@ fn is_supported_state_map_key(ty: &EmbeddedStateType) -> bool {
     )
 }
 
-#[allow(
-    clippy::too_many_lines,
-    reason = "the iterative validator keeps every EmbeddedStateType rule in one exhaustive match"
-)]
+enum PendingStateTypeValidation<'a> {
+    Type {
+        ty: &'a EmbeddedStateType,
+        allow_state_map: bool,
+    },
+    StructFields {
+        struct_name: &'a str,
+        fields: &'a [ivm_abi::metadata::EmbeddedStateFieldDescriptor],
+        index: usize,
+        field_names: BTreeSet<&'a str>,
+    },
+}
+
 fn validate_state_type(
     ty: &EmbeddedStateType,
     allow_state_map: bool,
 ) -> Result<(), ContractArtifactError> {
-    enum Pending<'a> {
-        Type {
-            ty: &'a EmbeddedStateType,
-            allow_state_map: bool,
-        },
-        StructFields {
-            struct_name: &'a str,
-            fields: &'a [ivm_abi::metadata::EmbeddedStateFieldDescriptor],
-            index: usize,
-            field_names: BTreeSet<&'a str>,
-        },
-    }
-
-    let mut pending = vec![Pending::Type {
+    let mut pending = vec![PendingStateTypeValidation::Type {
         ty,
         allow_state_map,
     }];
     while let Some(item) = pending.pop() {
-        match item {
-            Pending::StructFields {
-                struct_name,
-                fields,
-                index,
-                mut field_names,
-            } => {
-                let Some(field) = fields.get(index) else {
-                    continue;
-                };
-                if !is_canonical_source_identifier(&field.name) {
-                    return Err(ContractArtifactError::invalid(format!(
-                        "CNTR struct `{struct_name}` contains noncanonical field `{}`",
-                        field.name
-                    )));
-                }
-                if !field_names.insert(field.name.as_str()) {
-                    return Err(ContractArtifactError::invalid(format!(
-                        "CNTR struct `{struct_name}` contains duplicate field `{}`",
-                        field.name
-                    )));
-                }
-                pending.push(Pending::StructFields {
-                    struct_name,
-                    fields,
-                    index: index + 1,
-                    field_names,
-                });
-                pending.push(Pending::Type {
-                    ty: &field.ty,
-                    allow_state_map: false,
-                });
+        validate_pending_state_type(item, &mut pending)?;
+    }
+    Ok(())
+}
+
+fn validate_pending_state_type<'a>(
+    item: PendingStateTypeValidation<'a>,
+    pending: &mut Vec<PendingStateTypeValidation<'a>>,
+) -> Result<(), ContractArtifactError> {
+    match item {
+        PendingStateTypeValidation::StructFields {
+            struct_name,
+            fields,
+            index,
+            field_names,
+        } => validate_pending_struct_fields(struct_name, fields, index, field_names, pending),
+        PendingStateTypeValidation::Type {
+            ty,
+            allow_state_map,
+        } => schedule_nested_state_types(ty, allow_state_map, pending),
+    }
+}
+
+fn validate_pending_struct_fields<'a>(
+    struct_name: &'a str,
+    fields: &'a [ivm_abi::metadata::EmbeddedStateFieldDescriptor],
+    index: usize,
+    mut field_names: BTreeSet<&'a str>,
+    pending: &mut Vec<PendingStateTypeValidation<'a>>,
+) -> Result<(), ContractArtifactError> {
+    let Some(field) = fields.get(index) else {
+        return Ok(());
+    };
+    if !is_canonical_source_identifier(&field.name) {
+        return Err(ContractArtifactError::invalid(format!(
+            "CNTR struct `{struct_name}` contains noncanonical field `{}`",
+            field.name
+        )));
+    }
+    if !field_names.insert(field.name.as_str()) {
+        return Err(ContractArtifactError::invalid(format!(
+            "CNTR struct `{struct_name}` contains duplicate field `{}`",
+            field.name
+        )));
+    }
+    pending.push(PendingStateTypeValidation::StructFields {
+        struct_name,
+        fields,
+        index: index + 1,
+        field_names,
+    });
+    pending.push(PendingStateTypeValidation::Type {
+        ty: &field.ty,
+        allow_state_map: false,
+    });
+    Ok(())
+}
+
+fn schedule_nested_state_types<'a>(
+    ty: &'a EmbeddedStateType,
+    allow_state_map: bool,
+    pending: &mut Vec<PendingStateTypeValidation<'a>>,
+) -> Result<(), ContractArtifactError> {
+    match ty {
+        EmbeddedStateType::Tuple(items) => {
+            if items.len() < 2 {
+                return Err(ContractArtifactError::invalid(
+                    "CNTR durable tuples require at least two elements",
+                ));
             }
-            Pending::Type {
-                ty,
-                allow_state_map,
-            } => match ty {
-                EmbeddedStateType::Tuple(items) => {
-                    if items.len() < 2 {
-                        return Err(ContractArtifactError::invalid(
-                            "CNTR durable tuples require at least two elements",
-                        ));
-                    }
-                    pending.extend(items.iter().rev().map(|item| Pending::Type {
+            pending.extend(
+                items
+                    .iter()
+                    .rev()
+                    .map(|item| PendingStateTypeValidation::Type {
                         ty: item,
                         allow_state_map: false,
-                    }));
-                }
-                EmbeddedStateType::Struct { name, fields } => {
-                    if !is_canonical_source_type_declaration_name(name) {
-                        return Err(ContractArtifactError::invalid(format!(
-                            "CNTR struct `{name}` is not a canonical Kotodama V1 identifier"
-                        )));
-                    }
-                    if fields.is_empty() {
-                        return Err(ContractArtifactError::invalid(format!(
-                            "CNTR struct `{name}` must contain at least one field"
-                        )));
-                    }
-                    pending.push(Pending::StructFields {
-                        struct_name: name,
-                        fields,
-                        index: 0,
-                        field_names: BTreeSet::new(),
-                    });
-                }
-                EmbeddedStateType::StateMap { key, value } => {
-                    if !allow_state_map {
-                        return Err(ContractArtifactError::invalid(
-                            "CNTR StateMap is a top-level durable collection and cannot be nested",
-                        ));
-                    }
-                    if !is_supported_state_map_key(key) {
-                        return Err(ContractArtifactError::invalid(
-                            "CNTR StateMap key must be a supported canonical scalar type",
-                        ));
-                    }
-                    pending.push(Pending::Type {
-                        ty: value,
-                        allow_state_map: false,
-                    });
-                }
-                EmbeddedStateType::Option(value) => pending.push(Pending::Type {
-                    ty: value,
-                    allow_state_map: false,
-                }),
-                EmbeddedStateType::Result { ok, err } => {
-                    pending.push(Pending::Type {
-                        ty: err,
-                        allow_state_map: false,
-                    });
-                    pending.push(Pending::Type {
-                        ty: ok,
-                        allow_state_map: false,
-                    });
-                }
-                EmbeddedStateType::List { element, capacity } => {
-                    if !(1..=64).contains(capacity) {
-                        return Err(ContractArtifactError::invalid(
-                            "CNTR List capacity must be in 1..=64",
-                        ));
-                    }
-                    pending.push(Pending::Type {
-                        ty: element,
-                        allow_state_map: false,
-                    });
-                }
-                _ => {}
-            },
+                    }),
+            );
         }
+        EmbeddedStateType::Struct { name, fields } => {
+            if !is_canonical_source_type_declaration_name(name) {
+                return Err(ContractArtifactError::invalid(format!(
+                    "CNTR struct `{name}` is not a canonical Kotodama V1 identifier"
+                )));
+            }
+            if fields.is_empty() {
+                return Err(ContractArtifactError::invalid(format!(
+                    "CNTR struct `{name}` must contain at least one field"
+                )));
+            }
+            pending.push(PendingStateTypeValidation::StructFields {
+                struct_name: name,
+                fields,
+                index: 0,
+                field_names: BTreeSet::new(),
+            });
+        }
+        EmbeddedStateType::StateMap { key, value } => {
+            if !allow_state_map {
+                return Err(ContractArtifactError::invalid(
+                    "CNTR StateMap is a top-level durable collection and cannot be nested",
+                ));
+            }
+            if !is_supported_state_map_key(key) {
+                return Err(ContractArtifactError::invalid(
+                    "CNTR StateMap key must be a supported canonical scalar type",
+                ));
+            }
+            pending.push(PendingStateTypeValidation::Type {
+                ty: value,
+                allow_state_map: false,
+            });
+        }
+        EmbeddedStateType::Option(value) => pending.push(PendingStateTypeValidation::Type {
+            ty: value,
+            allow_state_map: false,
+        }),
+        EmbeddedStateType::Result { ok, err } => {
+            pending.push(PendingStateTypeValidation::Type {
+                ty: err,
+                allow_state_map: false,
+            });
+            pending.push(PendingStateTypeValidation::Type {
+                ty: ok,
+                allow_state_map: false,
+            });
+        }
+        EmbeddedStateType::List { element, capacity } => {
+            if !(1..=64).contains(capacity) {
+                return Err(ContractArtifactError::invalid(
+                    "CNTR List capacity must be in 1..=64",
+                ));
+            }
+            pending.push(PendingStateTypeValidation::Type {
+                ty: element,
+                allow_state_map: false,
+            });
+        }
+        _ => {}
     }
     Ok(())
 }

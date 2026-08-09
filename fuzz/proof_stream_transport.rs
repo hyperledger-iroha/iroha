@@ -62,7 +62,7 @@ fn canonical_por_sample() -> &'static (usize, PorProof, [u8; 32]) {
         store
             .ingest_bytes(&payload)
             .expect("ingest canonical fuzz PoR fixture");
-        let root = *store.root();
+        let root = *store.por_tree().root();
         let seed = por_request_sample_seed_v1(&canonical_request(), &root)
             .expect("derive request-bound canonical fuzz PoR seed");
         let (flat_index, proof) = store

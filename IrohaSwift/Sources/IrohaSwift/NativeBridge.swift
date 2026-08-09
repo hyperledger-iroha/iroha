@@ -89,7 +89,7 @@ enum NoritoBridgeLoader {
         expectedBridgeAbiVersion(for: currentIdentifier())
     }
     private static let expectedHashes: [String: String] = [
-        "macos-arm64": "e7656ef3a0bd5cf3cdbbef3b709c4fd5689f2fc5d4f9dd1d20b337472eca4cb6",
+        "macos-arm64_x86_64": "e7656ef3a0bd5cf3cdbbef3b709c4fd5689f2fc5d4f9dd1d20b337472eca4cb6",
         "ios-arm64": "32a0bf6953dcb2ef0625ec0c22f7c80505b38bc405c21234f484958b6ebb4dc6",
         "ios-arm64_x86_64-simulator": "87be1e9f98bf46e5d3dd4a6ffaa9dbc6e079559f8e251b590502970a8e447f56"
     ]
@@ -119,6 +119,7 @@ enum NoritoBridgeLoader {
 
     private struct ArtifactManifest {
         let version: String
+        let bridgeAbiVersion: UInt32?
         let hashes: [String: String]
     }
 
@@ -291,6 +292,14 @@ enum NoritoBridgeLoader {
         if let version = manifest?.version, version != expectedVersion {
             return .versionMismatch(path: path, expected: expectedVersion, actual: version)
         }
+        if let manifest,
+           manifest.bridgeAbiVersion != expectedBridgeAbiVersion(for: identifier) {
+            return .abiMismatch(
+                path: path,
+                expected: expectedBridgeAbiVersion(for: identifier),
+                actual: manifest.bridgeAbiVersion
+            )
+        }
         guard let expectedHash = manifest?.hashes[identifier] ?? pinnedHashes[identifier] else {
             return .pathDenied(path: path)
         }
@@ -369,7 +378,11 @@ enum NoritoBridgeLoader {
             return nil
         }
         let hashes = json["hashes"] as? [String: String] ?? [:]
-        return ArtifactManifest(version: version, hashes: hashes)
+        return ArtifactManifest(
+            version: version,
+            bridgeAbiVersion: json["native_bridge_abi_version"] as? UInt32,
+            hashes: hashes
+        )
     }
 
     private static func sha256(url: URL) -> String? {
@@ -391,7 +404,7 @@ enum NoritoBridgeLoader {
 
     static func currentIdentifier() -> String {
         #if os(macOS)
-        return "macos-arm64"
+        return "macos-arm64_x86_64"
         #else
         #if targetEnvironment(simulator)
         return "ios-arm64_x86_64-simulator"
@@ -1235,7 +1248,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafeMutablePointer<UInt>?
     ) -> Int32
 
-    private typealias FreeFn = @convention(c) (UnsafeMutablePointer<UInt8>?) -> Void
+    typealias FreeFn = @convention(c) (UnsafeMutablePointer<UInt8>?) -> Void
     private typealias ChainDiscriminantScopeEnterFn = @convention(c) (UInt16) -> UInt64
     private typealias ChainDiscriminantScopeExitFn = @convention(c) (UInt64) -> Int32
     private typealias SetAccelerationConfigFn = @convention(c) (UnsafeRawPointer?) -> Void
@@ -1417,7 +1430,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong
     ) -> Int32
-
 
     private typealias ConnectGenerateKeypairFn = @convention(c) (
         UnsafeMutablePointer<UInt8>?,
@@ -1636,7 +1648,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     private typealias DecodeControlPongFn = DecodeControlPingFn
 
-    private typealias DaProofSummaryFn = @convention(c) (
+    typealias DaProofSummaryFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
         CUnsignedLong, UInt64,
@@ -1853,7 +1865,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var decodeSignedFn: DecodeSignedFn? = nil
     private var decodeReceiptFn: DecodeReceiptFn? = nil
     private var decodeAssetIdFn: DecodeAssetIdFn? = nil
-    private var freeFn: FreeFn? = nil
+    var freeFn: FreeFn? = nil
     private var chainDiscriminantScopeFns: (
         enter: ChainDiscriminantScopeEnterFn,
         exit: ChainDiscriminantScopeExitFn
@@ -1938,7 +1950,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var sorafsReferenceValidatePdpCommitmentChallengeFn: SorafsReferencePdpPairFn? = nil
     private var sorafsReferenceValidatePdpChallengeProofFn: SorafsReferencePdpPairFn? = nil
     private var sorafsReferenceValidatePdpBundleFn: SorafsReferencePdpBundleFn? = nil
-    private var daProofSummaryFn: DaProofSummaryFn? = nil
+    var daProofSummaryFn: DaProofSummaryFn? = nil
     private var blake3HashFn: Blake3HashFn? = nil
     private var detachedTransactionInspectFn: DetachedTransactionInspectFn? = nil
     private var detachedTransactionFinalizeEd25519Fn: DetachedTransactionFinalizeEd25519Fn? = nil
@@ -6790,7 +6802,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-
     func encodeEnvelopeSignRequestTx(sequence: UInt64, txBytes: Data) -> Data? {
         #if canImport(Darwin)
         guard let encodeEnvelopeSignRequestTxFn,
@@ -8534,73 +8545,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }
     }
     #endif
-}
-
-extension NoritoNativeBridge {
-    func daProofSummary(
-        manifest: Data,
-        payload: Data,
-        options: ToriiDaProofSummaryOptions
-    ) -> Data? {
-        #if canImport(Darwin)
-        guard let daProofSummaryFn = daProofSummaryFn,
-              let freeFn = freeFn else {
-            return nil
-        }
-        guard !manifest.isEmpty, !payload.isEmpty else {
-            return nil
-        }
-
-        var normalizedLeafIndexes = [CUnsignedLong]()
-        normalizedLeafIndexes.reserveCapacity(options.leafIndexes.count)
-        for index in options.leafIndexes {
-            guard index >= 0 else { return nil }
-            normalizedLeafIndexes.append(CUnsignedLong(index))
-        }
-
-        var outputPtr: UnsafeMutablePointer<UInt8>? = nil
-        var outputLen: CUnsignedLong = 0
-        let status = manifest.withUnsafeBytes { manifestBuffer -> Int32 in
-            guard let manifestPtr = manifestBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                return -1
-            }
-            return payload.withUnsafeBytes { payloadBuffer -> Int32 in
-                guard let payloadPtr = payloadBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                    return -1
-                }
-                return normalizedLeafIndexes.withUnsafeBufferPointer { indexesBuffer -> Int32 in
-                    let indexesPtr = indexesBuffer.baseAddress
-                    let indexesLen = CUnsignedLong(indexesBuffer.count)
-                    return daProofSummaryFn(
-                        manifestPtr,
-                        CUnsignedLong(manifest.count),
-                        payloadPtr,
-                        CUnsignedLong(payload.count),
-                        CUnsignedLong(max(options.sampleCount, 0)),
-                        options.sampleSeed,
-                        indexesPtr,
-                        indexesLen,
-                        &outputPtr,
-                        &outputLen
-                    )
-                }
-            }
-        }
-
-        guard status == 0, let summaryPtr = outputPtr else {
-            if let outputPtr {
-                freeFn(outputPtr)
-            }
-            return nil
-        }
-        let data = Data(bytes: summaryPtr, count: Int(outputLen))
-        freeFn(summaryPtr)
-        return data
-        #else
-        return nil
-        #endif
-    }
-
 }
 
 extension NoritoNativeBridge {

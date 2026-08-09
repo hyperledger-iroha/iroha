@@ -26,14 +26,14 @@ class TelemetryObserver(
     }
 
     private fun buildRecord(request: TransportRequest): TelemetryRecord {
-        val authority = request.uri?.authority?.trim() ?: ""
+        val authority = request.uri.authority?.trim() ?: ""
         val authorityHash = if (options.redaction.enabled) {
             options.redaction.hashAuthority(authority).orElse(null)
         } else null
         return TelemetryRecord(
             authorityHash = authorityHash,
             saltVersion = if (options.redaction.enabled) options.redaction.saltVersion else null,
-            route = request.uri?.rawPath,
+            route = request.uri.rawPath,
             method = request.method,
         )
     }

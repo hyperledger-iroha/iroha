@@ -1479,7 +1479,7 @@ impl RuntimeCandidateCausalOrigin {
 
     /// Whether two exact carriers identify one lifecycle despite diagnostic
     /// process-generation retagging.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn same_lifecycle(&self, other: &Self) -> bool {
         self.validate_exact() && other.validate_exact() && self.lifecycle_key == other.lifecycle_key
     }
@@ -1522,6 +1522,98 @@ pub(crate) struct RuntimeLifecycleOwner {
     causal_origin: RuntimeCandidateCausalOrigin,
     lifecycle_ordinal: u128,
     projection_hash: iroha_crypto::Hash,
+}
+
+/// Process-local evidence that one completed service result can enter runtime.
+///
+/// The production worker derives this value only from its retained completion
+/// ownership or exact local-reconstruction queue. It is neither serialized nor
+/// accepted from transport. The complemented ordinal makes accidental mutation
+/// fail closed before the evidence can affect the runnable-owner minimum.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ExactServePredecessorCompletionEvidence {
+    lifecycle_ordinal: u128,
+    lifecycle_ordinal_complement: u128,
+}
+
+impl ExactServePredecessorCompletionEvidence {
+    pub(crate) fn try_new(lifecycle_ordinal: u128) -> Option<Self> {
+        let evidence = Self {
+            lifecycle_ordinal,
+            lifecycle_ordinal_complement: !lifecycle_ordinal,
+        };
+        evidence.validate_exact().then_some(evidence)
+    }
+
+    pub(crate) const fn lifecycle_ordinal(self) -> u128 {
+        self.lifecycle_ordinal
+    }
+
+    pub(crate) const fn validate_exact(self) -> bool {
+        self.lifecycle_ordinal > 0 && self.lifecycle_ordinal_complement == !self.lifecycle_ordinal
+    }
+}
+
+/// Process-local evidence that an exact Serve target acquired a newly
+/// runnable, strictly older runtime prefix after previously observing none.
+///
+/// The witness is neither serialized nor exposed outside the consensus
+/// implementation. One continuous older prefix retains one witness even when
+/// its minimum owner changes; only an observed `no older -> older` transition
+/// for the same target increments `episode`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ExactServePredecessorEpisodeWitness {
+    serve_lifecycle_ordinal: u128,
+    predecessor_lifecycle_ordinal: u128,
+    episode: u128,
+}
+
+impl ExactServePredecessorEpisodeWitness {
+    fn try_new(
+        serve_lifecycle_ordinal: u128,
+        predecessor_lifecycle_ordinal: u128,
+        episode: u128,
+    ) -> Option<Self> {
+        let witness = Self {
+            serve_lifecycle_ordinal,
+            predecessor_lifecycle_ordinal,
+            episode,
+        };
+        witness.validate_exact().then_some(witness)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        serve_lifecycle_ordinal: u128,
+        predecessor_lifecycle_ordinal: u128,
+        episode: u128,
+    ) -> Self {
+        Self::try_new(
+            serve_lifecycle_ordinal,
+            predecessor_lifecycle_ordinal,
+            episode,
+        )
+        .expect("exact Serve predecessor episode test witness must be valid")
+    }
+
+    pub(crate) const fn serve_lifecycle_ordinal(self) -> u128 {
+        self.serve_lifecycle_ordinal
+    }
+
+    pub(crate) const fn predecessor_lifecycle_ordinal(self) -> u128 {
+        self.predecessor_lifecycle_ordinal
+    }
+
+    pub(crate) const fn episode(self) -> u128 {
+        self.episode
+    }
+
+    pub(crate) const fn validate_exact(self) -> bool {
+        self.serve_lifecycle_ordinal > 0
+            && self.predecessor_lifecycle_ordinal > 0
+            && self.predecessor_lifecycle_ordinal < self.serve_lifecycle_ordinal
+            && self.episode > 0
+    }
 }
 
 impl RuntimeLifecycleOwner {
@@ -5293,7 +5385,7 @@ struct BoundedIngress<C> {
 }
 
 impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     fn new(config: RuntimeQueueConfig) -> Self {
         Self::with_lifecycle_ordinals(
             config,
@@ -8021,7 +8113,7 @@ impl BoundedIngress<AdapterCommand> {
     /// suppression. Once the queued occurrence leaves, a later retransmission
     /// may be admitted and checked against the adapter's generation-aware
     /// delivery records in the usual way.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     fn enqueue_authenticated_with_ingress_ownership(
         &mut self,
         tag: EventTag,
@@ -8149,7 +8241,7 @@ impl BoundedIngress<AdapterCommand> {
         self.commit_canonical_body_available(reservation)
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     fn reserve_canonical_body_available(
         &mut self,
         tag: EventTag,
@@ -10286,6 +10378,21 @@ pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     /// An older FIFO owner hit retryable adapter pressure during that episode.
     /// The target must then proceed; retry cannot become an unbounded barrier.
     exact_serve_predecessor_retry_attempted: bool,
+    /// Retained certified-response target used only by the legacy boolean
+    /// predecessor probe. It must never reset the selected-Serve witness state.
+    retained_response_predecessor_target_ordinal: Option<u128>,
+    /// Whether one older FIFO owner already received its bounded attempt for
+    /// the retained-response target.
+    retained_response_predecessor_retry_attempted: bool,
+    /// Whether the last exact-target observation found a physically retained
+    /// strictly older runtime prefix. Retry-unadmitted suppression deliberately
+    /// leaves this set while the restored owner remains present, so repeated
+    /// polls cannot mint another producer episode.
+    exact_serve_predecessor_physically_present: bool,
+    /// Monotone process-local predecessor episode for the current exact target.
+    exact_serve_predecessor_episode: u128,
+    /// Stable witness for the current continuous older prefix.
+    exact_serve_predecessor_witness: Option<ExactServePredecessorEpisodeWitness>,
     fail_closed: bool,
     fail_closed_reason: Option<String>,
 }
@@ -10379,6 +10486,11 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             last_scheduler_ownership: None,
             exact_serve_target_ordinal: None,
             exact_serve_predecessor_retry_attempted: false,
+            retained_response_predecessor_target_ordinal: None,
+            retained_response_predecessor_retry_attempted: false,
+            exact_serve_predecessor_physically_present: false,
+            exact_serve_predecessor_episode: 0,
+            exact_serve_predecessor_witness: None,
             fail_closed: false,
             fail_closed_reason: None,
         };
@@ -11973,6 +12085,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     fn minimum_runnable_lifecycle_ordinal(
         &self,
         now: Instant,
+        completion_evidence: Option<ExactServePredecessorCompletionEvidence>,
     ) -> Result<Option<u128>, EnqueueError> {
         // First validate the complete inventory so excluding passive owners
         // cannot conceal a forged or internally inconsistent capability.
@@ -12014,6 +12127,20 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             {
                 observe(owner)?;
             }
+        }
+        if let Some(evidence) = completion_evidence {
+            if !evidence.validate_exact()
+                || !self
+                    .ingress
+                    .lifecycle_ordinals
+                    .recognizes_minted(evidence.lifecycle_ordinal())
+                    .map_err(|_| EnqueueError::FailClosed)?
+            {
+                return Err(EnqueueError::FailClosed);
+            }
+            let lifecycle_ordinal = evidence.lifecycle_ordinal();
+            minimum =
+                Some(minimum.map_or(lifecycle_ordinal, |ordinal| ordinal.min(lifecycle_ordinal)));
         }
         Ok(minimum)
     }
@@ -12097,7 +12224,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     /// authenticated ingress or derived deferred continuation whose source
     /// occurrence is at or after this continuation's frozen cut is physically
     /// later and cannot resurrect an older logical queue position.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     fn minimum_active_lifecycle_ordinal_for_deferred(
         &self,
         target: &RuntimeDeferredLifecycleOwnership,
@@ -12310,14 +12437,146 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         Ok(false)
     }
 
-    /// Freeze every due clock and compare the complete runtime owner set with
+    /// Freeze every due clock and return the current predecessor episode for
     /// one exact Serve ingress ticket from the shared ordinal source.
     ///
     /// The caller publishes executor-retained owners immediately before this
-    /// query. Returning `true` authorizes one bounded producer episode; it does
-    /// not authorize a loop. A runtime owner equal to the external ticket is a
-    /// source-uniqueness violation and latches fail-closed.
+    /// query. A witness authorizes one bounded producer episode; it does not
+    /// authorize a loop. The witness changes only after this actor observes no
+    /// strictly older owner and subsequently observes one for the same target.
+    /// A runtime owner equal to the external ticket is a source-uniqueness
+    /// violation and latches fail-closed.
+    pub(crate) fn exact_serve_predecessor_episode_witness(
+        &mut self,
+        now: Instant,
+        serve_lifecycle_ordinal: u128,
+        completion_evidence: Option<ExactServePredecessorCompletionEvidence>,
+    ) -> Result<Option<ExactServePredecessorEpisodeWitness>, String> {
+        if self.fail_closed {
+            return Err("Sumeragi v2 runtime is fail-closed".to_owned());
+        }
+        let recognized = match self
+            .ingress
+            .lifecycle_ordinals
+            .recognizes_minted(serve_lifecycle_ordinal)
+        {
+            Ok(recognized) => recognized,
+            Err(reason) => {
+                self.latch_fail_closed(reason.clone());
+                return Err(reason);
+            }
+        };
+        if !recognized {
+            self.latch_fail_closed("exact Serve barrier used an unminted lifecycle ordinal");
+            return Err("Sumeragi v2 exact Serve barrier ordinal was invalid".to_owned());
+        }
+        if self.freeze_due_clock_owners(now).is_err() {
+            self.latch_fail_closed("clock lifecycle ownership could not be frozen for Serve");
+            return Err("Sumeragi v2 clock lifecycle ownership could not be frozen".to_owned());
+        }
+        let collision = match self.active_lifecycle_uses_ordinal(serve_lifecycle_ordinal) {
+            Ok(collision) => collision,
+            Err(_) => {
+                self.latch_fail_closed("runtime lifecycle ownership was invalid for Serve");
+                return Err("Sumeragi v2 runtime lifecycle ownership was invalid".to_owned());
+            }
+        };
+        if collision {
+            self.latch_fail_closed("runtime and Serve claimed one lifecycle ordinal");
+            return Err("Sumeragi v2 lifecycle ordinal ownership collided".to_owned());
+        }
+        if completion_evidence.is_some_and(|evidence| {
+            !evidence.validate_exact() || evidence.lifecycle_ordinal() >= serve_lifecycle_ordinal
+        }) {
+            self.latch_fail_closed(
+                "exact Serve completion evidence was invalid or did not strictly precede its target",
+            );
+            return Err("Sumeragi v2 exact Serve completion evidence was invalid".to_owned());
+        }
+        if self.exact_serve_target_ordinal != Some(serve_lifecycle_ordinal) {
+            self.exact_serve_target_ordinal = Some(serve_lifecycle_ordinal);
+            self.exact_serve_predecessor_retry_attempted = false;
+            self.exact_serve_predecessor_physically_present = false;
+            self.exact_serve_predecessor_episode = 0;
+            self.exact_serve_predecessor_witness = None;
+        }
+        let minimum = match self.minimum_runnable_lifecycle_ordinal(now, completion_evidence) {
+            Ok(minimum) => minimum,
+            Err(_) => {
+                self.latch_fail_closed("runtime lifecycle ownership was invalid for Serve");
+                return Err("Sumeragi v2 runtime lifecycle ownership was invalid".to_owned());
+            }
+        };
+        let predecessor = minimum.filter(|ordinal| *ordinal < serve_lifecycle_ordinal);
+        if self.exact_serve_predecessor_retry_attempted {
+            // The exact older owner received its bounded attempt and proved
+            // that adapter capacity, not logical order, prevents admission.
+            // Its restored FIFO occurrence remains physically present. Keep
+            // that fact latched while it remains runnable: clearing it here
+            // would turn every poll into a fresh predecessor episode and put
+            // the exact target behind an unbounded retry loop.
+            if predecessor.is_some() {
+                self.exact_serve_predecessor_physically_present = true;
+            } else {
+                self.exact_serve_predecessor_retry_attempted = false;
+                self.exact_serve_predecessor_physically_present = false;
+                self.exact_serve_predecessor_witness = None;
+            }
+            return Ok(None);
+        }
+        let Some(predecessor_lifecycle_ordinal) = predecessor else {
+            self.exact_serve_predecessor_physically_present = false;
+            self.exact_serve_predecessor_witness = None;
+            return Ok(None);
+        };
+        if !self.exact_serve_predecessor_physically_present {
+            let Some(episode) = self.exact_serve_predecessor_episode.checked_add(1) else {
+                self.latch_fail_closed("exact Serve predecessor episode ordinal overflowed");
+                return Err("Sumeragi v2 exact Serve predecessor episode overflowed".to_owned());
+            };
+            let Some(witness) = ExactServePredecessorEpisodeWitness::try_new(
+                serve_lifecycle_ordinal,
+                predecessor_lifecycle_ordinal,
+                episode,
+            ) else {
+                self.latch_fail_closed("exact Serve predecessor episode witness was invalid");
+                return Err(
+                    "Sumeragi v2 exact Serve predecessor episode witness was invalid".to_owned(),
+                );
+            };
+            self.exact_serve_predecessor_episode = episode;
+            self.exact_serve_predecessor_witness = Some(witness);
+            self.exact_serve_predecessor_physically_present = true;
+        }
+        let Some(witness) = self.exact_serve_predecessor_witness else {
+            self.latch_fail_closed("exact Serve predecessor episode lost its witness");
+            return Err("Sumeragi v2 exact Serve predecessor episode lost its witness".to_owned());
+        };
+        if !witness.validate_exact() || witness.serve_lifecycle_ordinal() != serve_lifecycle_ordinal
+        {
+            self.latch_fail_closed("exact Serve predecessor episode changed target identity");
+            return Err(
+                "Sumeragi v2 exact Serve predecessor episode changed target identity".to_owned(),
+            );
+        }
+        Ok(Some(witness))
+    }
+
+    /// Return whether one runnable owner belongs to the currently witnessed
+    /// strictly older prefix of an exact Serve ticket.
+    #[cfg(test)]
     pub(crate) fn older_lifecycle_predates_exact_serve(
+        &mut self,
+        now: Instant,
+        serve_lifecycle_ordinal: u128,
+    ) -> Result<bool, String> {
+        self.exact_serve_predecessor_episode_witness(now, serve_lifecycle_ordinal, None)
+            .map(|witness| witness.is_some())
+    }
+
+    /// Return whether one runnable owner strictly predates a retained
+    /// certified-response target without mutating selected-Serve witness state.
+    pub(crate) fn older_lifecycle_predates_retained_response(
         &mut self,
         now: Instant,
         serve_lifecycle_ordinal: u128,
@@ -12355,32 +12614,25 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             self.latch_fail_closed("runtime and Serve claimed one lifecycle ordinal");
             return Err("Sumeragi v2 lifecycle ordinal ownership collided".to_owned());
         }
-        if self.exact_serve_target_ordinal != Some(serve_lifecycle_ordinal) {
-            self.exact_serve_target_ordinal = Some(serve_lifecycle_ordinal);
-            self.exact_serve_predecessor_retry_attempted = false;
+        if self.retained_response_predecessor_target_ordinal != Some(serve_lifecycle_ordinal) {
+            self.retained_response_predecessor_target_ordinal = Some(serve_lifecycle_ordinal);
+            self.retained_response_predecessor_retry_attempted = false;
         }
-        if self.exact_serve_predecessor_retry_attempted {
-            // The exact older owner received its bounded attempt and proved
-            // that adapter capacity, not logical order, prevents admission.
-            // Keeping the target behind that same restored owner would turn a
-            // retryable condition into a permanent Serve/response deadlock.
-            self.exact_serve_target_ordinal = None;
-            self.exact_serve_predecessor_retry_attempted = false;
-            return Ok(false);
-        }
-        match self.minimum_runnable_lifecycle_ordinal(now) {
-            Ok(minimum) => {
-                let older = minimum.is_some_and(|ordinal| ordinal < serve_lifecycle_ordinal);
-                if !older {
-                    self.exact_serve_target_ordinal = None;
-                }
-                Ok(older)
-            }
+        let minimum = match self.minimum_runnable_lifecycle_ordinal(now, None) {
+            Ok(minimum) => minimum,
             Err(_) => {
                 self.latch_fail_closed("runtime lifecycle ownership was invalid for Serve");
-                Err("Sumeragi v2 runtime lifecycle ownership was invalid".to_owned())
+                return Err("Sumeragi v2 runtime lifecycle ownership was invalid".to_owned());
             }
+        };
+        let predecessor_exists = minimum.is_some_and(|ordinal| ordinal < serve_lifecycle_ordinal);
+        if self.retained_response_predecessor_retry_attempted {
+            if !predecessor_exists {
+                self.retained_response_predecessor_retry_attempted = false;
+            }
+            return Ok(false);
         }
+        Ok(predecessor_exists)
     }
 
     fn current_signature_fence_identity(
@@ -12913,6 +13165,12 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                         .is_some_and(|target| owner.lifecycle_ordinal() < target)
                     {
                         self.exact_serve_predecessor_retry_attempted = true;
+                    }
+                    if self
+                        .retained_response_predecessor_target_ordinal
+                        .is_some_and(|target| owner.lifecycle_ordinal() < target)
+                    {
+                        self.retained_response_predecessor_retry_attempted = true;
                     }
                     if self
                         .ingress
@@ -18095,10 +18353,11 @@ mod tests {
             block_hash: HashOf::from_untyped_unchecked(Hash::new([marker, 5])),
             payload_hash: Hash::new([marker, 6]),
         };
-        let execution_commitment = wire::ExecutionCommitment::without_topups(
+        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new([marker, 7]),
             Hash::new([marker, 8]),
             Hash::new([marker, 9]),
+            1,
             Hash::new([marker, 10]),
         );
         let signers = vec![0, 1, 2];
@@ -18358,12 +18617,14 @@ mod tests {
         );
 
         let mut changed_statement = certificate;
-        changed_statement.execution_commitment = wire::ExecutionCommitment::without_topups(
-            Hash::new(b"changed candidate parent state"),
-            Hash::new(b"changed candidate post state"),
-            Hash::new(b"changed candidate ordinary writes"),
-            Hash::new(b"changed candidate block wire"),
-        );
+        changed_statement.execution_commitment =
+            wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"changed candidate parent state"),
+                Hash::new(b"changed candidate post state"),
+                Hash::new(b"changed candidate ordinary writes"),
+                1,
+                Hash::new(b"changed candidate block wire"),
+            );
         let changed_apply = AdapterEffect::Apply {
             tag,
             subject: changed_statement.subject,
@@ -18524,12 +18785,14 @@ mod tests {
         );
 
         let mut wrong_certificate = certificate;
-        wrong_certificate.execution_commitment = wire::ExecutionCommitment::without_topups(
-            Hash::new(b"foreign pipeline parent state"),
-            Hash::new(b"foreign pipeline post state"),
-            Hash::new(b"foreign pipeline ordinary writes"),
-            Hash::new(b"foreign pipeline executed block"),
-        );
+        wrong_certificate.execution_commitment =
+            wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"foreign pipeline parent state"),
+                Hash::new(b"foreign pipeline post state"),
+                Hash::new(b"foreign pipeline ordinary writes"),
+                1,
+                Hash::new(b"foreign pipeline executed block"),
+            );
         let wrong_apply = AdapterEffect::Apply {
             tag,
             subject: wrong_certificate.subject,
@@ -18689,12 +18952,14 @@ mod tests {
         rejects(changed_context, commit.subject, "context drift");
 
         let mut changed_commitment = commit;
-        changed_commitment.execution_commitment = wire::ExecutionCommitment::without_topups(
-            Hash::new(b"foreign refinement parent state"),
-            Hash::new(b"foreign refinement post state"),
-            Hash::new(b"foreign refinement ordinary writes"),
-            Hash::new(b"foreign refinement executed block"),
-        );
+        changed_commitment.execution_commitment =
+            wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"foreign refinement parent state"),
+                Hash::new(b"foreign refinement post state"),
+                Hash::new(b"foreign refinement ordinary writes"),
+                1,
+                Hash::new(b"foreign refinement executed block"),
+            );
         let changed_commitment_subject = changed_commitment.subject;
         rejects(
             changed_commitment,
@@ -18761,12 +19026,14 @@ mod tests {
         );
 
         let mut changed_commitment = prepare;
-        changed_commitment.execution_commitment = Some(wire::ExecutionCommitment::without_topups(
-            Hash::new(b"foreign fetch parent state"),
-            Hash::new(b"foreign fetch post state"),
-            Hash::new(b"foreign fetch writes"),
-            Hash::new(b"foreign fetch block"),
-        ));
+        changed_commitment.execution_commitment =
+            Some(wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"foreign fetch parent state"),
+                Hash::new(b"foreign fetch post state"),
+                Hash::new(b"foreign fetch writes"),
+                1,
+                Hash::new(b"foreign fetch block"),
+            ));
         assert_eq!(
             prepare.fetch_authority_relation_to(changed_commitment),
             None,
@@ -18806,10 +19073,11 @@ mod tests {
             manifest.round,
             Some(manifest.subject),
             Some(wire::GlobalPhase::Commit),
-            Some(wire::ExecutionCommitment::without_topups(
+            Some(wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"manifest parent state"),
                 Hash::new(b"manifest post state"),
                 Hash::new(b"manifest writes"),
+                1,
                 Hash::new(b"manifest executed block"),
             )),
         );
@@ -22875,10 +23143,27 @@ mod tests {
             .mint_non_fifo_lifecycle_ordinal()
             .expect("external Serve ticket shares the actor ordinal source");
 
+        let first_witness = runtime
+            .exact_serve_predecessor_episode_witness(start, serve_ordinal, None)
+            .expect("older runnable predecessor is visible")
+            .expect("older prefix issues one runtime witness");
+        assert_eq!(first_witness.serve_lifecycle_ordinal(), serve_ordinal);
+        assert_eq!(first_witness.episode(), 1);
+        let retained_response_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("retained response target shares the actor ordinal source");
         assert!(
             runtime
-                .older_lifecycle_predates_exact_serve(start, serve_ordinal)
-                .expect("older runnable predecessor is visible")
+                .older_lifecycle_predates_retained_response(start, retained_response_ordinal)
+                .expect("alternate retained-response target sees the same older owner")
+        );
+        assert_eq!(
+            runtime
+                .exact_serve_predecessor_episode_witness(start, serve_ordinal, None)
+                .expect("alternate target cannot reset selected-Serve witness state"),
+            Some(first_witness),
+            "selected Serve retains one monotone witness across the legacy target probe"
         );
         assert!(matches!(
             runtime.step_and_take_scheduler_ownership_for_test(start),
@@ -22890,13 +23175,96 @@ mod tests {
                 .older_lifecycle_predates_exact_serve(start, serve_ordinal)
                 .expect("retryable pressure cannot become a Serve barrier")
         );
-        assert!(runtime.exact_serve_target_ordinal.is_none());
-        assert!(!runtime.exact_serve_predecessor_retry_attempted);
+        assert_eq!(runtime.exact_serve_target_ordinal, Some(serve_ordinal));
+        assert!(runtime.exact_serve_predecessor_retry_attempted);
+        assert_eq!(
+            runtime.retained_response_predecessor_target_ordinal,
+            Some(retained_response_ordinal)
+        );
+        assert!(runtime.retained_response_predecessor_retry_attempted);
+        assert!(runtime.exact_serve_predecessor_physically_present);
+        assert_eq!(runtime.exact_serve_predecessor_episode, 1);
+        assert_eq!(runtime.exact_serve_predecessor_witness, Some(first_witness));
+        assert!(
+            runtime
+                .exact_serve_predecessor_episode_witness(start, serve_ordinal, None)
+                .expect("the restored predecessor remains a suppressed physical owner")
+                .is_none(),
+            "retry polling cannot mint a second predecessor episode"
+        );
+        assert_eq!(runtime.exact_serve_predecessor_episode, 1);
+        assert!(
+            !runtime
+                .older_lifecycle_predates_retained_response(start, retained_response_ordinal)
+                .expect("alternate target also suppresses the one attempted owner"),
+            "one retry attempt is shared across both exact target comparisons"
+        );
 
         runtime
             .step_and_take_scheduler_ownership_for_test(start)
             .expect("the restored owner remains available after Serve settlement");
         assert_eq!(runtime.driver.delivered, vec![(owner_tag, 7)]);
+        assert!(
+            runtime
+                .exact_serve_predecessor_episode_witness(start, serve_ordinal, None)
+                .expect("settled retry clears its physical-presence latch")
+                .is_none()
+        );
+        assert!(!runtime.exact_serve_predecessor_retry_attempted);
+        assert!(!runtime.exact_serve_predecessor_physically_present);
+        assert!(
+            !runtime
+                .older_lifecycle_predates_retained_response(start, retained_response_ordinal)
+                .expect("settled owner clears alternate-target retry suppression")
+        );
+        assert!(!runtime.retained_response_predecessor_retry_attempted);
+
+        let completed_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("completed service owner shares the actor ordinal source");
+        let completed_evidence =
+            ExactServePredecessorCompletionEvidence::try_new(completed_ordinal)
+                .expect("completed service evidence is nonzero and exact");
+        let completed_target = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("new Serve target follows the completed service owner");
+        assert!(
+            runtime
+                .exact_serve_predecessor_episode_witness(start, completed_target, None)
+                .expect("passive ownership alone remains absent")
+                .is_none()
+        );
+        let completed_witness = runtime
+            .exact_serve_predecessor_episode_witness(
+                start,
+                completed_target,
+                Some(completed_evidence),
+            )
+            .expect("completion-qualified owner is accepted")
+            .expect("completion-qualified owner opens one predecessor episode");
+        assert_eq!(
+            completed_witness.predecessor_lifecycle_ordinal(),
+            completed_ordinal
+        );
+        assert_eq!(completed_witness.episode(), 1);
+        assert_eq!(
+            runtime
+                .exact_serve_predecessor_episode_witness(
+                    start,
+                    completed_target,
+                    Some(completed_evidence),
+                )
+                .expect("repeated completion evidence remains stable"),
+            Some(completed_witness)
+        );
+        assert!(
+            runtime
+                .exact_serve_predecessor_episode_witness(start, completed_target, None)
+                .expect("consumed completion evidence closes its episode")
+                .is_none()
+        );
     }
 
     #[test]
@@ -26072,10 +26440,11 @@ mod tests {
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"coalesced-progress-block")),
             payload_hash: Hash::new(b"coalesced-progress-payload"),
         };
-        let execution_commitment = wire::ExecutionCommitment::without_topups(
+        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"coalesced parent state"),
             Hash::new(b"coalesced post state"),
             Hash::new(b"coalesced ordinary writes"),
+            1,
             Hash::new(b"coalesced executed block wire"),
         );
         let payload = wire::ConsensusMessageV2Payload::QuorumCertificate(wire::QuorumCertificate {
@@ -28550,10 +28919,11 @@ mod tests {
                 proposal_round: round,
                 phase: wire::GlobalPhase::Prepare,
                 subject,
-                execution_commitment: wire::ExecutionCommitment::without_topups(
+                execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
                     Hash::new(b"capacity parent state"),
                     Hash::new(b"capacity post state"),
                     Hash::new(b"capacity ordinary writes"),
+                    1,
                     Hash::new(b"capacity executed block wire"),
                 ),
                 signer: 0,
@@ -29583,10 +29953,11 @@ mod tests {
             proposal_round: manifest.round,
             phase: wire::GlobalPhase::Commit,
             subject: manifest.subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups(
+            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"terminal upgrade parent state"),
                 Hash::new(b"terminal upgrade post state"),
                 Hash::new(b"terminal upgrade writes"),
+                1,
                 Hash::new(b"terminal upgrade block"),
             ),
             signers: Vec::new(),
@@ -30508,10 +30879,11 @@ mod tests {
         let exact_validated = ValidatedBodyReceipt::for_test(durable.clone());
         let conflicting_validated = ValidatedBodyReceipt::for_test_with_commitment(
             durable,
-            wire::ExecutionCommitment::without_topups(
+            wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"conflicting parent state"),
                 Hash::new(b"conflicting post state"),
                 Hash::new(b"conflicting ordinary writes"),
+                1,
                 Hash::new(b"conflicting executed body"),
             ),
         );
@@ -31305,12 +31677,14 @@ mod tests {
         );
 
         let mut conflicting_prepare = prepare;
-        conflicting_prepare.execution_commitment = wire::ExecutionCommitment::without_topups(
-            Hash::new(b"conflicting queued parent state"),
-            Hash::new(b"conflicting queued post state"),
-            Hash::new(b"conflicting queued writes"),
-            Hash::new(b"conflicting queued block"),
-        );
+        conflicting_prepare.execution_commitment =
+            wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"conflicting queued parent state"),
+                Hash::new(b"conflicting queued post state"),
+                Hash::new(b"conflicting queued writes"),
+                1,
+                Hash::new(b"conflicting queued block"),
+            );
         let conflicting_fetch = AdapterEffect::FetchBody {
             tag,
             round: manifest.round,
@@ -31482,12 +31856,14 @@ mod tests {
         assert!(!runtime.fail_closed);
 
         let mut conflicting_prepare = prepare;
-        conflicting_prepare.execution_commitment = wire::ExecutionCommitment::without_topups(
-            Hash::new(b"conflicting deferred parent state"),
-            Hash::new(b"conflicting deferred post state"),
-            Hash::new(b"conflicting deferred writes"),
-            Hash::new(b"conflicting deferred block"),
-        );
+        conflicting_prepare.execution_commitment =
+            wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"conflicting deferred parent state"),
+                Hash::new(b"conflicting deferred post state"),
+                Hash::new(b"conflicting deferred writes"),
+                1,
+                Hash::new(b"conflicting deferred block"),
+            );
         let conflicting_fetch = AdapterEffect::FetchBody {
             tag,
             round: manifest.round,
@@ -32228,10 +32604,11 @@ mod tests {
             Some(&fixture.receipt)
         );
 
-        let commitment = wire::ExecutionCommitment::without_topups(
+        let commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"leader-wire Decision state root"),
             Hash::new(b"leader-wire Decision event root"),
             Hash::new(b"leader-wire Decision reject root"),
+            1,
             Hash::new(b"leader-wire Decision fee root"),
         );
         assert_eq!(
@@ -33161,10 +33538,11 @@ mod tests {
             HashOf::new(&manifest),
         );
         let validated = ValidatedBodyReceipt::for_test(durable.clone());
-        let conflicting_commitment = wire::ExecutionCommitment::without_topups(
+        let conflicting_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"decision mismatch parent state"),
             Hash::new(b"decision mismatch post state"),
             Hash::new(b"decision mismatch ordinary writes"),
+            1,
             Hash::new(b"decision mismatch executed block"),
         );
         assert_ne!(validated.execution_commitment(), conflicting_commitment);
@@ -33353,10 +33731,11 @@ mod tests {
                 "the retained fair-ingress {phase:?} vote becomes drainable after validation"
             );
 
-            let conflicting_commitment = wire::ExecutionCommitment::without_topups(
+            let conflicting_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"conflicting early vote parent state"),
                 Hash::new(b"conflicting early vote post state"),
                 Hash::new(b"conflicting early vote ordinary writes"),
+                1,
                 Hash::new(b"conflicting early vote executed block"),
             );
             assert_ne!(
@@ -34794,10 +35173,11 @@ mod tests {
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"runtime-test-block")),
             payload_hash: Hash::new(b"runtime-test-payload"),
         };
-        let execution_commitment = wire::ExecutionCommitment::without_topups(
+        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"runtime parent state"),
             Hash::new(b"runtime post state"),
             Hash::new(b"runtime ordinary writes"),
+            1,
             Hash::new(b"runtime executed block wire"),
         );
         let vote = wire::ConsensusMessageV2Payload::Vote(wire::Vote {

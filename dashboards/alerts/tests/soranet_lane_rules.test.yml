@@ -15,7 +15,7 @@ tests:
         eval_time: 4m
         exp_alerts: []
       - alertname: SoranetLaneAdmissionLatencyDegraded
-        eval_time: 8m
+        eval_time: 9m
         exp_alerts:
           - exp_labels:
               endpoint: /transaction
@@ -23,3 +23,5 @@ tests:
               severity: warning
             exp_annotations:
               summary: "Lane admission latency P95 degraded"
+              description: |
+                Lane lane-1 via /transaction has admission latency P95 1024 ms (>750 ms budget). Inspect backlog, DA health, and pacemaker timers before rerouting traffic.

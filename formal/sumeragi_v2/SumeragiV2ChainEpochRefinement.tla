@@ -1732,11 +1732,10 @@ Authenticated historical recovery is owned by the exact Async instance.
 
 The chain wrapper may open recovery only for a responsive node located at the
 frozen context and only when a joined responsive applied archive still holds
-the body certified by the exact CommitQC.  The serving archive authenticates
-its own response and must be one of that QC's frozen signers; full-roster
-request fanout is broader than this response authority.  The exact body hash
-and signer identity bind the historical source. `OpenHistoricalRecovery`
-records that exact target in
+the body certified by the exact CommitQC.  The archive authenticates its own
+response but need not be one of the old QC's signers: the QC authorizes the
+immutable subject, while the frozen-roster archive and exact body hash bind the
+historical source. `OpenHistoricalRecovery` records that exact target in
 scheduler component 44. From then on the ordinary Async reducer persists the
 decision, recovers and stores the body, validates it, and appends the
 application to the same per-context `decisions` and `applied` sets used by
@@ -1771,7 +1770,6 @@ IndexedHistoricalRecoverySourceReady(initialContext, server, source) ==
                  AsyncCurrentResponsiveVoters
   /\ server \in IndexedCore(initialContext, 6)
   /\ server \in joinedByContext[initialContext]
-  /\ server \in source.qc.signers
   /\ BodyHeldBy(IndexedCore(initialContext, 9), server,
                  initialContext, source.qc.view, source.qc.subject)
 

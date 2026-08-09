@@ -154,6 +154,11 @@ device.
 
 `Package.swift` checks for `dist/NoritoBridge.xcframework` next to the repository root and fails package resolution when the bridge is missing. Runtime errors such as `ConnectCodecError.bridgeUnavailable` and `SwiftTransactionEncoderError.nativeBridgeUnavailable` include the same bridge-location hint for broken or unloaded bridge symbols.
 
+The canonical XCFramework contains `ios-arm64`, the universal
+`ios-arm64_x86_64-simulator` slice, and the universal
+`macos-arm64_x86_64` slice. The macOS slice must contain both `arm64` and
+`x86_64`; the artifact checker rejects single-architecture substitutions.
+
 The default bridge build deliberately keeps real privacy proving and verification
 fail-closed. After the privacy production-gate evidence has been approved, build
 an opt-in Apple artifact with:
@@ -177,7 +182,10 @@ The builder always compiles all four slices into the one caller-selected target,
 uses the root `Cargo.lock`, and fails closed if `xcodebuild` cannot package them.
 There is no skip-build, preserved-target, alternate-lock, or manual-packaging mode.
 
-CI runs `.github/workflows/mobile_sdk_artifacts.yml` (see `ci/check_swift_spm_validation.sh` and `ci/check_swift_pod_bridge.sh`) to verify bridge packaging and mandatory missing-artifact rejection.
+CI runs `.github/workflows/mobile_sdk_artifacts.yml` to authenticate the exact
+external Apple artifact, enforce mandatory missing-artifact rejection, run the
+Swift suite, and execute the CocoaPods structural lint without a missing-tool
+skip.
 
 ### CocoaPods
 
@@ -185,11 +193,13 @@ CI runs `.github/workflows/mobile_sdk_artifacts.yml` (see `ci/check_swift_spm_va
 pod 'IrohaSwift', :path => '/path/to/iroha/IrohaSwift'
 ```
 
-The podspec pulls sources from this repository and requires `dist/NoritoBridge.xcframework`
-next to the checkout; `pod lib lint` fails fast when the bridge is missing so releases
-bundle the signed xcframework (see
-[`docs/norito_bridge_release.md`](../docs/norito_bridge_release.md) for the
-bundling flow).
+Native CocoaPods delivery is not release-ready. The lint wrapper requires an
+authenticated local or external `NoritoBridge.xcframework` and fails when
+CocoaPods or that artifact is missing, but the current podspec does not yet
+define a vendored-XCFramework archive path. Do not treat a local lint as native
+pod installation evidence or publish the podspec until that delivery path and
+downstream install smoke are implemented (see
+[`docs/norito_bridge_release.md`](../docs/norito_bridge_release.md)).
 
 Usage:
 ```swift
@@ -1082,8 +1092,7 @@ apps can decide how to remediate.
 `POST /v1/offline/redeem`, and `GET /v1/offline/operations/{operation_id}`.
 Use `getOfflineCapability()`, `submitKagemushaTopUp`,
 `submitKagemushaRedeem`, and `getKagemushaOperationStatus(operationId:)`.
-The retained selector-taking `getKagemushaReadiness(assetDefinitionId:)` shim is
-deprecated, ignores its selector, and returns the same `ToriiOfflineStatus`.
+No selector-taking readiness alias is exposed.
 
 `ToriiOfflineStatus` is an asset-neutral protocol contract, not backend
 settlement readiness. Swift accepts only `mandatory: false`,
@@ -1906,10 +1915,12 @@ missing, retired three-field, alias, or unknown shapes are rejected.
 ## NoritoBridge packaging
 
 The release process for the Norito Swift bindings is documented in
-[`docs/norito_bridge_release.md`](../docs/norito_bridge_release.md). Follow the steps to
-build the XCFramework, compute the checksum, and update both the Swift Package manifest
-and the CocoaPods podspec. The resulting artifacts should share the same semantic version
-as the `norito` Rust crate.
+[`docs/norito_bridge_release.md`](../docs/norito_bridge_release.md). Follow the
+authenticated external-artifact build, validation, and packaging flow there.
+`Package.swift` uses that exact local/external path and does not use a remote
+URL/checksum binary target; native CocoaPods distribution remains an explicit
+blocker. Generated artifacts stay untracked, and the resulting release asset
+must share the reviewed version with the `norito` Rust crate.
 The canonical `NoritoBridge.artifacts.json` is embedded in the XCFramework and
 records the bridge version plus per-platform SHA-256 hashes.
 `dist/NoritoBridge.artifacts.json` is the stable relative symlink to that embedded

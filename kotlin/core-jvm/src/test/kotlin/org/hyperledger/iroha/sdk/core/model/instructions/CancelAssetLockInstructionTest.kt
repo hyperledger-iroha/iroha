@@ -3,6 +3,9 @@ package org.hyperledger.iroha.sdk.core.model.instructions
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -68,6 +71,17 @@ class CancelAssetLockInstructionTest {
 
         assertFailsWith<IllegalArgumentException> {
             CancelAssetLockInstruction.fromEscrowId(FIXTURE_ESCROW_ID.lowercase(), "20")
+        }
+        listOf(
+            FIXTURE_ESCROW_ID.substring(5, 69),
+            "0x${FIXTURE_ESCROW_ID.substring(5, 69)}",
+            "[\"$FIXTURE_ESCROW_ID\"]",
+            "{\"value\":\"$FIXTURE_ESCROW_ID\"}",
+            FIXTURE_ESCROW_ID.dropLast(4) + "0000",
+        ).forEach { escrowAlias ->
+            assertFailsWith<IllegalArgumentException>("accepted escrow alias '$escrowAlias'") {
+                CancelAssetLockInstruction.fromEscrowId(escrowAlias, "20")
+            }
         }
     }
 
@@ -158,16 +172,41 @@ class CancelAssetLockInstructionTest {
     fun `checked in appeal finance fixtures are mandatory and byte exact`() {
         val root = requireFixtureRoot()
         val fixtures = REQUIRED_FIXTURE_NAMES.associateWith { relative ->
-            readMandatoryFixture(root, relative)
+            readMandatoryFixture(root, relative).also { bytes ->
+                check(bytes.isNotEmpty()) {
+                    "Mandatory CancelAssetLock fixture `$relative` is empty"
+                }
+            }
         }
-        assertEquals(8, fixtures.size)
-        assertTrue(fixtures.values.all(ByteArray::isNotEmpty))
+
+        assertEquals(8, REQUIRED_FIXTURE_NAMES.size)
+        assertEquals(REQUIRED_FIXTURE_NAMES, fixtures.keys.toList())
+
+        val canonicalFromJson = CancelAssetLockInstruction.fromCanonicalFields(
+            decodeCanonicalJsonFields(fixtures.getValue("cancel_asset_lock_v1.json")),
+        )
+        val canonicalFromNorito = CancelAssetLockInstruction.fromWirePayload(
+            fixtures.getValue("cancel_asset_lock_v1.to"),
+        )
+        assertEquals(canonicalFromJson, canonicalFromNorito)
+        assertEquals(85, fixtures.getValue("cancel_asset_lock_v1.to").size)
         assertContentEquals(
             fixtures.getValue("cancel_asset_lock_v1.to"),
-            CancelAssetLockWirePayloadEncoder.encodePayload(
-                CancelAssetLockInstruction(FIXTURE_LOCK_ID, "20"),
-            ),
+            CancelAssetLockWirePayloadEncoder.encodePayload(canonicalFromJson),
         )
+
+        listOf(
+            "negative/cancel_asset_lock_legacy_missing_expected_v1.json",
+            "negative/cancel_asset_lock_noncanonical_quantity_v1.json",
+            "negative/cancel_asset_lock_zero_expected_v1.json",
+        ).forEach { relative ->
+            assertFailsWith<IllegalArgumentException>("accepted $relative") {
+                CancelAssetLockInstruction.fromCanonicalFields(
+                    decodeCanonicalJsonFields(fixtures.getValue(relative)),
+                )
+            }
+        }
+
         assertContentEquals(
             RETIRED_NESTED_ESCROW_ID_PAYLOAD,
             fixtures.getValue("negative/cancel_asset_lock_nested_escrow_id_v1.to"),
@@ -184,6 +223,16 @@ class CancelAssetLockInstructionTest {
             }
         }
     }
+
+    private fun decodeCanonicalJsonFields(payload: ByteArray): Map<String, String> =
+        Json.parseToJsonElement(payload.toString(Charsets.UTF_8))
+            .jsonObject
+            .mapValues { (field, value) ->
+                require(value is JsonPrimitive && value.isString) {
+                    "CancelAssetLock JSON field `$field` must be a string"
+                }
+                value.content
+            }
 
     private fun legacyOneFieldFrame(): ByteArray =
         NoritoCodec.encode(

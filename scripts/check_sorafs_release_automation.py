@@ -241,12 +241,274 @@ GENERIC_OPENSSL_SIGNER_RE = re.compile(
     r"(?:\bgenrsa\b|\bgenpkey\b|(?:^|\s)-sign(?:=|\s|$))[^\n]*$",
     re.IGNORECASE,
 )
+RUNTIME_PROVIDER_RELEASE_WORKFLOW_MARKERS: tuple[str, ...] = (
+    '- "scripts/check_runtime_provider_broker_install.py"',
+    '- "scripts/tests/check_runtime_provider_broker_install_test.py"',
+    '- "configs/sorafs/runtime_provider_broker/**"',
+    '- "crates/irohad/src/runtime_provider_broker.rs"',
+    '- "crates/irohad/src/runtime_provider_broker/**"',
+    '- "crates/irohad/src/sorafs_pop_runtime.rs"',
+    "name: Validate runtime-provider broker deployment contract",
+    "run: python3 scripts/tests/check_runtime_provider_broker_install_test.py",
+)
+POP_BROKER_OPERATION_IDS: dict[str, int] = {
+    "OPERATION_POP_RUNTIME_OPEN_V1": 118,
+    "OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1": 119,
+    "OPERATION_POP_WALLET_RECIPIENT_OPEN_V1": 120,
+}
+POP_BROKER_RETIRED_SECRET_MARKERS: tuple[str, ...] = (
+    "PopRuntimeResolveResultWireV1",
+    "PopCredentialRuntimeSecretsV1",
+    "enrollment_recipient_secret",
+    "wallet_recipient_secret",
+)
+POP_BROKER_WIRE_FIELD_INVENTORIES: dict[str, tuple[tuple[str, str], ...]] = {
+    "PopRuntimeOpenResultWireV1": (
+        ("issuer_hsm_key_id", "String"),
+        ("issuer_public_key", "[u8;32]"),
+        ("enrollment_recipient_key_id", "String"),
+        ("enrollment_recipient_public_key_digest", "[u8;32]"),
+        ("wallet_recipient_key_id", "String"),
+        ("wallet_recipient_public_key_digest", "[u8;32]"),
+        ("wallet_wrapping_key_id", "String"),
+    ),
+    "PopRecipientOpenRequestWireV1": (
+        (
+            "encrypted_payload",
+            "sorafs_manifest::hybrid_envelope::HybridPayloadEnvelopeV1",
+        ),
+        ("aad", "Vec<u8>"),
+    ),
+    "PopRecipientOpenResultWireV1": (("plaintext", "Vec<u8>"),),
+    "PopCredentialRuntimeBindingWireV1": (
+        ("issuer_policy_digest", "[u8;32]"),
+        ("issuer_id", "String"),
+        ("issuer_hsm_key_id", "String"),
+        ("issuer_public_key", "[u8;32]"),
+        ("enrollment_recipient_key_id", "String"),
+        ("enrollment_recipient_public_key_digest", "[u8;32]"),
+        ("wallet_recipient_key_id", "String"),
+        ("wallet_recipient_public_key_digest", "[u8;32]"),
+        ("wallet_wrapping_key_id", "String"),
+    ),
+}
+RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
+    "configs/sorafs/runtime_provider_broker/README.md": (
+        "it does not supply a concrete HSM, KMS,",
+        "statically link a reviewed deployment-owned",
+        "Do not add credential, private-key, token, plugin, test-provider, or socket",
+        "The expected executable digest must come",
+        "Both checked-in Linux consumer dependencies are mandatory",
+        "/run/iroha-runtime-provider-broker-v1/runtime-provider-broker-v1.sock",
+        "/private/var/iroha/run/runtime-provider-broker-v1.sock",
+        "mode-0600 instance lock",
+    ),
+    (
+        "configs/sorafs/runtime_provider_broker/systemd/"
+        "iroha-runtime-provider-broker-v1.service"
+    ): (
+        "Type=notify",
+        "NotifyAccess=main",
+        "User=iroha",
+        "Group=iroha",
+        "RuntimeDirectory=iroha-runtime-provider-broker-v1",
+        "RuntimeDirectoryMode=0700",
+        "RuntimeDirectoryPreserve=no",
+        "ReadWritePaths=/run/iroha-runtime-provider-broker-v1",
+        "LimitCORE=0",
+        (
+            "ExecStart=/usr/local/libexec/iroha-runtime-provider-broker-v1 "
+            "--catalog /etc/iroha/runtime-provider-broker/catalog.norito"
+        ),
+    ),
+    (
+        "configs/sorafs/runtime_provider_broker/systemd/"
+        "taira-irohad.service.d/20-runtime-provider-broker-v1.conf"
+    ): (
+        "Requires=iroha-runtime-provider-broker-v1.service",
+        "After=iroha-runtime-provider-broker-v1.service",
+        "User=iroha",
+        "Group=iroha",
+        "ReadOnlyPaths=/run/iroha-runtime-provider-broker-v1",
+    ),
+    (
+        "configs/sorafs/runtime_provider_broker/systemd/"
+        "sorafs-governance-dag@.service.d/"
+        "20-runtime-provider-broker-v1.conf"
+    ): (
+        "Requires=iroha-runtime-provider-broker-v1.service",
+        "After=iroha-runtime-provider-broker-v1.service",
+        "User=iroha",
+        "Group=iroha",
+        "ReadOnlyPaths=/run/iroha-runtime-provider-broker-v1",
+    ),
+    (
+        "configs/sorafs/runtime_provider_broker/launchd/"
+        "org.hyperledger.iroha.runtime-provider-broker-v1.plist"
+    ): (
+        "org.hyperledger.iroha.runtime-provider-broker-v1",
+        "/usr/local/libexec/iroha-runtime-provider-broker-v1",
+        "/private/etc/iroha/runtime-provider-broker/catalog.norito",
+        "<key>UserName</key>",
+        "<key>GroupName</key>",
+        "<key>SoftResourceLimits</key>\n  <dict>\n    <key>Core</key>",
+        "<key>HardResourceLimits</key>\n  <dict>\n    <key>Core</key>",
+    ),
+    "scripts/check_runtime_provider_broker_install.py": (
+        "supervisor_template: PurePosixPath",
+        "consumer_assets: tuple[tuple[PurePosixPath, PurePosixPath], ...]",
+        "checked-in runtime-provider supervisor template",
+        "BROKER_EXECUTABLE_MAX_BYTES_V1",
+        "_sha256_regular_bounded",
+        "externally verified release digest",
+        "stat.S_IMODE(info.st_mode) & 0o7222",
+        "installed runtime-provider consumer drop-in",
+        "checked-in platform template",
+        "trusted_artifact_owner_uid=0",
+        "--expected-catalog",
+        "--expected-executable-sha256",
+        'layout.platform == "macos"',
+        "/private/var/iroha/run/runtime-provider-broker-v1.sock",
+    ),
+    "scripts/tests/check_runtime_provider_broker_install_test.py": (
+        "test_supervisor_asset_is_required",
+        "test_supervisor_asset_must_not_be_a_symlink",
+        "test_supervisor_asset_must_have_one_hard_link",
+        "test_supervisor_asset_rejects_unsafe_permissions",
+        "test_supervisor_asset_rejects_untrusted_owner",
+        "test_supervisor_asset_must_match_checked_in_template",
+        "test_supervisor_asset_race_is_rejected",
+        "test_macos_runtime_directory_is_unconditional",
+        "test_executable_digest_must_match_external_release_identity",
+        "test_executable_digest_must_be_canonical_nonzero_lowercase",
+        "test_executable_race_is_rejected",
+        "test_consumer_drop_ins_are_required_and_exact",
+        "test_consumer_drop_in_hardlink_is_rejected",
+    ),
+    "crates/irohad/src/runtime_provider_broker.rs": (
+        "/run/iroha-runtime-provider-broker-v1/runtime-provider-broker-v1.sock",
+        "/private/var/iroha/run/runtime-provider-broker-v1.sock",
+        "endpoint_recovery::prepare_endpoint",
+        "OPERATION_POP_RUNTIME_OPEN_V1",
+        "OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1",
+        "OPERATION_POP_WALLET_RECIPIENT_OPEN_V1",
+        'include!("runtime_provider_broker/pop_recipient_client.rs");',
+    ),
+    "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs": (
+        "OPERATION_POP_RUNTIME_OPEN_V1: u16 = 118",
+        "OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1: u16 = 119",
+        "OPERATION_POP_WALLET_RECIPIENT_OPEN_V1: u16 = 120",
+        "struct PopRuntimeOpenResultWireV1",
+        "struct PopRecipientOpenRequestWireV1",
+        "struct PopRecipientOpenResultWireV1",
+        "struct PopCredentialRuntimeBindingWireV1",
+    ),
+    "crates/irohad/src/runtime_provider_broker/validate_operation_payload.rs": (
+        "OPERATION_POP_RUNTIME_OPEN_V1",
+        "OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1",
+        "OPERATION_POP_WALLET_RECIPIENT_OPEN_V1",
+        "validate_pop_recipient_open_request(&open, request.operation)",
+    ),
+    "crates/irohad/src/runtime_provider_broker/pop_recipient_client.rs": (
+        "OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1",
+        "OPERATION_POP_WALLET_RECIPIENT_OPEN_V1",
+        "PopRecipientOpenRequestWireV1",
+        "PopRecipientOpenResultWireV1",
+        '.field("private_recipient", &"[REMOTE]")',
+    ),
+    "crates/irohad/src/sorafs_pop_runtime.rs": (
+        "production_builder_has_no_secret_or_fallback_source",
+        "provider material remains behind the deployment-supplied registry.",
+    ),
+    "crates/irohad/src/runtime_provider_broker/launcher.rs": (
+        "trusted_runtime_provider_catalog_owner_uid_v1",
+        "changed_seconds: metadata.ctime()",
+        "changed_nanoseconds: metadata.ctime_nsec()",
+        "before.owner != trusted_owner_uid",
+        "before.mode & 0o7222",
+    ),
+    "crates/irohad/src/runtime_provider_broker/protocol/platform/endpoint_recovery.rs": (
+        "NonBlockingLockExclusive",
+        "marker_preexisted: bool",
+        "create_lock_exclusively(parent_directory)",
+        "if !guard.marker_preexisted",
+        "remove_exact_socket_entry_inner",
+        "rename_to_quarantine",
+        "rustix::fs::RenameFlags::NOREPLACE",
+        "metadata.st_nlink == 1",
+    ),
+    "crates/irohad/src/runtime_provider_broker/server_source_tests.rs": (
+        "broker_server_preserves_active_listener_without_lock_or_readiness",
+        "broker_server_recovers_exact_stale_socket_after_unclean_exit",
+        "broker_server_rejects_active_locked_socket_without_unlinking_it",
+        "stale_socket_recovery_detects_identity_substitution_before_unlink",
+        "orderly_cleanup_quarantines_before_detecting_identity_substitution",
+        "broker_endpoint_rejects_socket_hardlink_alias_without_removal",
+    ),
+}
+RUNTIME_PROVIDER_DEPLOYMENT_FORBIDDEN_MARKERS: dict[str, tuple[str, ...]] = {
+    (
+        "configs/sorafs/runtime_provider_broker/systemd/"
+        "iroha-runtime-provider-broker-v1.service"
+    ): (
+        "Environment=",
+        "EnvironmentFile=",
+        "--socket",
+        "--plugin",
+        "--private-key",
+        "--credential",
+    ),
+    (
+        "configs/sorafs/runtime_provider_broker/launchd/"
+        "org.hyperledger.iroha.runtime-provider-broker-v1.plist"
+    ): (
+        "EnvironmentVariables",
+        "--socket",
+        "--plugin",
+        "--private-key",
+        "--credential",
+    ),
+    "scripts/check_runtime_provider_broker_install.py": (
+        "--socket",
+        "--plugin",
+        "--private-key",
+        "--credential",
+    ),
+    "crates/irohad/src/runtime_provider_broker.rs": (
+        "OPERATION_POP_RUNTIME_RESOLVE_V1",
+        "HybridSecretKey",
+        *POP_BROKER_RETIRED_SECRET_MARKERS,
+    ),
+    "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs": (
+        "OPERATION_POP_RUNTIME_RESOLVE_V1",
+        "u16 = 60;",
+        "HybridSecretKey",
+        *POP_BROKER_RETIRED_SECRET_MARKERS,
+    ),
+    "crates/irohad/src/runtime_provider_broker/validate_operation_payload.rs": (
+        "OPERATION_POP_RUNTIME_RESOLVE_V1",
+        "HybridSecretKey",
+        *POP_BROKER_RETIRED_SECRET_MARKERS,
+    ),
+    "crates/irohad/src/runtime_provider_broker/pop_recipient_client.rs": (
+        "OPERATION_POP_RUNTIME_RESOLVE_V1",
+        "HybridSecretKey",
+        ".secret()",
+        "recipient_private_key",
+        "recipient_secret",
+        *POP_BROKER_RETIRED_SECRET_MARKERS,
+    ),
+}
 WORKFLOWS: dict[str, tuple[str, ...]] = {
     ".github/workflows/sorafs-cli-release.yml": (
         '"sorafs-cli-v*"',
         "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
         "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
         "scripts/check_sorafs_release_version_map.py",
+        "version-map-summary.first.json",
+        "version-map-summary.replay.json",
+        "cmp version-map-summary.first.json version-map-summary.replay.json",
+        "cp version-map-summary.first.json version-map-summary.json",
         "scripts/check_sorafs_reference_sdk_release_evidence.py",
         "scripts/build_sorafs_reference_sdk_release_canary.py",
         '- "scripts/build_sorafs_reference_sdk_supply_chain_sources.py"',
@@ -254,6 +516,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         '- "scripts/sorafs_topology_qualification.py"',
         "scripts/run_sorafs_reference_sdk_release_evidence.py",
         "scripts/check_workflow_action_pins.py",
+        *RUNTIME_PROVIDER_RELEASE_WORKFLOW_MARKERS,
         '- "Dockerfile"',
         '- "scripts/build_release_bundle.sh"',
         '- "scripts/build_release_image.sh"',
@@ -898,6 +1161,145 @@ def _validate_native_governance_sdk_contract(root: Path) -> list[str]:
     return errors
 
 
+def _rust_struct_field_inventory(
+    source: str, struct_name: str
+) -> tuple[tuple[str, str], ...] | None:
+    """Return the ordered fields from one simple Rust wire struct."""
+
+    declaration = re.search(
+        rf"(?ms)^\s*(?:pub\(super\)\s+)?struct\s+{re.escape(struct_name)}\s*"
+        r"\{(?P<body>.*?)^\s*\}",
+        source,
+    )
+    if declaration is None:
+        return None
+    return tuple(
+        (field, re.sub(r"\s+", "", field_type))
+        for field, field_type in re.findall(
+            (
+                r"(?m)^\s*(?:pub(?:\(super\))?\s+)?"
+                r"([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^,\n]+),"
+            ),
+            declaration.group("body"),
+        )
+    )
+
+
+def _validate_pop_broker_hard_cut_contract(root: Path) -> list[str]:
+    """Pin the secret-free PoP broker open protocol and retired operation 60."""
+
+    relative_sources = {
+        "broker": "crates/irohad/src/runtime_provider_broker.rs",
+        "protocol": (
+            "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs"
+        ),
+        "validator": (
+            "crates/irohad/src/runtime_provider_broker/validate_operation_payload.rs"
+        ),
+        "recipient_client": (
+            "crates/irohad/src/runtime_provider_broker/pop_recipient_client.rs"
+        ),
+        "runtime": "crates/irohad/src/sorafs_pop_runtime.rs",
+    }
+    sources: dict[str, str] = {}
+    for label, relative in relative_sources.items():
+        path = _require_regular_repo_file(root, relative)
+        try:
+            sources[label] = _read_bytes_no_follow(path).decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError(f"{relative}: PoP broker source must be UTF-8") from error
+
+    errors: list[str] = []
+    protocol = sources["protocol"]
+    for operation, wire_id in POP_BROKER_OPERATION_IDS.items():
+        if re.search(
+            rf"(?m)^\s*pub\(super\)\s+const\s+{re.escape(operation)}\s*:\s*"
+            rf"u16\s*=\s*{wire_id}\s*;\s*$",
+            protocol,
+        ) is None:
+            errors.append(
+                f"PoP broker operation {operation} must retain wire id {wire_id}"
+            )
+    if "OPERATION_POP_RUNTIME_RESOLVE_V1" in "\n".join(sources.values()) or re.search(
+        r"(?m)^\s*pub\(super\)\s+const\s+[A-Z0-9_]+\s*:\s*u16\s*=\s*60\s*;",
+        protocol,
+    ):
+        errors.append("PoP broker operation 60/runtime resolve must remain retired")
+
+    for struct_name, expected_fields in POP_BROKER_WIRE_FIELD_INVENTORIES.items():
+        observed_fields = _rust_struct_field_inventory(protocol, struct_name)
+        if observed_fields != expected_fields:
+            errors.append(
+                f"PoP broker wire struct {struct_name} fields must be exactly "
+                f"{expected_fields!r}"
+            )
+
+    ipc_sources = (
+        sources["broker"],
+        sources["protocol"],
+        sources["validator"],
+        sources["recipient_client"],
+    )
+    if any("HybridSecretKey" in source for source in ipc_sources):
+        errors.append("PoP broker IPC must never serialize HybridSecretKey")
+    if any(
+        marker in source
+        for source in ipc_sources
+        for marker in POP_BROKER_RETIRED_SECRET_MARKERS
+    ):
+        errors.append("PoP broker IPC must not serialize private recipient bytes")
+    if any(
+        marker in sources["recipient_client"]
+        for marker in (".secret()", "recipient_private_key", "recipient_secret")
+    ):
+        errors.append("PoP broker client must not own private recipient bytes")
+
+    production_runtime = sources["runtime"].split("#[cfg(test)]", 1)[0]
+    if any(
+        marker in production_runtime
+        for marker in (
+            "HybridSecretKey",
+            "PopCredentialRuntimeSecretsV1",
+            "PrivateKey",
+            ".secret()",
+        )
+    ):
+        errors.append("production PoP runtime must not own private recipient material")
+    return errors
+
+
+def _validate_runtime_provider_deployment_contract(root: Path) -> list[str]:
+    """Validate the complete credential-free broker deployment asset inventory."""
+
+    errors: list[str] = []
+    for relative, markers in sorted(
+        RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS.items()
+    ):
+        path = _require_regular_repo_file(root, relative)
+        try:
+            source = _read_bytes_no_follow(path).decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError(
+                f"{relative}: runtime-provider deployment asset must be UTF-8"
+            ) from error
+        for marker in markers:
+            if marker not in source:
+                errors.append(
+                    f"{relative}: missing runtime-provider deployment "
+                    f"contract marker {marker!r}"
+                )
+        for marker in RUNTIME_PROVIDER_DEPLOYMENT_FORBIDDEN_MARKERS.get(
+            relative, ()
+        ):
+            if marker in source:
+                errors.append(
+                    f"{relative}: forbidden runtime-provider deployment "
+                    f"marker {marker!r}"
+                )
+    errors.extend(_validate_pop_broker_hard_cut_contract(root))
+    return errors
+
+
 def _validate_workflow_source(relative: str, source: str) -> list[str]:
     """Return deterministic contract errors for one workflow source."""
 
@@ -961,6 +1363,7 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 f"{relative}: candidate downloads must preserve exactly five "
                 "artifact-name directories"
             )
+        release_gate_job = _workflow_job(source, "release-gate")
         prepare_job = _workflow_job(source, "prepare-release-manifest")
         auth_job = _workflow_job(source, "verify-release-auth")
         promotion_job = _workflow_job(source, "sign")
@@ -972,6 +1375,22 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
             "if: ${{ startsWith(github.ref, 'refs/tags/sorafs-cli-v') "
             "|| inputs.sign_artifacts }}"
         )
+        if release_gate_job is None:
+            errors.append(f"{relative}: missing release gate job")
+        elif (
+            release_gate_job.count(
+                "python3 scripts/check_sorafs_release_version_map.py"
+            )
+            != 2
+            or "cmp version-map-summary.first.json version-map-summary.replay.json"
+            not in release_gate_job
+            or "cp version-map-summary.first.json version-map-summary.json"
+            not in release_gate_job
+        ):
+            errors.append(
+                f"{relative}: version map must be validated exactly twice with "
+                "byte-identical summaries before its release version is consumed"
+            )
         if prepare_job is None:
             errors.append(f"{relative}: missing foundational-manifest preparation job")
         else:
@@ -1662,6 +2081,7 @@ def validate_release_automation(root: Path) -> dict[str, Any]:
     errors.extend(_validate_package_release_smoke(root))
     errors.extend(_validate_reference_sdk_release_examples(root))
     errors.extend(_validate_native_governance_sdk_contract(root))
+    errors.extend(_validate_runtime_provider_deployment_contract(root))
     if errors:
         raise ValueError("; ".join(errors))
     return {

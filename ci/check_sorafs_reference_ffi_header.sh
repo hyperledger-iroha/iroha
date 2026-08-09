@@ -515,14 +515,14 @@ fi
 
 run_contract_check "${RUST_FFI}" "${HEADER}"
 
-if command -v "${CC:-cc}" >/dev/null 2>&1; then
-  "${CC:-cc}" -fsyntax-only -x c -I"${ROOT_DIR}/crates/sorafs_manifest/include" "${HEADER}"
-else
-  echo "[sorafs-reference-header] skipping C syntax check: ${CC:-cc} not found" >&2
+if ! command -v "${CC:-cc}" >/dev/null 2>&1; then
+  echo "[sorafs-reference-header] required C compiler not found: ${CC:-cc}" >&2
+  exit 1
 fi
+"${CC:-cc}" -fsyntax-only -x c -I"${ROOT_DIR}/crates/sorafs_manifest/include" "${HEADER}"
 
-if command -v "${CXX:-c++}" >/dev/null 2>&1; then
-  "${CXX:-c++}" -fsyntax-only -x c++ -I"${ROOT_DIR}/crates/sorafs_manifest/include" "${HEADER}"
-else
-  echo "[sorafs-reference-header] skipping C++ syntax check: ${CXX:-c++} not found" >&2
+if ! command -v "${CXX:-c++}" >/dev/null 2>&1; then
+  echo "[sorafs-reference-header] required C++ compiler not found: ${CXX:-c++}" >&2
+  exit 1
 fi
+"${CXX:-c++}" -fsyntax-only -x c++ -I"${ROOT_DIR}/crates/sorafs_manifest/include" "${HEADER}"

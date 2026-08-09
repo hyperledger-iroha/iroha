@@ -3,6 +3,8 @@ package org.hyperledger.iroha.sdk.client
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
+import org.hyperledger.iroha.sdk.crypto.IrohaHash
+import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
 /** Minimal JSON parser for Torii contract deploy/call responses. */
 object ContractJsonParser {
@@ -15,7 +17,8 @@ object ContractJsonParser {
     @JvmStatic
     fun parseCallResponse(payload: ByteArray): ContractCallResponse {
         val root = expectObject(parse(payload, "contract call response"), "contract call response")
-        return ContractCallResponse(
+        rejectRetiredDraftFields(root, "contract call response")
+        val response = ContractCallResponse(
             ok = requiredBoolean(root["ok"], "contract call response.ok"),
             submitted = requiredBoolean(root["submitted"], "contract call response.submitted"),
             dataspace = requiredString(root["dataspace"], "contract call response.dataspace"),
@@ -36,14 +39,29 @@ object ContractJsonParser {
                 "contract call response.transaction_ttl_ms",
             ),
             entrypointHashHex = optionalHash(root["entrypoint_hash_hex"], "contract call response.entrypoint_hash_hex"),
-            transactionScaffoldB64 = optionalBase64(root["transaction_scaffold_b64"], "contract call response.transaction_scaffold_b64"),
-            signedTransactionB64 = optionalBase64(root["signed_transaction_b64"], "contract call response.signed_transaction_b64"),
+            transactionPayloadB64 = optionalBase64(root["transaction_payload_b64"], "contract call response.transaction_payload_b64"),
             signingMessageB64 = optionalBase64(root["signing_message_b64"], "contract call response.signing_message_b64"),
             operationReceipt = parseOperationReceipt(
                 expectObject(root["operation_receipt"], "contract call response.operation_receipt"),
                 "contract call response.operation_receipt",
             ),
         )
+        validateUnsignedTransactionState(
+            submitted = response.submitted,
+            txHashHex = response.txHashHex,
+            transactionPayloadB64 = response.transactionPayloadB64,
+            signingMessageB64 = response.signingMessageB64,
+            context = "contract call response",
+        )
+        check(
+            response.submitted ||
+                (response.entrypointHashHex == null &&
+                    response.operationReceipt.txHashHex == null &&
+                    response.operationReceipt.entrypointHashHex == null),
+        ) {
+            "contract call response unsigned draft must not contain transaction hashes"
+        }
+        return response
     }
 
     private fun parseOperationReceipt(
@@ -78,10 +96,11 @@ object ContractJsonParser {
     fun parseMultisigResponse(payload: ByteArray): MultisigResponse {
         val root = expectObject(parse(payload, "multisig response"), "multisig response")
         check(root["ok"] == true) { "multisig response.ok must be true" }
-        return MultisigResponse(
+        rejectRetiredDraftFields(root, "multisig response")
+        val response = MultisigResponse(
             ok = true,
             resolvedMultisigAccountId = requiredExactAccountId(root["resolved_multisig_account_id"], "multisig response.resolved_multisig_account_id"),
-            submitted = optionalBoolean(root["submitted"], "multisig response.submitted"),
+            submitted = requiredBoolean(root["submitted"], "multisig response.submitted"),
             proposalId = optionalString(root["proposal_id"], "multisig response.proposal_id"),
             instructionsHash = if (root.containsKey("instructions_hash") && root["instructions_hash"] != null)
                 HttpClientTransport.normalizeHex32(requiredString(root["instructions_hash"], "multisig response.instructions_hash"), "instructionsHash")
@@ -93,8 +112,17 @@ object ContractJsonParser {
                 HttpClientTransport.normalizeHex32(requiredString(root["executed_tx_hash_hex"], "multisig response.executed_tx_hash_hex"), "executedTxHashHex")
             else null,
             creationTimeMs = asOptionalNonNegativeLong(root["creation_time_ms"], "multisig response.creation_time_ms"),
+            transactionPayloadB64 = optionalBase64(root["transaction_payload_b64"], "multisig response.transaction_payload_b64"),
             signingMessageB64 = optionalBase64(root["signing_message_b64"], "multisig response.signing_message_b64"),
         )
+        validateUnsignedTransactionState(
+            submitted = response.submitted,
+            txHashHex = response.txHashHex,
+            transactionPayloadB64 = response.transactionPayloadB64,
+            signingMessageB64 = response.signingMessageB64,
+            context = "multisig response",
+        )
+        return response
     }
 
     @JvmStatic
@@ -161,12 +189,6 @@ object ContractJsonParser {
         return expectObject(value, path).toMap()
     }
 
-    private fun optionalBoolean(value: Any?, path: String): Boolean? {
-        if (value == null) return null
-        check(value is Boolean) { "$path must be a boolean" }
-        return value
-    }
-
     private fun requiredBoolean(value: Any?, path: String): Boolean {
         check(value is Boolean) { "$path must be a boolean" }
         return value
@@ -222,4 +244,48 @@ object ContractJsonParser {
         }
         return literal
     }
+
+    private fun rejectRetiredDraftFields(value: Map<String, Any?>, context: String) {
+        val retired = RETIRED_DRAFT_FIELDS.firstOrNull(value::containsKey)
+        check(retired == null) { "$context contains retired field `$retired`" }
+    }
+
+    private fun validateUnsignedTransactionState(
+        submitted: Boolean,
+        txHashHex: String?,
+        transactionPayloadB64: String?,
+        signingMessageB64: String?,
+        context: String,
+    ) {
+        if (submitted) {
+            check(txHashHex != null && transactionPayloadB64 == null && signingMessageB64 == null) {
+                "$context submitted response must contain only the final transaction hash"
+            }
+            return
+        }
+        check(txHashHex == null && transactionPayloadB64 != null && signingMessageB64 != null) {
+            "$context unsigned response must contain exactly one payload and signing-message pair"
+        }
+        val transactionPayload = Base64.getDecoder().decode(transactionPayloadB64)
+        val signingMessage = Base64.getDecoder().decode(signingMessageB64)
+        try {
+            NoritoJavaCodecAdapter.validateCanonicalTransactionPayload(transactionPayload)
+        } catch (ex: Exception) {
+            throw IllegalStateException(
+                "$context.transaction_payload_b64 must contain one canonical TransactionPayload",
+                ex,
+            )
+        }
+        check(signingMessage.size == 32 && signingMessage.contentEquals(IrohaHash.prehash(transactionPayload))) {
+            "$context.signing_message_b64 must be the exact TransactionPayload hash"
+        }
+    }
+
+    private val RETIRED_DRAFT_FIELDS = setOf(
+        "transaction_scaffold_b64",
+        "transaction_scaffold_base64",
+        "signed_transaction_b64",
+        "placeholder_transaction_hash_hex",
+        "placeholder_entrypoint_hash_hex",
+    )
 }

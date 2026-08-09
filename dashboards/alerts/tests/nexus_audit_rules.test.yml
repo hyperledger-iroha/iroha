@@ -19,3 +19,5 @@ tests:
               trace_id: TRACE-TELEMETRY-BRIDGE
             exp_annotations:
               summary: "Routed-trace audit failed"
+              description: |
+                Routed-trace TRACE-TELEMETRY-BRIDGE reported status fail within the last five minutes. Review the corresponding nexus.audit.outcome payload and execute the mitigation checklist.

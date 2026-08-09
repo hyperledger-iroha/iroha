@@ -178,9 +178,9 @@ public sealed class TransactionBuilderTests
     private const string FixtureAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 
     [Theory]
-    [InlineData("swift_transfer_asset_basic", 805, 1423, "aaf57e9f247a5d92ba3c4c7d5076bd4aacf9b24b7de3b11e511b026784dec38b")]
-    [InlineData("swift_mint_asset_basic", 695, 1313, "e38b26f35c901bf2099facd691511ea1ad1d1ebc7c43d98a9f473731fdeecd09")]
-    [InlineData("swift_burn_asset_basic", 695, 1313, "8e2d28a9da78b1db4800d1e2e86be623a7d566235616c08daf813d9dcdd9a907")]
+    [InlineData("swift_transfer_asset_basic", 814, 1423, "db2a35382e8bd77c90f227c6e79c2781ab6b811d38aecbcae6338b937db51d49")]
+    [InlineData("swift_mint_asset_basic", 704, 1313, "a0968b1d31d415c8a0e76e8ce6827d4511b60473ba48e8fa01f23aa9e0c1c261")]
+    [InlineData("swift_burn_asset_basic", 704, 1313, "5f8f7fc2db4693e0f914b725ea20febc8ce9ab8ecacdb7a3c0e39ff1e7125b29")]
     public void BuildSignedProducesDeterministicGoldenOutputs(
         string fixtureName,
         int expectedPayloadLength,

@@ -3561,13 +3561,6 @@ fn app_api_transaction_signing_error(context: &str, err: impl fmt::Display) -> E
 }
 
 #[cfg(feature = "app_api")]
-fn app_api_scaffold_key_error(context: &str, err: impl fmt::Display) -> Error {
-    Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-        "failed to generate {context} scaffold key: {err}",
-    )))
-}
-
-#[cfg(feature = "app_api")]
 fn sign_app_api_transaction(
     builder: TransactionBuilder,
     private_key: &iroha_crypto::PrivateKey,
@@ -3576,25 +3569,6 @@ fn sign_app_api_transaction(
     builder
         .try_sign(private_key)
         .map_err(|err| app_api_transaction_signing_error(context, err))
-}
-
-#[cfg(feature = "app_api")]
-fn sign_app_api_scaffold_transaction(
-    builder: TransactionBuilder,
-    authority: AccountId,
-    context: &str,
-) -> Result<SignedTransaction> {
-    if builder.payload().authority != authority {
-        return Err(app_api_transaction_signing_error(
-            context,
-            "scaffold authority does not match the exact unsigned payload",
-        ));
-    }
-    let scaffold_key = iroha_crypto::KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
-        .map_err(|err| app_api_scaffold_key_error(context, err))?;
-    let signature = Signature::try_new(scaffold_key.private_key(), &builder.payload_hash_bytes())
-        .map_err(|err| app_api_transaction_signing_error(context, err))?;
-    Ok(builder.build_with_signature(signature))
 }
 
 #[cfg(feature = "app_api")]
@@ -3873,36 +3847,52 @@ mod app_api_transaction_signing_tests {
     }
 
     #[test]
-    fn app_api_scaffold_transaction_preserves_requested_authority() {
+    fn app_api_unsigned_draft_is_exact_deterministic_payload_roundtrip() {
+        use base64::Engine as _;
+
         let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
             .parse()
             .expect("valid chain id");
         let requested_authority = AccountId::new(
             checked_app_api_fixture_keypair(
-                b"iroha:torii:routing:test:app-api-scaffold-authority".to_vec(),
-                "derive Torii app-api scaffold authority fixture key",
+                b"iroha:torii:routing:test:app-api-unsigned-draft-authority".to_vec(),
+                "derive Torii app-api unsigned-draft authority fixture key",
             )
             .public_key()
             .clone(),
         );
-        let tx = sign_app_api_scaffold_transaction(
-            TransactionBuilder::new(
-                chain_id,
-                requested_authority.clone(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(
-                Level::INFO,
-                "app-api scaffold transaction".to_owned(),
-            )]),
+        let mut builder = TransactionBuilder::new(
+            chain_id,
             requested_authority.clone(),
-            "/test/app-api-scaffold",
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .expect("checked scaffold signing should succeed");
+        .with_instructions([Log::new(
+            Level::INFO,
+            "app-api unsigned transaction".to_owned(),
+        )]);
+        builder.set_creation_time(Duration::from_millis(42));
+        let first = app_api_transaction_draft(&builder);
+        let second = app_api_transaction_draft(&builder);
+        assert_eq!(
+            first.transaction_payload_b64,
+            second.transaction_payload_b64
+        );
+        assert_eq!(first.signing_message_b64, second.signing_message_b64);
 
-        assert_eq!(tx.authority(), &requested_authority);
-        tx.verify_signature()
-            .expect_err("placeholder scaffold signature is not controlled by the authority");
+        let payload_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&first.transaction_payload_b64)
+            .expect("decode canonical payload");
+        let decoded = TransactionBuilder::decode_payload(&payload_bytes)
+            .expect("strictly decode canonical payload");
+        assert_eq!(decoded.payload(), builder.payload());
+        assert_eq!(decoded.encode_payload(), payload_bytes);
+        assert_eq!(decoded.payload().authority, requested_authority);
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(&first.signing_message_b64)
+                .expect("decode signing message"),
+            builder.payload_hash_bytes()
+        );
     }
 
     #[test]
@@ -4026,25 +4016,29 @@ mod app_api_transaction_signing_tests {
     }
 
     #[test]
-    fn authority_signature_cannot_submit_for_another_authority() {
+    fn app_api_unsigned_payload_accepts_authority_and_rejects_unrelated_signature() {
         use base64::Engine as _;
 
         let authority_key = checked_app_api_fixture_keypair(
-            b"iroha:torii:sccp:bound-authority".to_vec(),
-            "derive bound SCCP authority",
+            b"iroha:torii:app-api:bound-authority".to_vec(),
+            "derive bound app-api authority",
         );
         let attacker_key = checked_app_api_fixture_keypair(
-            b"iroha:torii:sccp:attacker-authority".to_vec(),
-            "derive SCCP attacker authority",
+            b"iroha:torii:app-api:attacker-authority".to_vec(),
+            "derive app-api attacker authority",
         );
         let authority = AccountId::new(authority_key.public_key().clone());
-        let chain_id: ChainId = "sccp-authority-binding-test".parse().expect("chain id");
+        let chain_id: ChainId = "app-api-authority-binding-test".parse().expect("chain id");
         let builder = TransactionBuilder::new(
             chain_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([Log::new(Level::INFO, "SCCP authority binding".to_owned())]);
+        .with_instructions([Log::new(
+            Level::INFO,
+            "app-api authority binding".to_owned(),
+        )]);
+        let payload_bytes = builder.encode_payload();
         let attacker_signature =
             Signature::try_new(attacker_key.private_key(), &builder.payload_hash_bytes())
                 .expect("sign with attacker key");
@@ -4059,6 +4053,18 @@ mod app_api_transaction_signing_tests {
             transaction.verify_signature().is_err(),
             "transaction verification must bind the signature to authority.try_signatory()"
         );
+
+        let valid_builder = TransactionBuilder::decode_payload(&payload_bytes)
+            .expect("decode exact app-api payload for authority signing");
+        let authority_signature = Signature::try_new(
+            authority_key.private_key(),
+            &valid_builder.payload_hash_bytes(),
+        )
+        .expect("sign exact app-api payload with its authority");
+        valid_builder
+            .build_with_signature(authority_signature)
+            .verify_signature()
+            .expect("the matching authority signature must verify");
     }
 
     #[test]
@@ -4197,7 +4203,6 @@ pub async fn handle_v1_confidential_asset_transitions(
 }
 
 #[cfg(feature = "zk-proof-tags")]
-#[derive(Debug)]
 /// GET /v1/zk/proof-tags/{backend}/{hash} — return ZK1 TLV tags for ProofId (debug).
 pub async fn handle_get_proof_tags(
     state: Arc<CoreState>,
@@ -4223,15 +4228,8 @@ pub async fn handle_get_proof_tags(
         proof_hash: arr,
     };
     let world = state.world_view();
-    #[allow(unused_mut)]
-    let mut tags: Vec<[u8; 4]> = Vec::new();
-    #[cfg(feature = "zk-proof-tags")]
-    {
-        use mv::storage::StorageReadOnly as _;
-        if let Some(v) = world.proof_tags().get(&id) {
-            tags = v.clone();
-        }
-    }
+    use mv::storage::StorageReadOnly as _;
+    let tags = world.proof_tags().get(&id).cloned().unwrap_or_default();
     // Map to JSON strings (ASCII when possible, else hex)
     let mut out: Vec<norito::json::Value> = Vec::with_capacity(tags.len());
     for t in tags {
@@ -8281,12 +8279,10 @@ mod sccp_first_release_api_tests {
             },
         )
         .expect_err("recent readback requires immutable retained-header finality and archive");
-        assert!(
-            error
-                .to_string()
-                .contains("finality artifact for height 9 not found"),
-            "unexpected missing-archive error: {error}"
-        );
+        let Error::Query(iroha_data_model::ValidationFail::InternalError(message)) = error else {
+            panic!("unexpected missing-archive error: {error}");
+        };
+        assert!(message.contains("finality artifact for height 9 not found"));
 
         let error = sccp_message_bundle_for_request(&state, message_id)
             .expect_err("proof material still requires an exact retained-header finality record");
@@ -17348,8 +17344,6 @@ impl NormalizedAssetTransfer {
         &self,
         status: &str,
         payload_signing_hash_hex: String,
-        placeholder_transaction_hash_hex: Option<String>,
-        placeholder_entrypoint_hash_hex: Option<String>,
         transaction_hash_hex: Option<String>,
         entrypoint_hash_hex: Option<String>,
     ) -> AssetTransferReceiptDto {
@@ -17359,8 +17353,6 @@ impl NormalizedAssetTransfer {
             transport: "torii".to_owned(),
             intent: self.intent.clone(),
             payload_signing_hash_hex,
-            placeholder_transaction_hash_hex,
-            placeholder_entrypoint_hash_hex,
             transaction_hash_hex,
             entrypoint_hash_hex,
         }
@@ -17444,8 +17436,6 @@ async fn submit_asset_transfer_request(
     request: AssetTransferRequestDto,
     endpoint: &'static str,
 ) -> Result<AssetTransferResponseDto> {
-    use base64::Engine as _;
-
     let now_ms = current_time_millis();
     let (mut transfer, signing_state) =
         normalize_asset_transfer_request_shape(chain_id.as_ref(), request)?;
@@ -17466,39 +17456,17 @@ async fn submit_asset_transfer_request(
                 transfer.transaction_ttl_ms,
                 now_ms,
             )?;
-            let scaffold = sign_app_api_scaffold_transaction(
-                builder,
-                transfer.authority.clone(),
-                "asset transfer",
-            )?;
-            let payload_signing_hash = HashOf::new(scaffold.payload());
+            let draft = app_api_transaction_draft(&builder);
+            let payload_signing_hash = HashOf::new(builder.payload());
             let payload_signing_hash_hex = hex::encode(payload_signing_hash.as_ref());
-            let placeholder_transaction_hash_hex = hex::encode(scaffold.hash().as_ref());
-            let placeholder_entrypoint_hash_hex =
-                hex::encode(scaffold.hash_as_entrypoint().as_ref());
-            let transaction_scaffold_base64 =
-                base64::engine::general_purpose::STANDARD.encode(scaffold.encode_versioned());
-            let signing_payload = AssetTransferSigningPayloadDto {
-                payload_base64: base64::engine::general_purpose::STANDARD
-                    .encode(payload_signing_hash.as_ref()),
-                algorithm: "ed25519".to_owned(),
-            };
-            let receipt = transfer.receipt(
-                "pending_signature",
-                payload_signing_hash_hex,
-                Some(placeholder_transaction_hash_hex.clone()),
-                Some(placeholder_entrypoint_hash_hex.clone()),
-                None,
-                None,
-            );
+            let receipt =
+                transfer.receipt("pending_signature", payload_signing_hash_hex, None, None);
             Ok(AssetTransferResponseDto {
                 ok: true,
                 submitted: false,
                 intent: transfer.intent,
-                signing_payload: Some(signing_payload),
-                transaction_scaffold_base64: Some(transaction_scaffold_base64),
-                placeholder_transaction_hash_hex: Some(placeholder_transaction_hash_hex),
-                placeholder_entrypoint_hash_hex: Some(placeholder_entrypoint_hash_hex),
+                transaction_payload_b64: Some(draft.transaction_payload_b64),
+                signing_message_b64: Some(draft.signing_message_b64),
                 transaction_hash_hex: None,
                 entrypoint_hash_hex: None,
                 pipeline_status: None,
@@ -17579,8 +17547,6 @@ async fn submit_asset_transfer_request(
             let receipt = transfer.receipt(
                 disposition.receipt_status(),
                 payload_signing_hash_hex,
-                None,
-                None,
                 Some(transaction_hash_hex.clone()),
                 Some(entrypoint_hash_hex.clone()),
             );
@@ -17588,10 +17554,8 @@ async fn submit_asset_transfer_request(
                 ok: true,
                 submitted: true,
                 intent: transfer.intent,
-                signing_payload: None,
-                transaction_scaffold_base64: None,
-                placeholder_transaction_hash_hex: None,
-                placeholder_entrypoint_hash_hex: None,
+                transaction_payload_b64: None,
+                signing_message_b64: None,
                 transaction_hash_hex: Some(transaction_hash_hex),
                 entrypoint_hash_hex: Some(entrypoint_hash_hex),
                 pipeline_status: Some(pipeline_status),
@@ -17605,7 +17569,6 @@ async fn submit_asset_transfer_request(
 mod asset_transfer_request_tests {
     use super::*;
     use iroha_data_model::{isi::TransferBox, transaction::executable::Executable};
-    use iroha_version::codec::DecodeVersioned as _;
 
     const NOW_MS: u64 = 1_700_000_000_000;
 
@@ -17840,41 +17803,31 @@ mod asset_transfer_request_tests {
     }
 
     #[test]
-    fn prepare_scaffold_is_versioned_and_final_signature_changes_only_envelope_hashes() {
+    fn prepare_draft_roundtrips_exact_payload_and_accepts_only_authority_signature() {
+        use base64::Engine as _;
+
         let authority_keypair = fixture_keypair(0x35);
         let (transfer, _) = normalize(fixture_request(&authority_keypair)).expect("normalize");
-        let scaffold = sign_app_api_scaffold_transaction(
-            transfer.transaction_builder(&ChainId::from("asset-transfer-test")),
-            transfer.authority.clone(),
-            "asset transfer test",
-        )
-        .expect("scaffold");
-        let versioned = scaffold.encode_versioned();
-        let decoded = SignedTransaction::decode_all_versioned(&versioned)
-            .expect("strict versioned scaffold decode");
-        assert_eq!(decoded.payload(), scaffold.payload());
+        let builder = transfer.transaction_builder(&ChainId::from("asset-transfer-test"));
+        let draft = app_api_transaction_draft(&builder);
+        let payload_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&draft.transaction_payload_b64)
+            .expect("decode payload draft");
+        let decoded = TransactionBuilder::decode_payload(&payload_bytes)
+            .expect("strict canonical payload decode");
+        assert_eq!(decoded.payload(), builder.payload());
+        assert_eq!(decoded.encode_payload(), payload_bytes);
 
         let signature = Signature::try_new(
             authority_keypair.private_key(),
-            HashOf::new(scaffold.payload()).as_ref(),
+            &builder.payload_hash_bytes(),
         )
         .expect("sign payload hash");
-        let final_transaction = transfer
-            .transaction_builder(&ChainId::from("asset-transfer-test"))
-            .build_with_signature(signature);
+        let final_transaction = builder.build_with_signature(signature);
         final_transaction
             .verify_signature()
             .expect("final signature verifies");
-        assert_eq!(final_transaction.payload(), scaffold.payload());
-        assert_eq!(
-            HashOf::new(final_transaction.payload()),
-            HashOf::new(scaffold.payload())
-        );
-        assert_ne!(final_transaction.hash(), scaffold.hash());
-        assert_ne!(
-            final_transaction.hash_as_entrypoint(),
-            scaffold.hash_as_entrypoint()
-        );
+        assert_eq!(final_transaction.payload(), decoded.payload());
     }
 
     #[test]
@@ -18370,7 +18323,6 @@ async fn submit_contract_call_request(
     endpoint: &'static str,
     expected_kind: Option<manifest::EntryPointKind>,
 ) -> Result<ContractCallResponseDto> {
-    use base64::Engine as _;
     use iroha_data_model::prelude as dm;
 
     let ContractCallDto {
@@ -18490,18 +18442,7 @@ async fn submit_contract_call_request(
             ));
         }
         let signature = decode_app_api_detached_signature(signature_b64)?;
-        let mut tx = sign_app_api_scaffold_transaction(
-            builder,
-            authority.clone().into(),
-            "contract call detached signature",
-        )?;
-        tx.set_signature(
-            iroha_data_model::transaction::signed::TransactionSignature(
-                iroha_crypto::SignatureOf::<
-                    iroha_data_model::transaction::signed::TransactionPayload,
-                >::from_signature(signature),
-            ),
-        );
+        let tx = builder.build_with_signature(signature);
         tx.verify_signature().map_err(|err| {
             conversion_error(format!(
                 "contract call detached signature verification failed: {err}"
@@ -18522,8 +18463,7 @@ async fn submit_contract_call_request(
             tx_hash_hex: Some(tx_hash_hex.clone()),
             pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex.clone())),
             entrypoint_hash_hex: Some(entrypoint_hash_hex.clone()),
-            transaction_scaffold_b64: None,
-            signed_transaction_b64: None,
+            transaction_payload_b64: None,
             signing_message_b64: None,
             entrypoint: response_entrypoint.clone(),
             operation_receipt: contract_call_operation_receipt(ContractCallReceiptInput {
@@ -18543,12 +18483,7 @@ async fn submit_contract_call_request(
         });
     }
 
-    let tx = sign_app_api_scaffold_transaction(builder, authority.into(), "contract call")?;
-    let entrypoint_hash_hex = hex::encode(tx.hash_as_entrypoint().as_ref());
-    let signed_transaction_b64 =
-        base64::engine::general_purpose::STANDARD.encode(tx.encode_versioned());
-    let signing_message_b64 = base64::engine::general_purpose::STANDARD
-        .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
+    let draft = app_api_transaction_draft(&builder);
     Ok(ContractCallResponseDto {
         ok: true,
         submitted: false,
@@ -18560,10 +18495,9 @@ async fn submit_contract_call_request(
         transaction_ttl_ms,
         tx_hash_hex: None,
         pipeline_status: None,
-        entrypoint_hash_hex: Some(entrypoint_hash_hex.clone()),
-        transaction_scaffold_b64: Some(signed_transaction_b64.clone()),
-        signed_transaction_b64: Some(signed_transaction_b64),
-        signing_message_b64: Some(signing_message_b64),
+        entrypoint_hash_hex: None,
+        transaction_payload_b64: Some(draft.transaction_payload_b64),
+        signing_message_b64: Some(draft.signing_message_b64),
         entrypoint: response_entrypoint.clone(),
         operation_receipt: contract_call_operation_receipt(ContractCallReceiptInput {
             status: "pending_signature",
@@ -18574,7 +18508,7 @@ async fn submit_contract_call_request(
             abi_hash_hex: &abi_hash_hex,
             tx_hash_hex: None,
             entrypoint: response_entrypoint,
-            entrypoint_hash_hex: Some(entrypoint_hash_hex),
+            entrypoint_hash_hex: None,
             gas_limit,
             fee_payment,
             payload_digest_hex: &payload_digest_hex,
@@ -19393,10 +19327,7 @@ fn prepare_bridge_proof_submit(
             state.as_ref(),
             "SCCP bridge-proof preparation",
         )?;
-        let transaction_payload_b64 =
-            base64::engine::general_purpose::STANDARD.encode(builder.encode_payload());
-        let signing_message_b64 =
-            base64::engine::general_purpose::STANDARD.encode(builder.payload_hash_bytes());
+        let draft = app_api_transaction_draft(&builder);
         PreparedBridgeProofSubmit::Prepare(BridgeSubmitResponseDto {
             submitted: false,
             payload_kind,
@@ -19409,8 +19340,8 @@ fn prepare_bridge_proof_submit(
             range_end_height,
             creation_time_ms,
             tx_hash_hex: None,
-            transaction_payload_b64: Some(transaction_payload_b64),
-            signing_message_b64: Some(signing_message_b64),
+            transaction_payload_b64: Some(draft.transaction_payload_b64),
+            signing_message_b64: Some(draft.signing_message_b64),
         })
     };
 
@@ -19609,7 +19540,7 @@ fn prepare_bridge_message_submit(
                     .to_owned(),
             ));
         }
-        let routing_plan = scaffold_transaction_routing_plan(
+        let routing_plan = unsigned_transaction_routing_plan(
             chain_id.as_ref(),
             queue.as_ref(),
             state.as_ref(),
@@ -19656,10 +19587,7 @@ fn prepare_bridge_message_submit(
             state.as_ref(),
             "SCCP bridge-message preparation",
         )?;
-        let transaction_payload_b64 =
-            base64::engine::general_purpose::STANDARD.encode(builder.encode_payload());
-        let signing_message_b64 =
-            base64::engine::general_purpose::STANDARD.encode(builder.payload_hash_bytes());
+        let draft = app_api_transaction_draft(&builder);
         PreparedBridgeMessageSubmit::Prepare(BridgeSubmitResponseDto {
             submitted: false,
             payload_kind,
@@ -19672,8 +19600,8 @@ fn prepare_bridge_message_submit(
             range_end_height,
             creation_time_ms,
             tx_hash_hex: None,
-            transaction_payload_b64: Some(transaction_payload_b64),
-            signing_message_b64: Some(signing_message_b64),
+            transaction_payload_b64: Some(draft.transaction_payload_b64),
+            signing_message_b64: Some(draft.signing_message_b64),
         })
     };
 
@@ -21755,7 +21683,7 @@ fn build_multisig_propose_metadata_with_validation_fee(
 }
 
 #[cfg(feature = "app_api")]
-fn scaffold_transaction_routing_plan(
+fn unsigned_transaction_routing_plan(
     chain_id: &ChainId,
     queue: &Queue,
     state: &CoreState,
@@ -21772,17 +21700,14 @@ fn scaffold_transaction_routing_plan(
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
-    let tx = sign_app_api_scaffold_transaction(
-        builder
-            .with_fee_payment_intent(fee_payment)
-            .with_metadata(metadata)
-            .with_executable(executable),
-        routing_authority.clone(),
-        context,
-    )?;
-    let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx));
+    let payload = builder
+        .with_fee_payment_intent(fee_payment)
+        .with_metadata(metadata)
+        .with_executable(executable)
+        .into_payload()
+        .map_err(|err| app_api_transaction_signing_error(context, err))?;
     queue
-        .route_plan_with_state(&accepted, state)
+        .route_payload_plan_with_state(&payload, state)
         .map_err(|err| Error::PushIntoQueue {
             source: Box::new(iroha_core::queue::Error::UnresolvedRoute {
                 reason: err.to_string(),
@@ -21803,7 +21728,7 @@ fn multisig_immediate_execution_routing_plan(
     executable: Executable,
     context: &'static str,
 ) -> Result<RoutingPlan> {
-    scaffold_transaction_routing_plan(
+    unsigned_transaction_routing_plan(
         chain_id,
         queue,
         state,
@@ -25692,6 +25617,40 @@ mod multisig_selector_tests {
         norito::json::from_slice(&body).expect("json body")
     }
 
+    fn assert_exact_unsigned_transaction_draft(payload: &norito::json::Value) {
+        use base64::Engine as _;
+
+        let transaction_payload_b64 = payload["transaction_payload_b64"]
+            .as_str()
+            .expect("unsigned response contains transaction_payload_b64");
+        let transaction_payload = base64::engine::general_purpose::STANDARD
+            .decode(transaction_payload_b64)
+            .expect("decode transaction_payload_b64");
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD.encode(&transaction_payload),
+            transaction_payload_b64,
+            "transaction_payload_b64 must use canonical padded base64"
+        );
+        let builder = dm::TransactionBuilder::decode_payload(&transaction_payload)
+            .expect("strictly decode canonical TransactionPayload");
+        assert_eq!(builder.encode_payload(), transaction_payload);
+
+        let signing_message_b64 = payload["signing_message_b64"]
+            .as_str()
+            .expect("unsigned response contains signing_message_b64");
+        let signing_message = base64::engine::general_purpose::STANDARD
+            .decode(signing_message_b64)
+            .expect("decode signing_message_b64");
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD.encode(&signing_message),
+            signing_message_b64,
+            "signing_message_b64 must use canonical padded base64"
+        );
+        assert_eq!(signing_message, builder.payload_hash_bytes());
+        assert!(payload.get("transaction_scaffold_b64").is_none());
+        assert!(payload.get("signed_transaction_b64").is_none());
+    }
+
     #[test]
     fn multisig_selector_rejects_both_fields() {
         let state = build_state(World::default());
@@ -26145,7 +26104,7 @@ mod multisig_selector_tests {
             payload["contract_address"].as_str(),
             Some(contract_address.as_ref())
         );
-        assert!(payload["signing_message_b64"].as_str().is_some());
+        assert_exact_unsigned_transaction_draft(&payload);
     }
 
     #[tokio::test]
@@ -27347,7 +27306,7 @@ mod multisig_selector_tests {
             payload["instructions_hash"].as_str(),
             Some(active_hash.as_str())
         );
-        assert!(payload["signing_message_b64"].as_str().is_some());
+        assert_exact_unsigned_transaction_draft(&payload);
     }
 
     #[tokio::test]
@@ -27398,7 +27357,7 @@ mod multisig_selector_tests {
         );
         assert!(payload["cancel_proposal_id"].as_str().is_some());
         assert!(payload["cancel_instructions_hash"].as_str().is_some());
-        assert!(payload["signing_message_b64"].as_str().is_some());
+        assert_exact_unsigned_transaction_draft(&payload);
     }
 
     #[tokio::test]
@@ -27468,7 +27427,7 @@ mod multisig_selector_tests {
             payload["cancel_instructions_hash"].as_str(),
             Some(cancel_hash.to_string().as_str())
         );
-        assert!(payload["signing_message_b64"].as_str().is_some());
+        assert_exact_unsigned_transaction_draft(&payload);
     }
 
     #[tokio::test]
@@ -27525,7 +27484,7 @@ mod multisig_selector_tests {
             payload["instructions_hash"].as_str(),
             Some(proposal_id.as_str())
         );
-        assert!(payload["signing_message_b64"].as_str().is_some());
+        assert_exact_unsigned_transaction_draft(&payload);
     }
 
     #[tokio::test]
@@ -27676,7 +27635,7 @@ seiyaku BytesPayloadNormalizeTest {
             payload["instructions_hash"].as_str(),
             Some(proposal_id.as_str())
         );
-        assert!(payload["signing_message_b64"].as_str().is_some());
+        assert_exact_unsigned_transaction_draft(&payload);
     }
 
     #[tokio::test]
@@ -28437,7 +28396,7 @@ seiyaku BytesPayloadNormalizeTest {
             payload["instructions_hash"].as_str(),
             Some(active_hash.as_str())
         );
-        assert!(payload["signing_message_b64"].as_str().is_some());
+        assert_exact_unsigned_transaction_draft(&payload);
     }
 }
 
@@ -28452,7 +28411,6 @@ pub async fn handle_post_contract_call_multisig_propose(
     telemetry: MaybeTelemetry,
     NoritoJson(req): NoritoJson<MultisigContractCallProposeDto>,
 ) -> Result<Response> {
-    use base64::Engine as _;
     use iroha_data_model::prelude as dm;
     use iroha_executor_data_model::isi::multisig::{
         MultisigApprove, MultisigCancel, MultisigPropose,
@@ -28590,18 +28548,7 @@ pub async fn handle_post_contract_call_multisig_propose(
             ));
         }
         let signature = decode_app_api_detached_signature(signature_b64)?;
-        let mut tx = sign_app_api_scaffold_transaction(
-            builder,
-            signer_account_id.clone().into(),
-            ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE,
-        )?;
-        tx.set_signature(
-            iroha_data_model::transaction::signed::TransactionSignature(
-                iroha_crypto::SignatureOf::<
-                    iroha_data_model::transaction::signed::TransactionPayload,
-                >::from_signature(signature),
-            ),
-        );
+        let tx = builder.build_with_signature(signature);
         tx.verify_signature().map_err(|err| {
             conversion_error(format!(
                 "multisig contract-call propose detached signature verification failed: {err}"
@@ -28658,7 +28605,7 @@ pub async fn handle_post_contract_call_multisig_propose(
         MultisigContractCallResponseDto {
             ok: true,
             resolved_multisig_account_id: multisig_account_id.clone(),
-            submitted: Some(true),
+            submitted: true,
             proposal_id: Some(proposal_id),
             instructions_hash: Some(instructions_hash),
             tx_hash_hex: Some(tx_hash_hex.clone()),
@@ -28669,27 +28616,23 @@ pub async fn handle_post_contract_call_multisig_propose(
             executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
             creation_time_ms: Some(creation_time_ms),
             fee_payment: fee_payment.clone(),
+            transaction_payload_b64: None,
             signing_message_b64: None,
         }
     } else {
-        let tx = sign_app_api_scaffold_transaction(
-            builder,
-            signer_account_id.clone().into(),
-            ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE,
-        )?;
-        let signing_message_b64 = base64::engine::general_purpose::STANDARD
-            .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
+        let draft = app_api_transaction_draft(&builder);
         MultisigContractCallResponseDto {
             ok: true,
             resolved_multisig_account_id: multisig_account_id,
-            submitted: Some(false),
+            submitted: false,
             proposal_id: Some(proposal_id),
             instructions_hash: Some(instructions_hash),
             tx_hash_hex: None,
             executed_tx_hash_hex: None,
             creation_time_ms: Some(creation_time_ms),
             fee_payment: fee_payment.clone(),
-            signing_message_b64: Some(signing_message_b64),
+            transaction_payload_b64: Some(draft.transaction_payload_b64),
+            signing_message_b64: Some(draft.signing_message_b64),
         }
     };
 
@@ -28707,7 +28650,6 @@ pub async fn handle_post_contract_call_multisig_approve(
     telemetry: MaybeTelemetry,
     NoritoJson(req): NoritoJson<MultisigContractCallApproveDto>,
 ) -> Result<Response> {
-    use base64::Engine as _;
     use iroha_data_model::prelude as dm;
     use iroha_executor_data_model::isi::multisig::MultisigApprove;
 
@@ -28752,90 +28694,76 @@ pub async fn handle_post_contract_call_multisig_approve(
     )?;
     let fee_payment = builder.payload().fee_payment.clone();
 
-    let response =
-        if public_key_hex.is_some() || signature_b64.is_some() {
-            let public_key_hex = public_key_hex
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
-            let signature_b64 = signature_b64
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
-            let public_key_bytes = hex::decode(public_key_hex)
-                .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-            let public_key = iroha_crypto::PublicKey::from_bytes(
-                iroha_crypto::Algorithm::Ed25519,
-                &public_key_bytes,
-            )
+    let response = if public_key_hex.is_some() || signature_b64.is_some() {
+        let public_key_hex = public_key_hex
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
+        let signature_b64 = signature_b64
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
+        let public_key_bytes = hex::decode(public_key_hex)
             .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-            let expected_authority = dm::AccountId::new(public_key.clone());
-            if signer_account_id != expected_authority {
-                return Err(conversion_error(
-                    "public_key_hex does not match signer_account_id".to_owned(),
-                ));
-            }
-            let signature = decode_app_api_detached_signature(signature_b64)?;
-            let mut tx = sign_app_api_scaffold_transaction(
-                builder,
-                signer_account_id.clone().into(),
-                ENDPOINT_CONTRACTS_CALL_MULTISIG_APPROVE,
-            )?;
-            tx.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
-                iroha_crypto::SignatureOf::<
-                    iroha_data_model::transaction::signed::TransactionPayload,
-                >::from_signature(signature),
+        let public_key = iroha_crypto::PublicKey::from_bytes(
+            iroha_crypto::Algorithm::Ed25519,
+            &public_key_bytes,
+        )
+        .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
+        let expected_authority = dm::AccountId::new(public_key.clone());
+        if signer_account_id != expected_authority {
+            return Err(conversion_error(
+                "public_key_hex does not match signer_account_id".to_owned(),
             ));
-            tx.verify_signature().map_err(|err| {
-                conversion_error(format!(
-                    "multisig contract-call approve detached signature verification failed: {err}"
-                ))
-            })?;
-            let tx_hash_hex = hex::encode(tx.hash().as_ref());
-            handle_transaction_with_metrics(
-                chain_id,
-                queue,
-                state,
-                tx,
-                telemetry,
-                ENDPOINT_CONTRACTS_CALL_MULTISIG_APPROVE,
-            )
-            .await?;
-            MultisigContractCallResponseDto {
-                ok: true,
-                resolved_multisig_account_id: multisig_account_id.clone(),
-                submitted: Some(true),
-                proposal_id: proposal_id_literal,
-                instructions_hash: Some(hash_literal),
-                tx_hash_hex: Some(tx_hash_hex.clone()),
-                executed_tx_hash_hex: None,
-                creation_time_ms: Some(creation_time_ms),
-                fee_payment: fee_payment.clone(),
-                signing_message_b64: None,
-            }
-        } else {
-            let tx = sign_app_api_scaffold_transaction(
-                builder,
-                signer_account_id.into(),
-                ENDPOINT_CONTRACTS_CALL_MULTISIG_APPROVE,
-            )?;
-            let signing_message_b64 = base64::engine::general_purpose::STANDARD
-                .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
-            MultisigContractCallResponseDto {
-                ok: true,
-                resolved_multisig_account_id: multisig_account_id,
-                submitted: Some(false),
-                proposal_id: proposal_id_literal,
-                instructions_hash: Some(hash_literal),
-                tx_hash_hex: None,
-                executed_tx_hash_hex: None,
-                creation_time_ms: Some(creation_time_ms),
-                fee_payment: fee_payment.clone(),
-                signing_message_b64: Some(signing_message_b64),
-            }
-        };
+        }
+        let signature = decode_app_api_detached_signature(signature_b64)?;
+        let tx = builder.build_with_signature(signature);
+        tx.verify_signature().map_err(|err| {
+            conversion_error(format!(
+                "multisig contract-call approve detached signature verification failed: {err}"
+            ))
+        })?;
+        let tx_hash_hex = hex::encode(tx.hash().as_ref());
+        handle_transaction_with_metrics(
+            chain_id,
+            queue,
+            state,
+            tx,
+            telemetry,
+            ENDPOINT_CONTRACTS_CALL_MULTISIG_APPROVE,
+        )
+        .await?;
+        MultisigContractCallResponseDto {
+            ok: true,
+            resolved_multisig_account_id: multisig_account_id.clone(),
+            submitted: true,
+            proposal_id: proposal_id_literal,
+            instructions_hash: Some(hash_literal),
+            tx_hash_hex: Some(tx_hash_hex.clone()),
+            executed_tx_hash_hex: None,
+            creation_time_ms: Some(creation_time_ms),
+            fee_payment: fee_payment.clone(),
+            transaction_payload_b64: None,
+            signing_message_b64: None,
+        }
+    } else {
+        let draft = app_api_transaction_draft(&builder);
+        MultisigContractCallResponseDto {
+            ok: true,
+            resolved_multisig_account_id: multisig_account_id,
+            submitted: false,
+            proposal_id: proposal_id_literal,
+            instructions_hash: Some(hash_literal),
+            tx_hash_hex: None,
+            executed_tx_hash_hex: None,
+            creation_time_ms: Some(creation_time_ms),
+            fee_payment: fee_payment.clone(),
+            transaction_payload_b64: Some(draft.transaction_payload_b64),
+            signing_message_b64: Some(draft.signing_message_b64),
+        }
+    };
 
     Ok(JsonBody(response).into_response())
 }
@@ -28850,7 +28778,6 @@ pub async fn handle_post_multisig_cancel(
     telemetry: MaybeTelemetry,
     NoritoJson(req): NoritoJson<MultisigCancelRequestDto>,
 ) -> Result<Response> {
-    use base64::Engine as _;
     use iroha_data_model::prelude as dm;
     use iroha_executor_data_model::isi::multisig::{
         MultisigApprove, MultisigCancel, MultisigPropose,
@@ -28964,18 +28891,7 @@ pub async fn handle_post_multisig_cancel(
             ));
         }
         let signature = decode_app_api_detached_signature(signature_b64)?;
-        let mut tx = sign_app_api_scaffold_transaction(
-            builder,
-            signer_account_id.clone().into(),
-            ENDPOINT_MULTISIG_CANCEL,
-        )?;
-        tx.set_signature(
-            iroha_data_model::transaction::signed::TransactionSignature(
-                iroha_crypto::SignatureOf::<
-                    iroha_data_model::transaction::signed::TransactionPayload,
-                >::from_signature(signature),
-            ),
-        );
+        let tx = builder.build_with_signature(signature);
         tx.verify_signature().map_err(|err| {
             conversion_error(format!(
                 "multisig cancel detached signature verification failed: {err}"
@@ -29010,7 +28926,7 @@ pub async fn handle_post_multisig_cancel(
         MultisigCancelResponseDto {
             ok: true,
             resolved_multisig_account_id: multisig_account_id.clone(),
-            submitted: Some(true),
+            submitted: true,
             action: action.clone(),
             target_proposal_id: target_hash_literal.clone(),
             target_instructions_hash: target_hash_literal.clone(),
@@ -29020,20 +28936,15 @@ pub async fn handle_post_multisig_cancel(
             executed_tx_hash_hex: None,
             creation_time_ms: Some(creation_time_ms),
             fee_payment: fee_payment.clone(),
+            transaction_payload_b64: None,
             signing_message_b64: None,
         }
     } else {
-        let tx = sign_app_api_scaffold_transaction(
-            builder,
-            signer_account_id.into(),
-            ENDPOINT_MULTISIG_CANCEL,
-        )?;
-        let signing_message_b64 = base64::engine::general_purpose::STANDARD
-            .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
+        let draft = app_api_transaction_draft(&builder);
         MultisigCancelResponseDto {
             ok: true,
             resolved_multisig_account_id: multisig_account_id,
-            submitted: Some(false),
+            submitted: false,
             action,
             target_proposal_id: target_hash_literal.clone(),
             target_instructions_hash: target_hash_literal,
@@ -29043,7 +28954,8 @@ pub async fn handle_post_multisig_cancel(
             executed_tx_hash_hex: None,
             creation_time_ms: Some(creation_time_ms),
             fee_payment: fee_payment.clone(),
-            signing_message_b64: Some(signing_message_b64),
+            transaction_payload_b64: Some(draft.transaction_payload_b64),
+            signing_message_b64: Some(draft.signing_message_b64),
         }
     };
 
@@ -29060,7 +28972,6 @@ pub async fn handle_post_multisig_propose(
     telemetry: MaybeTelemetry,
     NoritoJson(req): NoritoJson<MultisigProposeDto>,
 ) -> Result<Response> {
-    use base64::Engine as _;
     use iroha_data_model::prelude as dm;
     use iroha_executor_data_model::isi::multisig::{MultisigApprove, MultisigPropose};
     use iroha_primitives::const_vec::ConstVec;
@@ -29149,125 +29060,111 @@ pub async fn handle_post_multisig_propose(
     )?;
     let fee_payment = builder.payload().fee_payment.clone();
 
-    let response =
-        if public_key_hex.is_some() || signature_b64.is_some() {
-            let public_key_hex = public_key_hex
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
-            let signature_b64 = signature_b64
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
-            let public_key_bytes = hex::decode(public_key_hex)
-                .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-            let public_key = iroha_crypto::PublicKey::from_bytes(
-                iroha_crypto::Algorithm::Ed25519,
-                &public_key_bytes,
-            )
+    let response = if public_key_hex.is_some() || signature_b64.is_some() {
+        let public_key_hex = public_key_hex
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
+        let signature_b64 = signature_b64
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
+        let public_key_bytes = hex::decode(public_key_hex)
             .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-            let expected_authority = dm::AccountId::new(public_key.clone());
-            if signer_account_id != expected_authority {
-                return Err(conversion_error(
-                    "public_key_hex does not match signer_account_id".to_owned(),
-                ));
-            }
-            let signature = decode_app_api_detached_signature(signature_b64)?;
-            let mut tx = sign_app_api_scaffold_transaction(
-                builder,
-                signer_account_id.clone().into(),
-                ENDPOINT_MULTISIG_PROPOSE,
-            )?;
-            tx.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
-                iroha_crypto::SignatureOf::<
-                    iroha_data_model::transaction::signed::TransactionPayload,
-                >::from_signature(signature),
+        let public_key = iroha_crypto::PublicKey::from_bytes(
+            iroha_crypto::Algorithm::Ed25519,
+            &public_key_bytes,
+        )
+        .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
+        let expected_authority = dm::AccountId::new(public_key.clone());
+        if signer_account_id != expected_authority {
+            return Err(conversion_error(
+                "public_key_hex does not match signer_account_id".to_owned(),
             ));
-            tx.verify_signature().map_err(|err| {
-                conversion_error(format!(
-                    "multisig propose detached signature verification failed: {err}"
-                ))
-            })?;
-            let tx_hash_hex = hex::encode(tx.hash().as_ref());
-            let routing_plan = if will_execute {
-                Some(multisig_immediate_execution_routing_plan(
-                    chain_id.as_ref(),
-                    queue.as_ref(),
-                    state.as_ref(),
-                    &signer_account_id,
-                    creation_time_ms,
-                    fee_payment.clone(),
-                    tx_metadata.clone(),
-                    dm::Executable::Instructions(ConstVec::from(proposal_instructions.clone())),
-                    ENDPOINT_MULTISIG_PROPOSE,
-                )?)
-            } else {
-                None
-            };
-            handle_transaction_with_metrics_and_routing_plan(
-                chain_id,
-                queue,
-                Arc::clone(&state),
-                tx,
-                telemetry,
-                routing_plan,
-                ENDPOINT_MULTISIG_PROPOSE,
-            )
-            .await?;
-            if wait_for_multisig_proposal_record_visibility(
+        }
+        let signature = decode_app_api_detached_signature(signature_b64)?;
+        let tx = builder.build_with_signature(signature);
+        tx.verify_signature().map_err(|err| {
+            conversion_error(format!(
+                "multisig propose detached signature verification failed: {err}"
+            ))
+        })?;
+        let tx_hash_hex = hex::encode(tx.hash().as_ref());
+        let routing_plan = if will_execute {
+            Some(multisig_immediate_execution_routing_plan(
+                chain_id.as_ref(),
+                queue.as_ref(),
                 state.as_ref(),
-                &multisig_account_id,
-                &spec,
-                &proposal_hash,
-            )
-            .await?
-            .is_none()
-            {
-                iroha_logger::warn!(
-                    multisig_account_id = %multisig_account_id,
-                    proposal_id = %proposal_id,
-                    "submitted multisig proposal did not become visible within the wait window"
-                );
-            }
-            MultisigContractCallResponseDto {
-                ok: true,
-                resolved_multisig_account_id: multisig_account_id.clone(),
-                submitted: Some(true),
-                proposal_id: Some(proposal_id),
-                instructions_hash: Some(instructions_hash),
-                tx_hash_hex: Some(tx_hash_hex.clone()),
-                // The quorum-one fast path executes the proposed instruction
-                // batch atomically in this same transaction. Returning its
-                // hash lets clients distinguish completed value movement from
-                // a proposal that is only collecting signatures.
-                executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
-                creation_time_ms: Some(creation_time_ms),
-                fee_payment: fee_payment.clone(),
-                signing_message_b64: None,
-            }
-        } else {
-            let tx = sign_app_api_scaffold_transaction(
-                builder,
-                signer_account_id.into(),
+                &signer_account_id,
+                creation_time_ms,
+                fee_payment.clone(),
+                tx_metadata.clone(),
+                dm::Executable::Instructions(ConstVec::from(proposal_instructions.clone())),
                 ENDPOINT_MULTISIG_PROPOSE,
-            )?;
-            let signing_message_b64 = base64::engine::general_purpose::STANDARD
-                .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
-            MultisigContractCallResponseDto {
-                ok: true,
-                resolved_multisig_account_id: multisig_account_id,
-                submitted: Some(false),
-                proposal_id: Some(proposal_id),
-                instructions_hash: Some(instructions_hash),
-                tx_hash_hex: None,
-                executed_tx_hash_hex: None,
-                creation_time_ms: Some(creation_time_ms),
-                fee_payment: fee_payment.clone(),
-                signing_message_b64: Some(signing_message_b64),
-            }
+            )?)
+        } else {
+            None
         };
+        handle_transaction_with_metrics_and_routing_plan(
+            chain_id,
+            queue,
+            Arc::clone(&state),
+            tx,
+            telemetry,
+            routing_plan,
+            ENDPOINT_MULTISIG_PROPOSE,
+        )
+        .await?;
+        if wait_for_multisig_proposal_record_visibility(
+            state.as_ref(),
+            &multisig_account_id,
+            &spec,
+            &proposal_hash,
+        )
+        .await?
+        .is_none()
+        {
+            iroha_logger::warn!(
+                multisig_account_id = %multisig_account_id,
+                proposal_id = %proposal_id,
+                "submitted multisig proposal did not become visible within the wait window"
+            );
+        }
+        MultisigContractCallResponseDto {
+            ok: true,
+            resolved_multisig_account_id: multisig_account_id.clone(),
+            submitted: true,
+            proposal_id: Some(proposal_id),
+            instructions_hash: Some(instructions_hash),
+            tx_hash_hex: Some(tx_hash_hex.clone()),
+            // The quorum-one fast path executes the proposed instruction
+            // batch atomically in this same transaction. Returning its
+            // hash lets clients distinguish completed value movement from
+            // a proposal that is only collecting signatures.
+            executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
+            creation_time_ms: Some(creation_time_ms),
+            fee_payment: fee_payment.clone(),
+            transaction_payload_b64: None,
+            signing_message_b64: None,
+        }
+    } else {
+        let draft = app_api_transaction_draft(&builder);
+        MultisigContractCallResponseDto {
+            ok: true,
+            resolved_multisig_account_id: multisig_account_id,
+            submitted: false,
+            proposal_id: Some(proposal_id),
+            instructions_hash: Some(instructions_hash),
+            tx_hash_hex: None,
+            executed_tx_hash_hex: None,
+            creation_time_ms: Some(creation_time_ms),
+            fee_payment: fee_payment.clone(),
+            transaction_payload_b64: Some(draft.transaction_payload_b64),
+            signing_message_b64: Some(draft.signing_message_b64),
+        }
+    };
 
     Ok(JsonBody(response).into_response())
 }
@@ -29282,7 +29179,6 @@ pub async fn handle_post_multisig_approve(
     telemetry: MaybeTelemetry,
     NoritoJson(req): NoritoJson<MultisigApproveDto>,
 ) -> Result<Response> {
-    use base64::Engine as _;
     use iroha_data_model::prelude as dm;
     use iroha_executor_data_model::isi::multisig::MultisigApprove;
 
@@ -29327,90 +29223,76 @@ pub async fn handle_post_multisig_approve(
     )?;
     let fee_payment = builder.payload().fee_payment.clone();
 
-    let response =
-        if public_key_hex.is_some() || signature_b64.is_some() {
-            let public_key_hex = public_key_hex
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
-            let signature_b64 = signature_b64
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
-            let public_key_bytes = hex::decode(public_key_hex)
-                .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-            let public_key = iroha_crypto::PublicKey::from_bytes(
-                iroha_crypto::Algorithm::Ed25519,
-                &public_key_bytes,
-            )
+    let response = if public_key_hex.is_some() || signature_b64.is_some() {
+        let public_key_hex = public_key_hex
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
+        let signature_b64 = signature_b64
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
+        let public_key_bytes = hex::decode(public_key_hex)
             .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-            let expected_authority = dm::AccountId::new(public_key.clone());
-            if signer_account_id != expected_authority {
-                return Err(conversion_error(
-                    "public_key_hex does not match signer_account_id".to_owned(),
-                ));
-            }
-            let signature = decode_app_api_detached_signature(signature_b64)?;
-            let mut tx = sign_app_api_scaffold_transaction(
-                builder,
-                signer_account_id.clone().into(),
-                ENDPOINT_MULTISIG_APPROVE,
-            )?;
-            tx.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
-                iroha_crypto::SignatureOf::<
-                    iroha_data_model::transaction::signed::TransactionPayload,
-                >::from_signature(signature),
+        let public_key = iroha_crypto::PublicKey::from_bytes(
+            iroha_crypto::Algorithm::Ed25519,
+            &public_key_bytes,
+        )
+        .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
+        let expected_authority = dm::AccountId::new(public_key.clone());
+        if signer_account_id != expected_authority {
+            return Err(conversion_error(
+                "public_key_hex does not match signer_account_id".to_owned(),
             ));
-            tx.verify_signature().map_err(|err| {
-                conversion_error(format!(
-                    "multisig approve detached signature verification failed: {err}"
-                ))
-            })?;
-            let tx_hash_hex = hex::encode(tx.hash().as_ref());
-            handle_transaction_with_metrics(
-                chain_id,
-                queue,
-                state,
-                tx,
-                telemetry,
-                ENDPOINT_MULTISIG_APPROVE,
-            )
-            .await?;
-            MultisigContractCallResponseDto {
-                ok: true,
-                resolved_multisig_account_id: multisig_account_id.clone(),
-                submitted: Some(true),
-                proposal_id: proposal_id_literal,
-                instructions_hash: Some(hash_literal),
-                tx_hash_hex: Some(tx_hash_hex.clone()),
-                executed_tx_hash_hex: None,
-                creation_time_ms: Some(creation_time_ms),
-                fee_payment: fee_payment.clone(),
-                signing_message_b64: None,
-            }
-        } else {
-            let tx = sign_app_api_scaffold_transaction(
-                builder,
-                signer_account_id.into(),
-                ENDPOINT_MULTISIG_APPROVE,
-            )?;
-            let signing_message_b64 = base64::engine::general_purpose::STANDARD
-                .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
-            MultisigContractCallResponseDto {
-                ok: true,
-                resolved_multisig_account_id: multisig_account_id,
-                submitted: Some(false),
-                proposal_id: proposal_id_literal,
-                instructions_hash: Some(hash_literal),
-                tx_hash_hex: None,
-                executed_tx_hash_hex: None,
-                creation_time_ms: Some(creation_time_ms),
-                fee_payment: fee_payment.clone(),
-                signing_message_b64: Some(signing_message_b64),
-            }
-        };
+        }
+        let signature = decode_app_api_detached_signature(signature_b64)?;
+        let tx = builder.build_with_signature(signature);
+        tx.verify_signature().map_err(|err| {
+            conversion_error(format!(
+                "multisig approve detached signature verification failed: {err}"
+            ))
+        })?;
+        let tx_hash_hex = hex::encode(tx.hash().as_ref());
+        handle_transaction_with_metrics(
+            chain_id,
+            queue,
+            state,
+            tx,
+            telemetry,
+            ENDPOINT_MULTISIG_APPROVE,
+        )
+        .await?;
+        MultisigContractCallResponseDto {
+            ok: true,
+            resolved_multisig_account_id: multisig_account_id.clone(),
+            submitted: true,
+            proposal_id: proposal_id_literal,
+            instructions_hash: Some(hash_literal),
+            tx_hash_hex: Some(tx_hash_hex.clone()),
+            executed_tx_hash_hex: None,
+            creation_time_ms: Some(creation_time_ms),
+            fee_payment: fee_payment.clone(),
+            transaction_payload_b64: None,
+            signing_message_b64: None,
+        }
+    } else {
+        let draft = app_api_transaction_draft(&builder);
+        MultisigContractCallResponseDto {
+            ok: true,
+            resolved_multisig_account_id: multisig_account_id,
+            submitted: false,
+            proposal_id: proposal_id_literal,
+            instructions_hash: Some(hash_literal),
+            tx_hash_hex: None,
+            executed_tx_hash_hex: None,
+            creation_time_ms: Some(creation_time_ms),
+            fee_payment: fee_payment.clone(),
+            transaction_payload_b64: Some(draft.transaction_payload_b64),
+            signing_message_b64: Some(draft.signing_message_b64),
+        }
+    };
 
     Ok(JsonBody(response).into_response())
 }
@@ -29814,8 +29696,6 @@ async fn execute_account_recovery_mutation(
     action: &'static str,
     endpoint: &'static str,
 ) -> Result<JsonBody<AccountRecoveryMutationResponseDto>> {
-    use base64::Engine as _;
-
     validate_app_api_fee_payment(&auth.fee_payment, false)?;
     validate_account_recovery_detached_signer(&auth)?;
     let (_, resolved_active_account_id) =
@@ -29833,37 +29713,36 @@ async fn execute_account_recovery_mutation(
     let builder =
         quote_app_api_transaction_builder(builder, queue.as_ref(), state.as_ref(), endpoint)?;
     let fee_payment = builder.payload().fee_payment.clone();
-    let mut transaction = sign_app_api_scaffold_transaction(
-        builder,
-        auth.signer_account_id.clone().into(),
-        endpoint,
-    )?;
 
-    let (submitted, tx_hash_hex, signing_message_b64) = if let Some(signature_b64) =
-        auth.signature_b64.as_deref()
-    {
-        let signature = decode_app_api_detached_signature(signature_b64)?;
-        transaction.set_signature(
-            iroha_data_model::transaction::signed::TransactionSignature(SignatureOf::<
-                iroha_data_model::transaction::signed::TransactionPayload,
-            >::from_signature(
-                signature
-            )),
-        );
-        transaction.verify_signature().map_err(|error| {
-            conversion_error(format!(
-                "{action} detached signature verification failed: {error}"
-            ))
-        })?;
-        let tx_hash_hex = hex::encode(transaction.hash().as_ref());
-        handle_transaction_with_metrics(chain_id, queue, state, transaction, telemetry, endpoint)
+    let (submitted, tx_hash_hex, transaction_payload_b64, signing_message_b64) =
+        if let Some(signature_b64) = auth.signature_b64.as_deref() {
+            let signature = decode_app_api_detached_signature(signature_b64)?;
+            let transaction = builder.build_with_signature(signature);
+            transaction.verify_signature().map_err(|error| {
+                conversion_error(format!(
+                    "{action} detached signature verification failed: {error}"
+                ))
+            })?;
+            let tx_hash_hex = hex::encode(transaction.hash().as_ref());
+            handle_transaction_with_metrics(
+                chain_id,
+                queue,
+                state,
+                transaction,
+                telemetry,
+                endpoint,
+            )
             .await?;
-        (true, Some(tx_hash_hex), None)
-    } else {
-        let signing_message_b64 = base64::engine::general_purpose::STANDARD
-            .encode(HashOf::new(transaction.payload()).as_ref());
-        (false, None, Some(signing_message_b64))
-    };
+            (true, Some(tx_hash_hex), None, None)
+        } else {
+            let draft = app_api_transaction_draft(&builder);
+            (
+                false,
+                None,
+                Some(draft.transaction_payload_b64),
+                Some(draft.signing_message_b64),
+            )
+        };
 
     Ok(JsonBody(AccountRecoveryMutationResponseDto {
         ok: true,
@@ -29874,6 +29753,7 @@ async fn execute_account_recovery_mutation(
         tx_hash_hex,
         creation_time_ms,
         fee_payment,
+        transaction_payload_b64,
         signing_message_b64,
     }))
 }
@@ -30296,6 +30176,86 @@ mod account_recovery_route_tests {
             .expect("different Ed25519 public key bytes");
         submitted.public_key_hex = Some(hex::encode(different_bytes));
         assert!(validate_account_recovery_detached_signer(&submitted).is_err());
+    }
+
+    #[test]
+    fn detached_recovery_draft_roundtrips_and_binds_the_signer() {
+        use base64::Engine as _;
+
+        let signer = KeyPair::try_from_seed(
+            b"iroha:torii:account-recovery:draft-signer".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("derive recovery draft signer");
+        let signer_account = single_account(&signer);
+        let guardians = (0..3)
+            .map(|index| {
+                let guardian = KeyPair::try_from_seed(
+                    format!("iroha:torii:account-recovery:guardian:{index}").into_bytes(),
+                    Algorithm::Ed25519,
+                )
+                .expect("derive recovery guardian");
+                RecoveryGuardian::new(single_account(&guardian), 1)
+            })
+            .collect::<Vec<_>>();
+        let policy = AccountRecoveryPolicy::new(
+            guardians,
+            REGULATED_RECOVERY_GUARDIAN_QUORUM,
+            NonZeroU64::new(REGULATED_RECOVERY_TIMELOCK_MS)
+                .expect("regulated recovery timelock is non-zero"),
+        )
+        .expect("regulated recovery policy");
+        let instruction: InstructionBox = iroha_data_model::isi::SetAccountRecoveryPolicy {
+            account: signer_account.clone(),
+            policy,
+        }
+        .into();
+        let mut builder = TransactionBuilder::new(
+            "account-recovery-draft-test"
+                .parse()
+                .expect("valid chain id"),
+            signer_account.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction]);
+        builder.set_creation_time(Duration::from_millis(42));
+
+        let draft = app_api_transaction_draft(&builder);
+        let payload_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&draft.transaction_payload_b64)
+            .expect("decode recovery transaction payload");
+        let signing_message = base64::engine::general_purpose::STANDARD
+            .decode(&draft.signing_message_b64)
+            .expect("decode recovery signing message");
+        assert_eq!(signing_message, builder.payload_hash_bytes());
+
+        let decoded = TransactionBuilder::decode_payload(&payload_bytes)
+            .expect("decode exact recovery transaction payload");
+        assert_eq!(decoded.encode_payload(), payload_bytes);
+        assert_eq!(decoded.payload().authority, signer_account);
+        let signature = Signature::try_new(signer.private_key(), &decoded.payload_hash_bytes())
+            .expect("sign recovery transaction payload");
+        decoded
+            .build_with_signature(signature)
+            .verify_signature()
+            .expect("matching recovery signer must verify");
+
+        let attacker = KeyPair::try_from_seed(
+            b"iroha:torii:account-recovery:draft-attacker".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("derive recovery draft attacker");
+        let decoded = TransactionBuilder::decode_payload(&payload_bytes)
+            .expect("decode recovery payload for adversarial signature");
+        let signature = Signature::try_new(attacker.private_key(), &decoded.payload_hash_bytes())
+            .expect("sign recovery transaction payload with unrelated key");
+        assert!(
+            decoded
+                .build_with_signature(signature)
+                .verify_signature()
+                .is_err(),
+            "an unrelated signature must not authorize the recovery transaction"
+        );
     }
 }
 
@@ -31694,16 +31654,6 @@ pub struct AssetTransferIntentDto {
 
 #[cfg(feature = "app_api")]
 #[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
-/// Exact bytes and algorithm a detached wallet must sign.
-pub struct AssetTransferSigningPayloadDto {
-    /// Canonical padded-base64 32-byte transaction-payload signing hash.
-    pub payload_base64: String,
-    /// Signing algorithm; always `ed25519` for this endpoint version.
-    pub algorithm: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 /// Normalized public evidence for an asset-transfer prepare or submit operation.
 pub struct AssetTransferReceiptDto {
     /// Stable operation discriminator; always `asset_transfer`.
@@ -31717,14 +31667,6 @@ pub struct AssetTransferReceiptDto {
     pub intent: AssetTransferIntentDto,
     /// Hex-encoded payload signing hash.
     pub payload_signing_hash_hex: String,
-    /// Scaffold-only transaction hash, present only during prepare.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub placeholder_transaction_hash_hex: Option<String>,
-    /// Scaffold-only entrypoint hash, present only during prepare.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub placeholder_entrypoint_hash_hex: Option<String>,
     /// Final signed transaction hash, present only after submit.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -31745,22 +31687,14 @@ pub struct AssetTransferResponseDto {
     pub submitted: bool,
     /// Canonical intent reconstructed by Torii.
     pub intent: AssetTransferIntentDto,
-    /// Signing bytes supplied only by the prepare phase.
+    /// Canonical unsigned `TransactionPayload` bytes supplied only by prepare.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
-    pub signing_payload: Option<AssetTransferSigningPayloadDto>,
-    /// Versioned signed-transaction scaffold supplied only by prepare.
+    pub transaction_payload_b64: Option<String>,
+    /// Exact `HashOf<TransactionPayload>` bytes supplied only by prepare.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
-    pub transaction_scaffold_base64: Option<String>,
-    /// Scaffold-only transaction hash supplied only by prepare.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub placeholder_transaction_hash_hex: Option<String>,
-    /// Scaffold-only entrypoint hash supplied only by prepare.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub placeholder_entrypoint_hash_hex: Option<String>,
+    pub signing_message_b64: Option<String>,
     /// Final transaction hash supplied only by submit.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -32113,12 +32047,9 @@ pub struct ContractCallResponseDto {
     /// Hex-encoded transaction entrypoint hash used by committed transaction queries.
     #[norito(default)]
     pub entrypoint_hash_hex: Option<String>,
-    /// Base64-encoded transaction scaffold for wallet `SIGN_REQUEST_TX` flows.
+    /// Canonical unsigned `TransactionPayload` bytes for local signing.
     #[norito(default)]
-    pub transaction_scaffold_b64: Option<String>,
-    /// Base64-encoded transaction scaffold for client-side re-signing and submission.
-    #[norito(default)]
-    pub signed_transaction_b64: Option<String>,
+    pub transaction_payload_b64: Option<String>,
     /// Base64-encoded message bytes the caller must sign for detached submit flows.
     #[norito(default)]
     pub signing_message_b64: Option<String>,
@@ -32972,8 +32903,7 @@ pub struct MultisigContractCallResponseDto {
     /// Active concrete multisig account id used after selector resolution.
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     /// Whether a transaction was submitted.
-    #[norito(default)]
-    pub submitted: Option<bool>,
+    pub submitted: bool,
     /// Stable proposal id when available.
     #[norito(default)]
     pub proposal_id: Option<String>,
@@ -32991,6 +32921,9 @@ pub struct MultisigContractCallResponseDto {
     pub creation_time_ms: Option<u64>,
     /// Exact quote-bound payer, sponsor revision, fee limits, and gas bound.
     pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
+    /// Canonical unsigned `TransactionPayload` bytes when preparing locally.
+    #[norito(default)]
+    pub transaction_payload_b64: Option<String>,
     /// Optional detached signing message bytes.
     #[norito(default)]
     pub signing_message_b64: Option<String>,
@@ -33005,8 +32938,7 @@ pub struct MultisigCancelResponseDto {
     /// Active concrete multisig account id used after selector resolution.
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     /// Whether a transaction was submitted.
-    #[norito(default)]
-    pub submitted: Option<bool>,
+    pub submitted: bool,
     /// Whether the cancel route created or approved the cancel proposal.
     pub action: String,
     /// Stable target proposal id.
@@ -33028,6 +32960,9 @@ pub struct MultisigCancelResponseDto {
     pub creation_time_ms: Option<u64>,
     /// Exact quote-bound payer, sponsor revision, fee limits, and gas bound.
     pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
+    /// Canonical unsigned `TransactionPayload` bytes when preparing locally.
+    #[norito(default)]
+    pub transaction_payload_b64: Option<String>,
     /// Optional detached signing message bytes.
     #[norito(default)]
     pub signing_message_b64: Option<String>,
@@ -33293,6 +33228,10 @@ pub struct AccountRecoveryMutationResponseDto {
     pub tx_hash_hex: Option<String>,
     pub creation_time_ms: u64,
     pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
+    /// Canonical Norito `TransactionPayload` bytes supplied only during preparation.
+    #[norito(default)]
+    pub transaction_payload_b64: Option<String>,
+    /// Exact `HashOf<TransactionPayload>` bytes supplied only during preparation.
     #[norito(default)]
     pub signing_message_b64: Option<String>,
 }
@@ -70647,257 +70586,7 @@ mod subscription_api_tests {
     };
     use iroha_test_samples::{ALICE_ID, BOB_ID};
 
-    #[test]
-    fn derive_trigger_id_is_deterministic() {
-        let subscription_id: NftId = "sub1$wonderland.universal".parse().unwrap();
-        let bill = derive_trigger_id("sub_bill_", &subscription_id).unwrap();
-        let bill2 = derive_trigger_id("sub_bill_", &subscription_id).unwrap();
-        let usage = derive_trigger_id("sub_usage_", &subscription_id).unwrap();
-        assert_eq!(bill, bill2);
-        assert_ne!(bill, usage);
-    }
-
-    #[test]
-    fn default_charge_ms_fixed_period_respects_bill_for() {
-        let billing = SubscriptionBilling {
-            cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
-                period_ms: 1_000,
-            }),
-            bill_for: SubscriptionBillFor::PreviousPeriod,
-            retry_backoff_ms: 0,
-            max_failures: 0,
-            grace_ms: 0,
-        };
-        assert_eq!(default_charge_ms(10_000, billing).unwrap(), 11_000);
-
-        let billing_next = SubscriptionBilling {
-            bill_for: SubscriptionBillFor::NextPeriod,
-            ..billing
-        };
-        assert_eq!(default_charge_ms(10_000, billing_next).unwrap(), 10_000);
-    }
-
-    #[test]
-    fn initial_period_fixed_period_matches_charge_window() {
-        let billing = SubscriptionBilling {
-            cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
-                period_ms: 2_000,
-            }),
-            bill_for: SubscriptionBillFor::PreviousPeriod,
-            retry_backoff_ms: 0,
-            max_failures: 0,
-            grace_ms: 0,
-        };
-        let (start, end) = initial_period_for_charge(billing, 10_000).unwrap();
-        assert_eq!(start, 8_000);
-        assert_eq!(end, 10_000);
-
-        let billing_next = SubscriptionBilling {
-            bill_for: SubscriptionBillFor::NextPeriod,
-            ..billing
-        };
-        let (start, end) = initial_period_for_charge(billing_next, 10_000).unwrap();
-        assert_eq!(start, 10_000);
-        assert_eq!(end, 12_000);
-    }
-
-    #[test]
-    fn parse_subscription_status_filter_accepts_known_values() {
-        assert_eq!(
-            parse_subscription_status_filter("active").unwrap(),
-            SubscriptionStatus::Active
-        );
-        assert_eq!(
-            parse_subscription_status_filter("past_due").unwrap(),
-            SubscriptionStatus::PastDue
-        );
-        assert!(parse_subscription_status_filter("unknown").is_err());
-    }
-
-    #[test]
-    fn subscription_plan_from_metadata_roundtrips() {
-        let plan = SubscriptionPlan {
-            provider: ALICE_ID.clone(),
-            billing: SubscriptionBilling {
-                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
-                    period_ms: 1_000,
-                }),
-                bill_for: SubscriptionBillFor::NextPeriod,
-                retry_backoff_ms: 0,
-                max_failures: 0,
-                grace_ms: 0,
-            },
-            pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
-                amount: Quantity::from(10_u32),
-                asset_definition: test_asset_definition_id_from_hex(
-                    "550e8400e29b41d4a7164466554400f1",
-                ),
-            }),
-        };
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            (*SUBSCRIPTION_PLAN_KEY).clone(),
-            IrohaJson::new(plan.clone()),
-        );
-        let parsed = subscription_plan_from_metadata(&metadata)
-            .unwrap()
-            .expect("plan metadata present");
-        assert_eq!(parsed, plan);
-    }
-
-    #[test]
-    fn subscription_state_and_invoice_from_metadata_roundtrip() {
-        let billing_trigger_id: TriggerId = "billing_trigger".parse().unwrap();
-        let subscription = SubscriptionState {
-            plan_id: test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f3"),
-            provider: ALICE_ID.clone(),
-            subscriber: ALICE_ID.clone(),
-            status: SubscriptionStatus::Active,
-            current_period_start_ms: 1_000,
-            current_period_end_ms: 2_000,
-            next_charge_ms: 2_000,
-            cancel_at_period_end: false,
-            cancel_at_ms: None,
-            failure_count: 0,
-            usage_accumulated: std::collections::BTreeMap::new(),
-            billing_trigger_id,
-        };
-        let invoice = SubscriptionInvoice {
-            subscription_nft_id: "sub1$wonderland.universal".parse().unwrap(),
-            period_start_ms: 1_000,
-            period_end_ms: 2_000,
-            attempted_at_ms: 2_000,
-            amount: Quantity::from(5_u32),
-            asset_definition: test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f1"),
-            status: SubscriptionInvoiceStatus::Paid,
-            tx_hash: None,
-        };
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            (*SUBSCRIPTION_KEY).clone(),
-            IrohaJson::new(subscription.clone()),
-        );
-        metadata.insert(
-            (*SUBSCRIPTION_INVOICE_KEY).clone(),
-            IrohaJson::new(invoice.clone()),
-        );
-        let parsed_state = subscription_state_from_metadata(&metadata)
-            .unwrap()
-            .expect("state present");
-        let parsed_invoice = subscription_invoice_from_metadata(&metadata)
-            .unwrap()
-            .expect("invoice present");
-        assert_eq!(parsed_state, subscription);
-        assert_eq!(parsed_invoice, invoice);
-    }
-
-    #[test]
-    fn resolve_charge_ms_prefers_explicit() {
-        let billing = SubscriptionBilling {
-            cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
-                period_ms: 1_000,
-            }),
-            bill_for: SubscriptionBillFor::NextPeriod,
-            retry_backoff_ms: 0,
-            max_failures: 0,
-            grace_ms: 0,
-        };
-        assert_eq!(resolve_charge_ms(billing, Some(42_000)).unwrap(), 42_000);
-    }
-
-    #[test]
-    fn resolve_trigger_id_prefers_explicit() {
-        let subscription_id: NftId = "sub2$wonderland.universal".parse().unwrap();
-        let explicit: TriggerId = "explicit_trigger".parse().unwrap();
-        let resolved =
-            resolve_trigger_id("sub_bill_", &subscription_id, Some(explicit.clone())).unwrap();
-        assert_eq!(resolved, explicit);
-    }
-
-    #[test]
-    fn network_time_ms_is_nonzero() {
-        let now = network_time_ms().unwrap();
-        assert!(now > 0);
-    }
-
-    #[test]
-    fn ivm_syscall_program_emits_bytecode() {
-        let configured_limit = NonZeroU64::new(17).expect("non-zero test cycle limit");
-        let program =
-            ivm_syscall_program(ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL, configured_limit);
-        assert!(!program.as_ref().is_empty());
-        assert_eq!(
-            ivm::ProgramMetadata::parse(program.as_ref())
-                .expect("generated subscription program metadata")
-                .metadata
-                .max_cycles,
-            configured_limit.get(),
-            "Torii must embed the live admission ceiling, not a compiled default"
-        );
-        let admitted = iroha_core::smartcontracts::ivm::cache::IvmCache::new()
-            .summarize_executable(program.as_ref())
-            .expect("subscription syscall helper must be a valid program");
-        assert!(matches!(
-            admitted,
-            iroha_core::smartcontracts::ivm::cache::ExecutableProgramSummary::Generic(_)
-        ));
-    }
-
-    #[test]
-    fn build_billing_trigger_attaches_metadata_and_schedule() {
-        use iroha_data_model::events::{EventFilterBox, time::ExecutionTime};
-        let trigger_id: TriggerId = "bill_trigger".parse().unwrap();
-        let subscription_id: NftId = "sub3$wonderland.universal".parse().unwrap();
-        let authority = ALICE_ID.clone();
-        let trigger = build_billing_trigger(
-            trigger_id.clone(),
-            authority.clone(),
-            subscription_id.clone(),
-            55,
-            defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
-        );
-        assert_eq!(trigger.id(), &trigger_id);
-        let meta = trigger.metadata();
-        let ref_value = meta
-            .get(&*SUBSCRIPTION_TRIGGER_REF_KEY)
-            .expect("subscription_ref metadata");
-        let parsed: SubscriptionTriggerRef = ref_value.try_into_any_norito().unwrap();
-        assert_eq!(parsed.subscription_nft_id, subscription_id);
-        match trigger.action().filter() {
-            EventFilterBox::Time(filter) => match filter.0 {
-                ExecutionTime::Schedule(schedule) => {
-                    assert_eq!(schedule.start_ms, 55);
-                    assert_eq!(schedule.period_ms, None);
-                }
-                _ => panic!("expected schedule execution time"),
-            },
-            _ => panic!("expected time filter"),
-        }
-        assert_eq!(trigger.action().authority(), &authority);
-    }
-
-    #[test]
-    fn build_usage_trigger_uses_execute_filter() {
-        use iroha_data_model::events::{
-            EventFilterBox, execute_trigger::ExecuteTriggerEventFilter,
-        };
-        let trigger_id: TriggerId = "usage_trigger".parse().unwrap();
-        let authority = ALICE_ID.clone();
-        let trigger = build_usage_trigger(
-            trigger_id.clone(),
-            authority.clone(),
-            defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
-        );
-        match trigger.action().filter() {
-            EventFilterBox::ExecuteTrigger(filter) => {
-                let expected = ExecuteTriggerEventFilter::new()
-                    .for_trigger(trigger_id.clone())
-                    .under_authority(authority.clone());
-                assert_eq!(filter, &expected);
-            }
-            _ => panic!("expected execute trigger filter"),
-        }
-    }
+    include!("routing/subscription_api_unit_tests.rs");
 
     fn test_queue_components() -> (Arc<Queue>, Arc<ChainId>, MaybeTelemetry) {
         let events: EventsSender = tokio::sync::broadcast::channel(8).0;
@@ -70929,1240 +70618,10 @@ mod subscription_api_tests {
         }
     }
 
-    fn sample_subscription_state(
-        plan_id: AssetDefinitionId,
-        provider: AccountId,
-        subscriber: AccountId,
-        status: SubscriptionStatus,
-        billing_trigger_id: TriggerId,
-    ) -> SubscriptionState {
-        SubscriptionState {
-            plan_id,
-            provider,
-            subscriber,
-            status,
-            current_period_start_ms: 0,
-            current_period_end_ms: 1_000,
-            next_charge_ms: 1_000,
-            cancel_at_period_end: false,
-            cancel_at_ms: None,
-            failure_count: 0,
-            usage_accumulated: std::collections::BTreeMap::new(),
-            billing_trigger_id,
-        }
-    }
-
-    async fn response_json(resp: Response) -> Value {
-        let body = resp.into_body().collect().await.unwrap().to_bytes();
-        norito::json::from_slice(&body).unwrap()
-    }
-
-    async fn assert_action_draft(
-        resp: Response,
-        expected_id: &NftId,
-        expected_authority: &AccountId,
-        expected_action: &str,
-        expected_trigger_operation: &str,
-    ) -> Value {
-        assert_eq!(resp.status(), StatusCode::OK);
-        let json = response_json(resp).await;
-        assert_eq!(
-            json["version"].as_u64(),
-            Some(u64::from(SUBSCRIPTION_MUTATION_DRAFT_VERSION_V1))
-        );
-        let id_str = expected_id.to_string();
-        assert_eq!(json["subscription_id"].as_str(), Some(id_str.as_str()));
-        let authority = expected_authority.to_string();
-        assert_eq!(json["authority"].as_str(), Some(authority.as_str()));
-        assert_eq!(json["action"].as_str(), Some(expected_action));
-        assert_eq!(
-            json["details"]["billing_trigger_operation"].as_str(),
-            Some(expected_trigger_operation)
-        );
-        assert!(
-            json["tx_instructions"]
-                .as_array()
-                .is_some_and(|instructions| !instructions.is_empty())
-        );
-        assert!(json.get("ok").is_none());
-        assert!(json.get("tx_hash_hex").is_none());
-        json
-    }
-
-    fn state_with_plans_and_subscriptions(
-        provider: AccountId,
-        subscriber: AccountId,
-        plans: Vec<(AssetDefinitionId, SubscriptionPlan)>,
-        subscriptions: Vec<(NftId, SubscriptionState, Option<SubscriptionInvoice>)>,
-    ) -> Arc<CoreState> {
-        let asset_definitions: Vec<AssetDefinition> = plans
-            .into_iter()
-            .map(|(plan_id, plan)| {
-                let mut def = AssetDefinition::new(
-                    plan_id,
-                    "subscription_plan".to_owned(),
-                    NumericSpec::integer(),
-                    iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&provider);
-                def.metadata
-                    .insert((*SUBSCRIPTION_PLAN_KEY).clone(), IrohaJson::new(plan));
-                def
-            })
-            .collect();
-        let nfts: Vec<Nft> = subscriptions
-            .into_iter()
-            .map(|(nft_id, state, invoice)| {
-                let mut metadata = Metadata::default();
-                metadata.insert((*SUBSCRIPTION_KEY).clone(), IrohaJson::new(state));
-                if let Some(invoice) = invoice {
-                    metadata.insert((*SUBSCRIPTION_INVOICE_KEY).clone(), IrohaJson::new(invoice));
-                }
-                Nft::new(nft_id, metadata).build(&subscriber)
-            })
-            .collect();
-        state_with_asset_definitions_and_nfts(provider, subscriber, asset_definitions, nfts)
-    }
-
-    fn state_with_asset_definitions_and_nfts(
-        provider: AccountId,
-        subscriber: AccountId,
-        asset_definitions: Vec<AssetDefinition>,
-        nfts: Vec<Nft>,
-    ) -> Arc<CoreState> {
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let domain = Domain::new(domain_id).build(&provider);
-        let provider_account = provider.clone();
-        let subscriber_account = subscriber.clone();
-        let accounts = vec![
-            Account::new(provider_account.account().clone()).build(&provider),
-            Account::new(subscriber_account.account().clone()).build(&subscriber),
-        ];
-        let world = World::with_assets([domain], accounts, asset_definitions, [], nfts);
-        Arc::new(CoreState::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        ))
-    }
-
-    #[tokio::test]
-    async fn handle_v1_subscription_plans_filters_provider() {
-        let provider = ALICE_ID.clone();
-        let other = BOB_ID.clone();
-        let plan_primary_id: AssetDefinitionId =
-            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f4");
-        let plan_secondary_id: AssetDefinitionId =
-            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f5");
-        let plan_a = SubscriptionPlan {
-            provider: provider.clone(),
-            billing: SubscriptionBilling {
-                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
-                    period_ms: 1_000,
-                }),
-                bill_for: SubscriptionBillFor::NextPeriod,
-                retry_backoff_ms: 0,
-                max_failures: 0,
-                grace_ms: 0,
-            },
-            pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
-                amount: Quantity::from(10_u32),
-                asset_definition: test_asset_definition_id_from_hex(
-                    "550e8400e29b41d4a7164466554400f1",
-                ),
-            }),
-        };
-        let plan_b = SubscriptionPlan {
-            provider: other.clone(),
-            ..plan_a.clone()
-        };
-        let state = state_with_plans_and_subscriptions(
-            provider.clone(),
-            other.clone(),
-            vec![
-                (plan_primary_id.clone(), plan_a),
-                (plan_secondary_id, plan_b),
-            ],
-            Vec::new(),
-        );
-        let params = SubscriptionPlanListParams {
-            provider: Some(provider.to_string()),
-            limit: None,
-            offset: 0,
-            count_mode: Some("exact".to_owned()),
-        };
-        let resp = handle_v1_subscription_plans(state, crate::NoritoQuery(params))
-            .await
-            .expect("handler ok")
-            .into_response();
-        let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: Value = norito::json::from_slice(&body).unwrap();
-        let items = json["items"].as_array().unwrap();
-        assert_eq!(items.len(), 1);
-        assert_eq!(json["total"].as_u64(), Some(1));
-        let plan_id = plan_primary_id.to_string();
-        assert_eq!(items[0]["plan_id"].as_str(), Some(plan_id.as_str()));
-    }
-
-    #[tokio::test]
-    async fn handle_v1_subscription_plans_filters_provider_alias() {
-        let provider = ALICE_ID.clone();
-        let other = BOB_ID.clone();
-        let plan_primary_id: AssetDefinitionId =
-            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554401f4");
-        let plan_secondary_id: AssetDefinitionId =
-            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554401f5");
-        let plan_a = SubscriptionPlan {
-            provider: provider.clone(),
-            billing: SubscriptionBilling {
-                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
-                    period_ms: 1_000,
-                }),
-                bill_for: SubscriptionBillFor::NextPeriod,
-                retry_backoff_ms: 0,
-                max_failures: 0,
-                grace_ms: 0,
-            },
-            pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
-                amount: Quantity::from(10_u32),
-                asset_definition: test_asset_definition_id_from_hex(
-                    "550e8400e29b41d4a7164466554401f1",
-                ),
-            }),
-        };
-        let plan_b = SubscriptionPlan {
-            provider: other.clone(),
-            ..plan_a.clone()
-        };
-        let state = state_with_plans_and_subscriptions(
-            provider.clone(),
-            other,
-            vec![
-                (plan_primary_id.clone(), plan_a),
-                (plan_secondary_id, plan_b),
-            ],
-            Vec::new(),
-        );
-        bind_account_alias_for_test(&state, &provider, "billing@universal");
-
-        let params = SubscriptionPlanListParams {
-            provider: Some("billing@universal".to_string()),
-            limit: None,
-            offset: 0,
-            count_mode: Some("exact".to_owned()),
-        };
-        let resp = handle_v1_subscription_plans(state, crate::NoritoQuery(params))
-            .await
-            .expect("handler ok")
-            .into_response();
-        let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: Value = norito::json::from_slice(&body).unwrap();
-        let items = json["items"].as_array().unwrap();
-        assert_eq!(items.len(), 1);
-        assert_eq!(json["total"].as_u64(), Some(1));
-        let plan_id = plan_primary_id.to_string();
-        assert_eq!(items[0]["plan_id"].as_str(), Some(plan_id.as_str()));
-    }
-
-    #[tokio::test]
-    async fn handle_v1_subscriptions_filters_status() {
-        let provider = ALICE_ID.clone();
-        let subscriber = BOB_ID.clone();
-        let plan_id: AssetDefinitionId =
-            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f6");
-        let plan = SubscriptionPlan {
-            provider: provider.clone(),
-            billing: SubscriptionBilling {
-                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
-                    period_ms: 1_000,
-                }),
-                bill_for: SubscriptionBillFor::NextPeriod,
-                retry_backoff_ms: 0,
-                max_failures: 0,
-                grace_ms: 0,
-            },
-            pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
-                amount: Quantity::from(1_u32),
-                asset_definition: test_asset_definition_id_from_hex(
-                    "550e8400e29b41d4a7164466554400f1",
-                ),
-            }),
-        };
-        let active_id: NftId = "sub-active$wonderland.universal".parse().unwrap();
-        let paused_id: NftId = "sub-paused$wonderland.universal".parse().unwrap();
-        let active_state = SubscriptionState {
-            plan_id: plan_id.clone(),
-            provider: provider.clone(),
-            subscriber: subscriber.clone(),
-            status: SubscriptionStatus::Active,
-            current_period_start_ms: 0,
-            current_period_end_ms: 1_000,
-            next_charge_ms: 1_000,
-            cancel_at_period_end: false,
-            cancel_at_ms: None,
-            failure_count: 0,
-            usage_accumulated: std::collections::BTreeMap::new(),
-            billing_trigger_id: "bill_active".parse().unwrap(),
-        };
-        let paused_state = SubscriptionState {
-            status: SubscriptionStatus::Paused,
-            billing_trigger_id: "bill_paused".parse().unwrap(),
-            ..active_state.clone()
-        };
-        let state = state_with_plans_and_subscriptions(
-            provider.clone(),
-            subscriber.clone(),
-            vec![(plan_id, plan)],
-            vec![
-                (active_id.clone(), active_state, None),
-                (paused_id.clone(), paused_state, None),
-            ],
-        );
-        let params = SubscriptionListParams {
-            owned_by: Some(subscriber.to_string()),
-            provider: None,
-            status: Some("paused".to_string()),
-            limit: None,
-            offset: 0,
-            count_mode: None,
-        };
-        let resp = handle_v1_subscriptions(state, crate::NoritoQuery(params))
-            .await
-            .expect("handler ok")
-            .into_response();
-        let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: Value = norito::json::from_slice(&body).unwrap();
-        let items = json["items"].as_array().unwrap();
-        assert_eq!(items.len(), 1);
-        let paused_id_str = paused_id.to_string();
-        assert_eq!(
-            items[0]["subscription_id"].as_str(),
-            Some(paused_id_str.as_str())
-        );
-        let decoded_state: SubscriptionState =
-            norito::json::from_value(items[0]["subscription"].clone()).unwrap();
-        assert_eq!(decoded_state.status, SubscriptionStatus::Paused);
-    }
-
-    #[tokio::test]
-    async fn handle_v1_subscriptions_filters_account_aliases() {
-        let provider = ALICE_ID.clone();
-        let subscriber = BOB_ID.clone();
-        let plan_id: AssetDefinitionId =
-            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554401f6");
-        let plan = SubscriptionPlan {
-            provider: provider.clone(),
-            billing: SubscriptionBilling {
-                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
-                    period_ms: 1_000,
-                }),
-                bill_for: SubscriptionBillFor::NextPeriod,
-                retry_backoff_ms: 0,
-                max_failures: 0,
-                grace_ms: 0,
-            },
-            pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
-                amount: Quantity::from(1_u32),
-                asset_definition: test_asset_definition_id_from_hex(
-                    "550e8400e29b41d4a7164466554401f1",
-                ),
-            }),
-        };
-        let active_id: NftId = "sub-alias-active$wonderland.universal".parse().unwrap();
-        let paused_id: NftId = "sub-alias-paused$wonderland.universal".parse().unwrap();
-        let active_state = SubscriptionState {
-            plan_id: plan_id.clone(),
-            provider: provider.clone(),
-            subscriber: subscriber.clone(),
-            status: SubscriptionStatus::Active,
-            current_period_start_ms: 0,
-            current_period_end_ms: 1_000,
-            next_charge_ms: 1_000,
-            cancel_at_period_end: false,
-            cancel_at_ms: None,
-            failure_count: 0,
-            usage_accumulated: std::collections::BTreeMap::new(),
-            billing_trigger_id: "bill_alias_active".parse().unwrap(),
-        };
-        let paused_state = SubscriptionState {
-            status: SubscriptionStatus::Paused,
-            billing_trigger_id: "bill_alias_paused".parse().unwrap(),
-            ..active_state.clone()
-        };
-        let state = state_with_plans_and_subscriptions(
-            provider.clone(),
-            subscriber.clone(),
-            vec![(plan_id, plan)],
-            vec![
-                (active_id, active_state, None),
-                (paused_id.clone(), paused_state, None),
-            ],
-        );
-        bind_account_alias_for_test(&state, &provider, "billing@universal");
-        bind_account_alias_for_test(&state, &subscriber, "member@universal");
-
-        let params = SubscriptionListParams {
-            owned_by: Some("member@universal".to_string()),
-            provider: Some("billing@universal".to_string()),
-            status: Some("paused".to_string()),
-            limit: None,
-            offset: 0,
-            count_mode: None,
-        };
-        let resp = handle_v1_subscriptions(state, crate::NoritoQuery(params))
-            .await
-            .expect("handler ok")
-            .into_response();
-        let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: Value = norito::json::from_slice(&body).unwrap();
-        let items = json["items"].as_array().unwrap();
-        assert_eq!(items.len(), 1);
-        let paused_id_str = paused_id.to_string();
-        assert_eq!(
-            items[0]["subscription_id"].as_str(),
-            Some(paused_id_str.as_str())
-        );
-        let decoded_state: SubscriptionState =
-            norito::json::from_value(items[0]["subscription"].clone()).unwrap();
-        assert_eq!(decoded_state.status, SubscriptionStatus::Paused);
-    }
-
-    #[tokio::test]
-    async fn handle_v1_subscription_get_includes_invoice() {
-        let provider = ALICE_ID.clone();
-        let subscriber = BOB_ID.clone();
-        let plan_id: AssetDefinitionId =
-            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f7");
-        let plan = SubscriptionPlan {
-            provider: provider.clone(),
-            billing: SubscriptionBilling {
-                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
-                    period_ms: 1_000,
-                }),
-                bill_for: SubscriptionBillFor::NextPeriod,
-                retry_backoff_ms: 0,
-                max_failures: 0,
-                grace_ms: 0,
-            },
-            pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
-                amount: Quantity::from(1_u32),
-                asset_definition: test_asset_definition_id_from_hex(
-                    "550e8400e29b41d4a7164466554400f1",
-                ),
-            }),
-        };
-        let subscription_id: NftId = "sub-invoice$wonderland.universal".parse().unwrap();
-        let subscription_state = SubscriptionState {
-            plan_id: plan_id.clone(),
-            provider: provider.clone(),
-            subscriber: subscriber.clone(),
-            status: SubscriptionStatus::Active,
-            current_period_start_ms: 0,
-            current_period_end_ms: 1_000,
-            next_charge_ms: 1_000,
-            cancel_at_period_end: false,
-            cancel_at_ms: None,
-            failure_count: 0,
-            usage_accumulated: std::collections::BTreeMap::new(),
-            billing_trigger_id: "bill_invoice".parse().unwrap(),
-        };
-        let invoice = SubscriptionInvoice {
-            subscription_nft_id: subscription_id.clone(),
-            period_start_ms: 0,
-            period_end_ms: 1_000,
-            attempted_at_ms: 1_000,
-            amount: Quantity::from(1_u32),
-            asset_definition: test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f1"),
-            status: SubscriptionInvoiceStatus::Paid,
-            tx_hash: None,
-        };
-        let state = state_with_plans_and_subscriptions(
-            provider,
-            subscriber,
-            vec![(plan_id, plan)],
-            vec![(
-                subscription_id.clone(),
-                subscription_state,
-                Some(invoice.clone()),
-            )],
-        );
-        let resp = handle_v1_subscription_get(state, subscription_id.clone())
-            .await
-            .expect("handler ok")
-            .into_response();
-        let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: Value = norito::json::from_slice(&body).unwrap();
-        let sub_id = subscription_id.to_string();
-        assert_eq!(json["subscription_id"].as_str(), Some(sub_id.as_str()));
-        let parsed_invoice: SubscriptionInvoice =
-            norito::json::from_value(json["invoice"].clone()).unwrap();
-        assert_eq!(parsed_invoice, invoice);
-    }
-
-    #[tokio::test]
-    async fn handle_post_v1_subscription_plan_returns_unsigned_transaction_draft() {
-        let provider = ALICE_ID.clone();
-        let subscriber = BOB_ID.clone();
-        let state = state_with_plans_and_subscriptions(
-            provider.clone(),
-            subscriber,
-            Vec::new(),
-            Vec::new(),
-        );
-        let (queue, chain_id, _telemetry) = test_queue_components();
-        let plan_id: AssetDefinitionId =
-            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f8");
-        let plan = sample_plan(provider.clone());
-        let req = SubscriptionPlanCreateDto {
-            authority: provider,
-            plan_id: plan_id.clone(),
-            plan,
-        };
-
-        let resp =
-            handle_post_v1_subscription_plan(chain_id, queue.clone(), state, NoritoJson(req))
-                .await
-                .expect("handler ok")
-                .into_response();
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(queue.queued_len(), 0);
-
-        let json = response_json(resp).await;
-        assert_eq!(json["submitted"].as_bool(), Some(false));
-        let plan_id_str = plan_id.to_string();
-        assert_eq!(json["plan_id"].as_str(), Some(plan_id_str.as_str()));
-        assert!(json["transaction_payload_b64"].as_str().is_some());
-        assert!(json["signing_message_b64"].as_str().is_some());
-        assert!(json.get("private_key").is_none());
-        assert!(json.get("tx_hash_hex").is_none());
-    }
-
-    #[tokio::test]
-    async fn handle_post_v1_subscription_create_returns_exact_unsigned_draft() {
-        let provider = ALICE_ID.clone();
-        let subscriber = BOB_ID.clone();
-        let plan_id: AssetDefinitionId =
-            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f9");
-        let plan = sample_plan(provider.clone());
-        let state = state_with_plans_and_subscriptions(
-            provider.clone(),
-            subscriber.clone(),
-            vec![(plan_id.clone(), plan)],
-            Vec::new(),
-        );
-        let subscription_id: NftId = "sub-create$wonderland.universal".parse().unwrap();
-        let req = SubscriptionCreateDto {
-            authority: subscriber.clone(),
-            subscription_id: subscription_id.clone(),
-            plan_id: plan_id.clone(),
-            billing_trigger_id: None,
-            usage_trigger_id: None,
-            first_charge_ms: Some(1_000),
-            grant_usage_to_provider: None,
-        };
-
-        let resp = handle_post_v1_subscription_create(state, NoritoJson(req))
-            .await
-            .expect("handler ok")
-            .into_response();
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let json = response_json(resp).await;
-        assert_eq!(json["version"].as_u64(), Some(1));
-        assert_eq!(json["action"].as_str(), Some("create"));
-        assert_eq!(
-            json["authority"].as_str(),
-            Some(subscriber.to_string().as_str())
-        );
-        let sub_id_str = subscription_id.to_string();
-        assert_eq!(json["subscription_id"].as_str(), Some(sub_id_str.as_str()));
-        assert_eq!(json["plan_id"].as_str(), Some(plan_id.to_string().as_str()));
-        assert_eq!(json["first_charge_ms"].as_u64(), Some(1_000));
-        assert_eq!(json["provider_usage_grant_included"].as_bool(), Some(false));
-        assert_eq!(
-            json["resulting_subscription"]["subscriber"].as_str(),
-            Some(subscriber.to_string().as_str())
-        );
-        assert!(
-            json["tx_instructions"]
-                .as_array()
-                .is_some_and(|instructions| instructions.len() == 2)
-        );
-        assert!(json.get("ok").is_none());
-        assert!(json.get("tx_hash_hex").is_none());
-    }
-
-    #[tokio::test]
-    async fn handle_post_v1_subscription_actions_return_exact_unsigned_drafts() {
-        let provider = ALICE_ID.clone();
-        let subscriber = BOB_ID.clone();
-        let plan_id: AssetDefinitionId =
-            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400fa");
-        let plan = sample_plan(provider.clone());
-        let active_id: NftId = "sub-active-actions$wonderland.universal".parse().unwrap();
-        let paused_id: NftId = "sub-paused-actions$wonderland.universal".parse().unwrap();
-        let active_state = sample_subscription_state(
-            plan_id.clone(),
-            provider.clone(),
-            subscriber.clone(),
-            SubscriptionStatus::Active,
-            "bill_active_actions".parse().unwrap(),
-        );
-        let paused_state = sample_subscription_state(
-            plan_id.clone(),
-            provider.clone(),
-            subscriber.clone(),
-            SubscriptionStatus::Paused,
-            "bill_paused_actions".parse().unwrap(),
-        );
-        let keep_id: NftId = "sub-keep-actions$wonderland.universal".parse().unwrap();
-        let mut keep_state = sample_subscription_state(
-            plan_id.clone(),
-            provider.clone(),
-            subscriber.clone(),
-            SubscriptionStatus::Active,
-            "bill_keep_actions".parse().unwrap(),
-        );
-        keep_state.cancel_at_period_end = true;
-        keep_state.cancel_at_ms = Some(keep_state.current_period_end_ms);
-        let state = state_with_plans_and_subscriptions(
-            provider,
-            subscriber.clone(),
-            vec![(plan_id, plan)],
-            vec![
-                (active_id.clone(), active_state, None),
-                (paused_id.clone(), paused_state, None),
-                (keep_id.clone(), keep_state, None),
-            ],
-        );
-        let pause_req = SubscriptionActionDto {
-            authority: subscriber.clone(),
-            charge_at_ms: None,
-            cancel_mode: None,
-        };
-        let resp = handle_post_v1_subscription_pause(
-            state.clone(),
-            active_id.clone(),
-            NoritoJson(pause_req),
-        )
-        .await
-        .expect("pause ok")
-        .into_response();
-        let pause = assert_action_draft(resp, &active_id, &subscriber, "pause", "none").await;
-        assert_eq!(
-            pause["details"]["resulting_subscription"]["status"]["status"].as_str(),
-            Some("paused")
-        );
-
-        let resume_req = SubscriptionActionDto {
-            authority: subscriber.clone(),
-            charge_at_ms: Some(5_000),
-            cancel_mode: None,
-        };
-        let resp = handle_post_v1_subscription_resume(
-            state.clone(),
-            paused_id.clone(),
-            NoritoJson(resume_req),
-        )
-        .await
-        .expect("resume ok")
-        .into_response();
-        let resume = assert_action_draft(resp, &paused_id, &subscriber, "resume", "register").await;
-        assert_eq!(
-            resume["details"]["effective_charge_ms"].as_u64(),
-            Some(5_000)
-        );
-
-        let cancel_req = SubscriptionActionDto {
-            authority: subscriber.clone(),
-            charge_at_ms: None,
-            cancel_mode: Some(SubscriptionCancelMode::Immediate),
-        };
-        let resp = handle_post_v1_subscription_cancel(
-            state.clone(),
-            active_id.clone(),
-            NoritoJson(cancel_req),
-        )
-        .await
-        .expect("cancel ok")
-        .into_response();
-        let cancel = assert_action_draft(resp, &active_id, &subscriber, "cancel", "none").await;
-        assert_eq!(
-            cancel["details"]["resulting_subscription"]["status"]["status"].as_str(),
-            Some("canceled")
-        );
-
-        let keep_req = SubscriptionActionDto {
-            authority: subscriber.clone(),
-            charge_at_ms: None,
-            cancel_mode: None,
-        };
-        let resp =
-            handle_post_v1_subscription_keep(state.clone(), keep_id.clone(), NoritoJson(keep_req))
-                .await
-                .expect("keep ok")
-                .into_response();
-        assert_action_draft(resp, &keep_id, &subscriber, "keep", "none").await;
-
-        let charge_req = SubscriptionActionDto {
-            authority: subscriber.clone(),
-            charge_at_ms: Some(9_000),
-            cancel_mode: None,
-        };
-        let resp = handle_post_v1_subscription_charge_now(
-            state.clone(),
-            active_id.clone(),
-            NoritoJson(charge_req),
-        )
-        .await
-        .expect("charge-now ok")
-        .into_response();
-        let charge =
-            assert_action_draft(resp, &active_id, &subscriber, "charge_now", "register").await;
-        assert_eq!(
-            charge["details"]["effective_charge_ms"].as_u64(),
-            Some(9_000)
-        );
-
-        let (queue, chain_id, _telemetry) = test_queue_components();
-        let usage_req = SubscriptionUsageRequestDto {
-            authority: subscriber,
-            unit_key: "requests".parse().unwrap(),
-            delta: Quantity::from(5_u32),
-            usage_trigger_id: None,
-        };
-        let resp = handle_post_v1_subscription_usage(
-            chain_id,
-            queue.clone(),
-            state,
-            active_id.clone(),
-            NoritoJson(usage_req),
-        )
-        .await
-        .expect("usage ok")
-        .into_response();
-        assert_eq!(queue.queued_len(), 0);
-        assert_eq!(resp.status(), StatusCode::OK);
-        let usage = response_json(resp).await;
-        assert_eq!(usage["submitted"].as_bool(), Some(false));
-        assert_eq!(
-            usage["subscription_id"].as_str(),
-            Some(active_id.to_string().as_str())
-        );
-        assert!(usage["transaction_payload_b64"].as_str().is_some());
-        assert!(usage["signing_message_b64"].as_str().is_some());
-        assert!(usage.get("private_key").is_none());
-        assert!(usage.get("tx_hash_hex").is_none());
-    }
-
-    #[tokio::test]
-    async fn handle_post_v1_subscription_cancel_period_end_marks_cancellation_window() {
-        let provider = ALICE_ID.clone();
-        let subscriber = BOB_ID.clone();
-        let plan_id: AssetDefinitionId =
-            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554403fa");
-        let plan = sample_plan(provider.clone());
-        let subscription_id: NftId = "sub-cancel-period-end$wonderland.universal"
-            .parse()
-            .unwrap();
-        let subscription_state = sample_subscription_state(
-            plan_id.clone(),
-            provider.clone(),
-            subscriber.clone(),
-            SubscriptionStatus::Active,
-            "bill_cancel_period_end".parse().unwrap(),
-        );
-        let expected_cancel_at_ms = subscription_state.current_period_end_ms;
-        let state = state_with_plans_and_subscriptions(
-            provider,
-            subscriber.clone(),
-            vec![(plan_id, plan)],
-            vec![(subscription_id.clone(), subscription_state, None)],
-        );
-
-        let req = SubscriptionActionDto {
-            authority: subscriber.clone(),
-            charge_at_ms: None,
-            cancel_mode: Some(SubscriptionCancelMode::PeriodEnd),
-        };
-        let resp = handle_post_v1_subscription_cancel(
-            state.clone(),
-            subscription_id.clone(),
-            NoritoJson(req),
-        )
-        .await
-        .expect("cancel at period end ok")
-        .into_response();
-        let draft =
-            assert_action_draft(resp, &subscription_id, &subscriber, "cancel", "none").await;
-        assert_eq!(
-            draft["details"]["resulting_subscription"]["cancel_at_period_end"].as_bool(),
-            Some(true)
-        );
-        assert_eq!(
-            draft["details"]["resulting_subscription"]["cancel_at_ms"].as_u64(),
-            Some(expected_cancel_at_ms)
-        );
-
-        let view = state.view();
-        let nft = view
-            .world()
-            .nft(&subscription_id)
-            .expect("subscription nft should exist");
-        let updated_state = subscription_state_from_metadata(&nft.content)
-            .unwrap()
-            .expect("subscription metadata present");
-        assert_eq!(updated_state.status, SubscriptionStatus::Active);
-        assert!(!updated_state.cancel_at_period_end);
-        assert_eq!(updated_state.cancel_at_ms, None);
-    }
-
-    #[test]
-    fn subscription_mutation_requests_reject_private_key_and_unknown_fields() {
-        let plan = SubscriptionPlanCreateDto {
-            authority: ALICE_ID.clone(),
-            plan_id: test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554404f9"),
-            plan: sample_plan(ALICE_ID.clone()),
-        };
-        let mut plan_value = norito::json::to_value(&plan)
-            .unwrap()
-            .as_object()
-            .cloned()
-            .unwrap();
-        plan_value.insert(
-            "private_key".to_owned(),
-            Value::String("forbidden".to_owned()),
-        );
-        assert!(
-            norito::json::from_value::<SubscriptionPlanCreateDto>(Value::Object(plan_value))
-                .is_err()
-        );
-
-        let create = SubscriptionCreateDto {
-            authority: BOB_ID.clone(),
-            subscription_id: "sub-strict-create$wonderland.universal".parse().unwrap(),
-            plan_id: test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554404fa"),
-            billing_trigger_id: None,
-            usage_trigger_id: None,
-            first_charge_ms: Some(1_000),
-            grant_usage_to_provider: None,
-        };
-        let mut create_value = norito::json::to_value(&create)
-            .unwrap()
-            .as_object()
-            .cloned()
-            .unwrap();
-        create_value.insert(
-            "private_key".to_owned(),
-            Value::String("forbidden".to_owned()),
-        );
-        assert!(
-            norito::json::from_value::<SubscriptionCreateDto>(Value::Object(create_value)).is_err()
-        );
-
-        let action = SubscriptionActionDto {
-            authority: BOB_ID.clone(),
-            charge_at_ms: None,
-            cancel_mode: None,
-        };
-        let mut action_value = norito::json::to_value(&action)
-            .unwrap()
-            .as_object()
-            .cloned()
-            .unwrap();
-        action_value.insert(
-            "legacy_action".to_owned(),
-            Value::String("pause".to_owned()),
-        );
-        assert!(
-            norito::json::from_value::<SubscriptionActionDto>(Value::Object(action_value)).is_err()
-        );
-
-        let usage = SubscriptionUsageRequestDto {
-            authority: BOB_ID.clone(),
-            unit_key: "requests".parse().unwrap(),
-            delta: Quantity::from(1_u32),
-            usage_trigger_id: None,
-        };
-        let mut usage_value = norito::json::to_value(&usage)
-            .unwrap()
-            .as_object()
-            .cloned()
-            .unwrap();
-        usage_value.insert(
-            "private_key".to_owned(),
-            Value::String("forbidden".to_owned()),
-        );
-        assert!(
-            norito::json::from_value::<SubscriptionUsageRequestDto>(Value::Object(usage_value))
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn subscription_cancel_mode_has_one_exact_tagged_shape() {
-        assert_eq!(
-            norito::json::to_value(&SubscriptionCancelMode::PeriodEnd).unwrap(),
-            norito::json!({
-                "mode": "period_end",
-                "value": null
-            })
-        );
-        assert!(
-            norito::json::from_str::<SubscriptionCancelMode>(r#""period_end""#).is_err(),
-            "legacy string cancellation modes must not decode"
-        );
-    }
-
-    #[tokio::test]
-    async fn subscription_action_routes_reject_irrelevant_or_defaulted_options() {
-        let provider = ALICE_ID.clone();
-        let subscriber = BOB_ID.clone();
-        let plan_id = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554405fa");
-        let subscription_id: NftId = "sub-strict-action$wonderland.universal".parse().unwrap();
-        let state = state_with_plans_and_subscriptions(
-            provider.clone(),
-            subscriber.clone(),
-            vec![(plan_id.clone(), sample_plan(provider.clone()))],
-            vec![(
-                subscription_id.clone(),
-                sample_subscription_state(
-                    plan_id,
-                    provider,
-                    subscriber.clone(),
-                    SubscriptionStatus::Active,
-                    "bill_strict_action".parse().unwrap(),
-                ),
-                None,
-            )],
-        );
-
-        let pause = handle_post_v1_subscription_pause(
-            state.clone(),
-            subscription_id.clone(),
-            NoritoJson(SubscriptionActionDto {
-                authority: subscriber.clone(),
-                charge_at_ms: Some(1_000),
-                cancel_mode: None,
-            }),
-        )
-        .await;
-        assert!(pause.is_err(), "pause must reject charge options");
-
-        let cancel = handle_post_v1_subscription_cancel(
-            state,
-            subscription_id,
-            NoritoJson(SubscriptionActionDto {
-                authority: subscriber,
-                charge_at_ms: None,
-                cancel_mode: None,
-            }),
-        )
-        .await;
-        assert!(
-            cancel.is_err(),
-            "cancel must not default an omitted cancellation mode"
-        );
-    }
+    include!("routing/subscription_query_filter_tests.rs");
 }
 
-#[cfg(all(test, feature = "app_api"))]
-mod adapter_filter_tests {
-    use super::*;
-    #[cfg(feature = "app_api")]
-    use crate::filter::FieldPath;
-    use crate::{json_array, json_object, json_value};
-    #[cfg(feature = "app_api")]
-    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
-
-    fn obj(pairs: Vec<(&'static str, Value)>) -> Value {
-        json_object(pairs)
-    }
-
-    fn arr(values: Vec<Value>) -> Value {
-        json_array(values)
-    }
-
-    fn val<T: json::JsonSerialize + ?Sized>(value: &T) -> Value {
-        json_value(value)
-    }
-
-    #[test]
-    fn accounts_filter_adapter_accepts_id_eq_and_rejects_lt() {
-        let ok = obj(vec![
-            ("op", val("eq")),
-            (
-                "args",
-                arr(vec![
-                    val("id"),
-                    val("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"),
-                ]),
-            ),
-        ]);
-        let expr: FilterExpr = norito::json::value::from_value(ok).unwrap();
-        crate::filter::validate_filter(&expr).unwrap();
-        #[cfg(feature = "app_api")]
-        validate_accounts_filter_adapter(&expr).unwrap();
-
-        let bad = obj(vec![
-            ("op", val("lt")),
-            ("args", arr(vec![val("id"), val(&5u64)])),
-        ]);
-        let expr2: FilterExpr = norito::json::value::from_value(bad).unwrap();
-        crate::filter::validate_filter(&expr2).unwrap();
-        #[cfg(feature = "app_api")]
-        assert!(validate_accounts_filter_adapter(&expr2).is_err());
-    }
-
-    #[test]
-    fn defs_filter_adapter_accepts_in_and_rejects_numeric() {
-        let ok = obj(vec![
-            ("op", val("in")),
-            (
-                "args",
-                arr(vec![
-                    val("id"),
-                    arr(vec![
-                        val(&test_asset_definition_literal_from_hex(
-                            "550e8400e29b41d4a7164466554400dd",
-                        )),
-                        val(&test_asset_definition_literal_from_hex(
-                            "550e8400e29b41d4a7164466554400ee",
-                        )),
-                    ]),
-                ]),
-            ),
-        ]);
-        let expr: FilterExpr = norito::json::value::from_value(ok).unwrap();
-        crate::filter::validate_filter(&expr).unwrap();
-        #[cfg(feature = "app_api")]
-        validate_defs_filter_adapter(&expr).unwrap();
-
-        let bad = obj(vec![
-            ("op", val("gte")),
-            ("args", arr(vec![val("id"), val(&1u64)])),
-        ]);
-        let expr2: FilterExpr = norito::json::value::from_value(bad).unwrap();
-        crate::filter::validate_filter(&expr2).unwrap();
-        #[cfg(feature = "app_api")]
-        assert!(validate_defs_filter_adapter(&expr2).is_err());
-    }
-
-    #[cfg(feature = "app_api")]
-    #[test]
-    fn defs_filter_adapter_accepts_name_alias_and_metadata_nullability() {
-        let name_eq = FilterExpr::Eq(FieldPath("name".into()), Value::from("CBDC"));
-        validate_defs_filter_adapter(&name_eq).unwrap();
-
-        let alias_null = FilterExpr::IsNull(FieldPath("alias".into()));
-        validate_defs_filter_adapter(&alias_null).unwrap();
-
-        let alias_binding_status = FilterExpr::Eq(
-            FieldPath("alias_binding.status".into()),
-            Value::from("leased_grace"),
-        );
-        validate_defs_filter_adapter(&alias_binding_status).unwrap();
-
-        let alias_binding_bound_at = FilterExpr::Gt(
-            FieldPath("alias_binding.bound_at_ms".into()),
-            Value::from(10_u64),
-        );
-        validate_defs_filter_adapter(&alias_binding_bound_at).unwrap();
-
-        let metadata_lt = FilterExpr::Lt(FieldPath("metadata.rank".into()), Value::from(2_u64));
-        validate_defs_filter_adapter(&metadata_lt).unwrap();
-
-        let bad = FilterExpr::IsNull(FieldPath("name".into()));
-        assert!(validate_defs_filter_adapter(&bad).is_err());
-
-        let bad_alias_binding = FilterExpr::Eq(
-            FieldPath("alias_binding.bound_at_ms".into()),
-            Value::from("10"),
-        );
-        assert!(validate_defs_filter_adapter(&bad_alias_binding).is_err());
-    }
-
-    #[cfg(feature = "app_api")]
-    #[test]
-    fn defs_filter_projection_matches_name_alias_and_metadata_passthrough() {
-        let authority = AccountId::new(
-            checked_routing_fixture_keypair(
-                0xF2,
-                Algorithm::Ed25519,
-                "derive asset-definition projection authority fixture key",
-            )
-            .public_key()
-            .clone(),
-        );
-        let definition = AssetDefinition::numeric(
-            AssetDefinitionId::derive_from_components(
-                DomainId::try_new("issuer", "universal").expect("domain"),
-                "cbdc".parse().expect("name"),
-            ),
-            "CBDC".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(&authority);
-        let item = AssetDefinitionListItem {
-            definition,
-            id: "66owaQmAQMuHxPzxUN3bqZ6FJfDa".to_owned(),
-            name: "CBDC".to_owned(),
-            alias: Some("CBDC#centralbank".to_owned()),
-            alias_binding: Some(AssetAliasBindingDto {
-                alias: "CBDC#centralbank".to_owned(),
-                status: "leased_grace".to_owned(),
-                lease_expiry_ms: Some(100),
-                grace_until_ms: Some(200),
-                bound_at_ms: 50,
-            }),
-        };
-
-        assert!(asset_definition_filter_projection(
-            &FilterExpr::Eq(FieldPath("name".into()), Value::from("CBDC")),
-            &item,
-        ));
-        assert!(asset_definition_filter_projection(
-            &FilterExpr::Eq(FieldPath("alias".into()), Value::from("CBDC#centralbank"),),
-            &item,
-        ));
-        assert!(asset_definition_filter_projection(
-            &FilterExpr::Eq(
-                FieldPath("alias_binding.status".into()),
-                Value::from("leased_grace"),
-            ),
-            &item,
-        ));
-        assert!(asset_definition_filter_projection(
-            &FilterExpr::Gt(
-                FieldPath("alias_binding.bound_at_ms".into()),
-                Value::from(10_u64)
-            ),
-            &item,
-        ));
-        assert!(asset_definition_filter_projection(
-            &FilterExpr::Exists(FieldPath("metadata.rank".into())),
-            &item,
-        ));
-        assert!(asset_definition_filter_projection(
-            &FilterExpr::Lt(FieldPath("metadata.rank".into()), Value::from(2_u64)),
-            &item,
-        ));
-        assert!(!asset_definition_filter_projection(
-            &FilterExpr::IsNull(FieldPath("alias".into())),
-            &item,
-        ));
-        assert!(!asset_definition_filter_projection(
-            &FilterExpr::IsNull(FieldPath("alias_binding.status".into())),
-            &item,
-        ));
-    }
-
-    #[test]
-    fn nfts_filter_adapter_accepts_exists_and_rejects_is_null() {
-        let ok = obj(vec![("op", val("exists")), ("args", val("id"))]);
-        let expr: FilterExpr = norito::json::value::from_value(ok).unwrap();
-        crate::filter::validate_filter(&expr).unwrap();
-        #[cfg(feature = "app_api")]
-        validate_nfts_filter_adapter(&expr).unwrap();
-
-        let bad = obj(vec![("op", val("is_null")), ("args", val("id"))]);
-        let expr2: FilterExpr = norito::json::value::from_value(bad).unwrap();
-        crate::filter::validate_filter(&expr2).unwrap();
-        #[cfg(feature = "app_api")]
-        assert!(validate_nfts_filter_adapter(&expr2).is_err());
-    }
-
-    #[test]
-    fn rwas_filter_adapter_accepts_exists_and_rejects_is_null() {
-        let ok = obj(vec![("op", val("exists")), ("args", val("id"))]);
-        let expr: FilterExpr = norito::json::value::from_value(ok).unwrap();
-        crate::filter::validate_filter(&expr).unwrap();
-        #[cfg(feature = "app_api")]
-        validate_rwas_filter_adapter(&expr).unwrap();
-
-        let bad = obj(vec![("op", val("is_null")), ("args", val("id"))]);
-        let expr2: FilterExpr = norito::json::value::from_value(bad).unwrap();
-        crate::filter::validate_filter(&expr2).unwrap();
-        #[cfg(feature = "app_api")]
-        assert!(validate_rwas_filter_adapter(&expr2).is_err());
-    }
-
-    #[cfg(feature = "app_api")]
-    #[test]
-    fn asset_holder_filter_adapter_accepts_asset_and_scope_eq() {
-        use iroha_test_samples::ALICE_ID;
-
-        let asset_def = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("issuer", "universal").expect("domain"),
-            "cbdc".parse().expect("name"),
-        );
-        let expr = FilterExpr::Eq(
-            FieldPath("asset".into()),
-            Value::from(asset_def.to_string()),
-        );
-        validate_holders_filter_adapter(&expr).unwrap();
-        let scope_expr = FilterExpr::Eq(FieldPath("scope".into()), Value::from("global"));
-        validate_holders_filter_adapter(&scope_expr).unwrap();
-
-        let bad = FilterExpr::Eq(FieldPath("asset".into()), Value::from("not-an-asset"));
-        assert!(validate_holders_filter_adapter(&bad).is_err());
-    }
-
-    #[cfg(feature = "app_api")]
-    #[test]
-    fn asset_holder_filter_matches_asset_and_scope() {
-        use iroha_test_samples::ALICE_ID;
-
-        let asset_def = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("issuer", "universal").expect("domain"),
-            "cbdc".parse().expect("name"),
-        );
-        let item = AssetHolderListItem {
-            account_id: ALICE_ID.clone(),
-            canonical_id: ALICE_ID.to_string(),
-            asset: asset_def.to_string(),
-            asset_alias: Some("cbdc#issuer.main".to_owned()),
-            scope: "global".to_owned(),
-            quantity: iroha_primitives::numeric::Quantity::from(10_u32),
-            primary_alias: PrimaryAliasProjection::default(),
-        };
-        let expr = FilterExpr::Eq(
-            FieldPath("asset".into()),
-            Value::from(asset_def.to_string()),
-        );
-        assert!(filter_asset_holder_item(&expr, &item));
-        let scope_expr = FilterExpr::Eq(FieldPath("scope".into()), Value::from("global"));
-        assert!(filter_asset_holder_item(&scope_expr, &item));
-
-        let other_def = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("issuer", "universal").expect("domain"),
-            "usd".parse().expect("name"),
-        );
-        let expr2 = FilterExpr::Eq(
-            FieldPath("asset".into()),
-            Value::from(other_def.to_string()),
-        );
-        assert!(!filter_asset_holder_item(&expr2, &item));
-    }
-
-    #[test]
-    fn sort_spec_parser_parses_keys_and_orders() {
-        let spec = "metadata.display_name:desc,id:asc,unknown";
-        #[cfg(feature = "app_api")]
-        let parsed = parse_sort_spec(spec);
-        #[cfg(feature = "app_api")]
-        {
-            assert_eq!(parsed.len(), 3);
-            assert_eq!(parsed[0].key.0, "metadata.display_name");
-            assert!(matches!(parsed[0].order, crate::filter::Order::Desc));
-            assert_eq!(parsed[1].key.0, "id");
-            assert!(matches!(parsed[1].order, crate::filter::Order::Asc));
-            assert_eq!(parsed[2].key.0, "unknown");
-        }
-    }
-}
+include!("routing/adapter_filter_tests.rs");
 
 /// POST /v1/accounts/{account_id}/assets/query — JSON envelope with pagination/sort
 #[iroha_futures::telemetry_future]
@@ -75180,37 +73639,7 @@ pub async fn handle_version(state: Arc<CoreState>) -> Response {
     resp
 }
 
-#[cfg(test)]
-mod version_tests {
-    use http_body_util::BodyExt as _;
-    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
-
-    use super::*;
-
-    #[tokio::test]
-    async fn handle_version_reports_unavailable_without_genesis() {
-        let state = Arc::new(CoreState::new_for_testing(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        ));
-        let response = handle_version(state).await;
-        let (parts, body) = response.into_parts();
-        assert_eq!(parts.status, StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(
-            parts
-                .headers
-                .get(header::CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok()),
-            Some("text/plain; charset=utf-8"),
-        );
-        let body_bytes = body.collect().await.expect("collect body").to_bytes();
-        assert_eq!(
-            std::str::from_utf8(&body_bytes).expect("utf8"),
-            "genesis not applied"
-        );
-    }
-}
+include!("routing/version_and_status_visibility.rs");
 
 #[cfg(feature = "telemetry")]
 #[iroha_futures::telemetry_future]
@@ -75462,118 +73891,6 @@ pub async fn handle_status(
                 Ok(resp)
             }
         }
-    }
-}
-
-#[cfg(feature = "telemetry")]
-fn ensure_status_metrics_match_authoritative_height(
-    status: &Status,
-    authoritative_block_height: Option<u64>,
-) -> std::result::Result<(), Error> {
-    let Some(authoritative_block_height) = authoritative_block_height else {
-        return Ok(());
-    };
-    if status.blocks != authoritative_block_height {
-        return Err(Error::AppServiceUnavailable {
-            code: "status_metrics_stale",
-            message: format!(
-                "status metrics classified height {} while applied state is at height {authoritative_block_height}; retry",
-                status.blocks
-            ),
-        });
-    }
-    Ok(())
-}
-
-#[cfg(feature = "telemetry")]
-/// Anchor the public chain-height field to applied state.
-///
-/// The Prometheus block counter is populated by a lazy Kura scan and can trail
-/// while a peer applies a catch-up batch. Kura is also persisted before the WSV
-/// commit boundary, so that counter can briefly lead query-visible state. The
-/// state block-hash journal publishes query-visible committed height on the
-/// apply path, so `/status.blocks` must use that height exactly whenever the
-/// handler provides it. Direct callers without a state anchor retain the legacy
-/// monotonic CommitQC fallback.
-fn normalize_status_block_visibility(status: &mut Status, authoritative_block_height: Option<u64>) {
-    let telemetry_commit_height = status
-        .sumeragi
-        .as_ref()
-        .map_or(0, |sumeragi| sumeragi.commit_qc_height);
-    status.blocks =
-        authoritative_block_height.unwrap_or_else(|| status.blocks.max(telemetry_commit_height));
-}
-
-#[cfg(all(test, feature = "telemetry"))]
-mod status_block_visibility_tests {
-    use iroha_telemetry::metrics::SumeragiConsensusStatus;
-
-    use super::{
-        Error, Status, ensure_status_metrics_match_authoritative_height,
-        normalize_status_block_visibility,
-    };
-
-    #[test]
-    fn stale_classified_height_is_retriable_instead_of_publishing_a_false_empty_gap() {
-        let status = Status {
-            blocks: 2,
-            blocks_non_empty: 2,
-            ..Status::default()
-        };
-
-        let error = ensure_status_metrics_match_authoritative_height(&status, Some(3))
-            .expect_err("an authoritative height ahead of classification must be retriable");
-        assert!(matches!(
-            error,
-            Error::AppServiceUnavailable {
-                code: "status_metrics_stale",
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn matching_classified_and_authoritative_heights_are_publishable() {
-        let status = Status {
-            blocks: 3,
-            blocks_non_empty: 3,
-            ..Status::default()
-        };
-
-        ensure_status_metrics_match_authoritative_height(&status, Some(3))
-            .expect("a single classified frontier is publishable");
-    }
-
-    #[test]
-    fn authoritative_state_height_replaces_lagging_and_leading_counters() {
-        for telemetry_height in [3, 19] {
-            let mut sumeragi = SumeragiConsensusStatus::default();
-            sumeragi.commit_qc_height = telemetry_height;
-            let mut status = Status {
-                blocks: telemetry_height,
-                sumeragi: Some(sumeragi),
-                ..Status::default()
-            };
-
-            normalize_status_block_visibility(&mut status, Some(11));
-
-            assert_eq!(status.blocks, 11);
-        }
-    }
-
-    #[test]
-    fn missing_state_anchor_keeps_monotonic_commit_qc_fallback() {
-        let mut sumeragi = SumeragiConsensusStatus::default();
-        sumeragi.commit_qc_height = 8;
-        let mut status = Status {
-            blocks: 5,
-            sumeragi: Some(sumeragi),
-            ..Status::default()
-        };
-
-        normalize_status_block_visibility(&mut status, None);
-
-        assert_eq!(status.blocks, 8);
     }
 }
 

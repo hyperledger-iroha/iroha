@@ -1,5 +1,4 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import { chacha20orig } from "@noble/ciphers/chacha";
 
 import {
@@ -73,6 +72,10 @@ import { blake2b256 } from "./blake2b.js";
 import { decodeCanonicalVerifyingKeyTransactionPayload } from "./transactionCodec.js";
 import { isCanonicalGovernanceSelectorV1 } from "./governanceSelector.js";
 import {
+  createToriiGovernanceNormalizers,
+  VERIFYING_KEY_PRIVATE_KEY_FIELDS,
+} from "./toriiGovernanceNormalizers.js";
+import {
   KotodamaQuantity,
   NumericV1,
   NumericV1Error,
@@ -121,6 +124,7 @@ import {
 import { assertCanonicalBls12381G1Compressed } from "./bls12381G1.js";
 import { assertValidEd25519PublicKey } from "./ed25519Strict.js";
 import { AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 } from "./authenticatedBlockProofs.js";
+import { createVpnSchema } from "./vpnSchema.js";
 
 const DEFAULT_PAGE_SIZE = 100;
 const EXPLORER_CURSOR_DEFAULT_LIMIT = 25;
@@ -164,6 +168,10 @@ const IVM_PROVE_JOB_CONTROL_JSON_MAX_BYTES = 16 * 1024;
 const IVM_PROVE_JOB_STATUS_JSON_MAX_BYTES = 32 * 1024 * 1024;
 const IVM_PROOF_MAX_BYTES = 8 * 1024 * 1024;
 const VERIFYING_KEY_TRANSACTION_PAYLOAD_MAX_BYTES = 16 * 1024 * 1024;
+const VERIFYING_KEY_CLIENT_URL = new URL(
+  "./verifyingKeyClient.js",
+  import.meta.url,
+).href;
 const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
 const PIPELINE_RECEIPT_MAX_BYTES = 1024 * 1024;
 const PIPELINE_STATUS_JSON_MAX_BYTES = 1024 * 1024;
@@ -709,14 +717,6 @@ const KAIGI_CALL_EVENT_KIND_VALUES = new Set(["roster_updated", "ended"]);
 const SORAFS_REPLICATION_STATUS_VALUES = new Set(["pending", "completed", "expired"]);
 const SORAFS_PIN_STATUS_VALUES = new Set(["pending", "approved", "retired"]);
 const UAID_MANIFEST_STATUS_VALUES = new Set(["Pending", "Active", "Expired", "Revoked"]);
-const VERIFYING_KEY_STATUS_VALUES = new Set([
-  "Proposed",
-  "Active",
-  "Withdrawn",
-]);
-const VERIFYING_KEY_STATUS_ALIASES = new Map(
-  [...VERIFYING_KEY_STATUS_VALUES].map((value) => [value.toLowerCase(), value]),
-);
 const SUBSCRIPTION_STATUS_VALUES = new Set([
   "active",
   "paused",
@@ -1804,13 +1804,6 @@ export class ToriiClient {
       throw new TypeError("Offline capability response must contain JSON");
     }
     return normalizeOfflineStatus(payload);
-  }
-
-  /**
-   * @deprecated Use getOfflineCapability(). The asset selector is ignored.
-   */
-  getKagemushaReadinessV4(_assetDefinitionId, options = {}) {
-    return this.getOfflineCapability(options);
   }
 
   /** Submit an externally produced manifest-V4 top-up Norito archive. */
@@ -2919,7 +2912,8 @@ export class ToriiClient {
    * @returns {Promise<unknown>}
    */
   async listVerifyingKeys(options = {}) {
-    const { signal, params } = buildVerifyingKeyListQuery(options);
+    const verifyingKeys = await loadVerifyingKeyClient();
+    const { signal, params } = verifyingKeys.listQuery(options);
     const response = await this._request("GET", "/v1/zk/vk", {
       headers: JSON_ACCEPT_HEADERS,
       params,
@@ -2936,7 +2930,8 @@ export class ToriiClient {
    */
   async listVerifyingKeysTyped(options = {}) {
     const payload = await this.listVerifyingKeys(options);
-    return normalizeVerifyingKeyListPayload(payload);
+    const verifyingKeys = await loadVerifyingKeyClient();
+    return verifyingKeys.list(payload);
   }
 
   /**
@@ -2964,11 +2959,15 @@ export class ToriiClient {
    * @returns {Promise<unknown>}
    */
   async getVerifyingKey(backend, name, options = {}) {
+    const verifyingKeys = await loadVerifyingKeyClient();
     const normalizedBackend = encodeURIComponent(
-      assertProductionVerifyBackendLabel(backend, "getVerifyingKey backend"),
+      verifyingKeys.backend(
+        backend,
+        "getVerifyingKey backend",
+      ),
     );
     const normalizedName = encodeURIComponent(
-      normalizeVerifyingKeyName(name, "getVerifyingKey name"),
+      verifyingKeys.name(name, "getVerifyingKey name"),
     );
     const { signal } = normalizeSignalOnlyOption(options, "getVerifyingKey");
     const response = await this._request(
@@ -2992,7 +2991,8 @@ export class ToriiClient {
    */
   async getVerifyingKeyTyped(backend, name, options = {}) {
     const payload = await this.getVerifyingKey(backend, name, options);
-    return normalizeVerifyingKeyDetail(payload);
+    const verifyingKeys = await loadVerifyingKeyClient();
+    return verifyingKeys.detail(payload);
   }
 
   /**
@@ -3003,8 +3003,9 @@ export class ToriiClient {
    * @returns {Promise<ToriiVerifyingKeyTransactionDraft>}
    */
   async registerVerifyingKey(payload, options = {}) {
-    const normalizedPayload = normalizeVerifyingKeyRegisterPayload(payload);
-    const signingContext = requireVerifyingKeySigningContext(
+    const verifyingKeys = await loadVerifyingKeyClient();
+    const normalizedPayload = verifyingKeys.register(payload);
+    const signingContext = verifyingKeys.signingContext(
       this._localSigningContext,
       "registerVerifyingKey",
     );
@@ -3019,7 +3020,7 @@ export class ToriiClient {
       signal,
     });
     await this._expectStatus(response, [200]);
-    return normalizeVerifyingKeyTransactionDraft(
+    return verifyingKeys.draft(
       await this._maybeJson(response),
       "registerVerifyingKey response",
       {
@@ -3038,8 +3039,9 @@ export class ToriiClient {
    * @returns {Promise<ToriiVerifyingKeyTransactionDraft>}
    */
   async updateVerifyingKey(payload, options = {}) {
-    const normalizedPayload = normalizeVerifyingKeyUpdatePayload(payload);
-    const signingContext = requireVerifyingKeySigningContext(
+    const verifyingKeys = await loadVerifyingKeyClient();
+    const normalizedPayload = verifyingKeys.update(payload);
+    const signingContext = verifyingKeys.signingContext(
       this._localSigningContext,
       "updateVerifyingKey",
     );
@@ -3051,7 +3053,7 @@ export class ToriiClient {
       signal,
     });
     await this._expectStatus(response, [200]);
-    return normalizeVerifyingKeyTransactionDraft(
+    return verifyingKeys.draft(
       await this._maybeJson(response),
       "updateVerifyingKey response",
       {
@@ -9071,7 +9073,7 @@ export class ToriiClient {
    */
   async deriveIvmProved(request = {}, options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "deriveIvmProved");
-    const payload = normalizeZkIvmExecutionRequest(request, {
+    const payload = await normalizeZkIvmExecutionRequest(request, {
       context: "deriveIvmProved",
       includeProved: false,
     });
@@ -9108,7 +9110,7 @@ export class ToriiClient {
    */
   async startIvmProve(request = {}, options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "startIvmProve");
-    const payload = normalizeZkIvmExecutionRequest(request, {
+    const payload = await normalizeZkIvmExecutionRequest(request, {
       context: "startIvmProve",
       includeProved: true,
     });
@@ -9281,7 +9283,7 @@ export class ToriiClient {
               "proveIvmAndWait options.timeoutMs",
               { allowZero: true },
             );
-    const normalizedRequest = normalizeZkIvmExecutionRequest(request, {
+    const normalizedRequest = await normalizeZkIvmExecutionRequest(request, {
       context: "proveIvmAndWait",
       includeProved: true,
     });
@@ -16989,9 +16991,11 @@ function parseSumeragiNativeParticipantApplications(value) {
       if (!states.has(state)) {
         throw new TypeError(`${itemContext}.state has an unknown variant`);
       }
-      if (state === "durably_applied" && applicationHeight === null) {
+      const requiresApplicationBlock = state === "committed_evidence_pending"
+        || state === "durably_applied";
+      if ((applicationHeight !== null) !== requiresApplicationBlock) {
         throw new TypeError(
-          `${itemContext} durably applied evidence requires an application block`,
+          `${itemContext} state and application block identity disagree`,
         );
       }
       return Object.freeze({
@@ -17034,11 +17038,13 @@ function parseSumeragiAutonomousLaneExecutions(value) {
   const context = "sumeragi diagnostics.autonomous_lane_executions";
   const required = [
     "lane_id", "dataspace_id", "lane_incarnation", "lane_block_height",
-    "lane_block_view", "proposal_height", "proposal_view", "proposal_hash",
-    "descriptor_hash", "reservation_count", "transaction_count",
+    "lane_block_view", "proposal_height",
+    "reservation_owner_hash", "proposal_identity_hash", "reservation_group_hash",
+    "reservation_count", "transaction_count",
     "highest_durable_stage",
   ];
   const optional = [
+    "proposal_view", "proposal_hash", "descriptor_hash",
     "executable_payload_hash", "source_bundle_hash", "merge_entry_hash",
     "application_block_height", "application_block_hash", "stuck_reason",
   ];
@@ -17050,7 +17056,8 @@ function parseSumeragiAutonomousLaneExecutions(value) {
     "queue_finalized", "conflict",
   ]);
   const reasons = new Set([
-    "awaiting_payload_availability", "awaiting_lane_certification",
+    "awaiting_executable_payload", "awaiting_payload_availability",
+    "awaiting_lane_certification",
     "certified_bundle_unavailable", "awaiting_merge_selection",
     "awaiting_global_carrier", "awaiting_application_receipt",
     "queue_finalization_unverifiable", "evidence_conflict",
@@ -17075,18 +17082,24 @@ function parseSumeragiAutonomousLaneExecutions(value) {
     const hash = (field) => record[field] == null ? null : parseSumeragiNonzeroHash(
       record[field], `${itemContext}.${field}`,
     );
+    const requiredHash = (field) => parseSumeragiNonzeroHash(
+      record[field], `${itemContext}.${field}`,
+    );
     const laneId = u64("lane_id", { max: 0xffffffff });
     const dataspaceId = u64("dataspace_id");
-    const incarnation = hash("lane_incarnation");
+    const incarnation = requiredHash("lane_incarnation");
     const laneHeight = u64("lane_block_height", { positive: true });
     const laneView = u64("lane_block_view");
     const proposalHeight = u64("proposal_height", { positive: true });
-    const proposalView = u64("proposal_view");
+    const proposalView = record.proposal_view == null ? null : u64("proposal_view");
+    const reservationOwnerHash = requiredHash("reservation_owner_hash");
+    const proposalIdentityHash = requiredHash("proposal_identity_hash");
+    const reservationGroupHash = requiredHash("reservation_group_hash");
     const proposalHash = hash("proposal_hash");
     const descriptorHash = hash("descriptor_hash");
     const key = [
       laneId, dataspaceId, incarnation, laneHeight, laneView,
-      proposalHeight, proposalView, proposalHash,
+      proposalHeight, proposalIdentityHash,
     ];
     if (previousKey !== null && compareSumeragiDiagnosticKeys(previousKey, key) >= 0) {
       throw new TypeError(`${context} must be strictly ordered by exact identity`);
@@ -17113,7 +17126,7 @@ function parseSumeragiAutonomousLaneExecutions(value) {
       throw new TypeError(`${itemContext}.stuck_reason has an unknown variant`);
     }
     const expectedReasons = {
-      reservations_durable: "awaiting_payload_availability",
+      reservations_durable: "awaiting_executable_payload",
       executable_payload_durable: "awaiting_payload_availability",
       payload_availability_certified: "awaiting_lane_certification",
       lane_certified: "certified_bundle_unavailable",
@@ -17129,6 +17142,18 @@ function parseSumeragiAutonomousLaneExecutions(value) {
     }
     if (stage !== "conflict" && reservationCount !== transactionCount) {
       throw new TypeError(`${itemContext} reservation and transaction counts disagree`);
+    }
+    if ((proposalHash === null) !== (descriptorHash === null)) {
+      throw new TypeError(
+        `${itemContext} proposal and descriptor hashes must appear together`,
+      );
+    }
+    if (stage !== "conflict"
+      && ((stage === "reservations_durable") !== (proposalHash === null))) {
+      throw new TypeError(`${itemContext} finalized identity disagrees with durable stage`);
+    }
+    if (stage === "reservations_durable" && proposalView !== null) {
+      throw new TypeError(`${itemContext} proposal view disagrees with durable stage`);
     }
     const payloadHash = hash("executable_payload_hash");
     const bundleHash = hash("source_bundle_hash");
@@ -17157,6 +17182,9 @@ function parseSumeragiAutonomousLaneExecutions(value) {
       lane_id: laneId, dataspace_id: dataspaceId, lane_incarnation: incarnation,
       lane_block_height: laneHeight, lane_block_view: laneView,
       proposal_height: proposalHeight, proposal_view: proposalView,
+      reservation_owner_hash: reservationOwnerHash,
+      proposal_identity_hash: proposalIdentityHash,
+      reservation_group_hash: reservationGroupHash,
       proposal_hash: proposalHash, descriptor_hash: descriptorHash,
       executable_payload_hash: payloadHash,
       source_bundle_hash: bundleHash,
@@ -17892,6 +17920,7 @@ function parseSumeragiBlockSubject(value, context) {
 
 const SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1;
 const SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES = 1024;
+const SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION = 1;
 const SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT =
   "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F";
 
@@ -17906,11 +17935,16 @@ function parseSumeragiExecutionCommitment(value, context) {
     "native_amx_application_manifest_version",
     "native_amx_application_manifest_root",
     "native_amx_application_manifest_count",
+    "merge_carrier",
+    "executed_block_wire_len",
     "executed_block_wire_hash",
   ]);
   const unknown = Object.keys(record).find((field) => !allowedFields.has(field));
   if (unknown !== undefined) {
     throw new TypeError(`${context} contains unknown field ${unknown}`);
+  }
+  if (!Object.prototype.hasOwnProperty.call(record, "merge_carrier")) {
+    throw new TypeError(`${context}.merge_carrier is required`);
   }
   const topupAnchorCount = parseSumeragiUnsigned(
     record.topup_anchor_count,
@@ -17953,6 +17987,41 @@ function parseSumeragiExecutionCommitment(value, context) {
       `${context}.native_amx_application_manifest_count must be zero exactly for the canonical empty root`,
     );
   }
+  let mergeCarrier = null;
+  if (record.merge_carrier !== null) {
+    const mergeContext = `${context}.merge_carrier`;
+    const mergeRecord = ensureRecord(record.merge_carrier, mergeContext);
+    const mergeFields = new Set(["version", "entry_hash"]);
+    const missingMergeField = [...mergeFields].find(
+      (field) => !Object.prototype.hasOwnProperty.call(mergeRecord, field),
+    );
+    if (missingMergeField !== undefined) {
+      throw new TypeError(`${mergeContext}.${missingMergeField} is required`);
+    }
+    const unknownMergeField = Object.keys(mergeRecord).find(
+      (field) => !mergeFields.has(field),
+    );
+    if (unknownMergeField !== undefined) {
+      throw new TypeError(`${mergeContext} contains unknown field ${unknownMergeField}`);
+    }
+    const mergeVersion = parseSumeragiUnsigned(
+      mergeRecord.version,
+      `${mergeContext}.version`,
+      { max: 0xffff },
+    );
+    if (mergeVersion !== SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION) {
+      throw new RangeError(
+        `${mergeContext}.version must equal ${SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION}`,
+      );
+    }
+    mergeCarrier = Object.freeze({
+      version: mergeVersion,
+      entry_hash: parseSumeragiHash(
+        mergeRecord.entry_hash,
+        `${mergeContext}.entry_hash`,
+      ),
+    });
+  }
   return Object.freeze({
     parent_state_root: parseSumeragiHash(
       record.parent_state_root,
@@ -17971,6 +18040,12 @@ function parseSumeragiExecutionCommitment(value, context) {
     native_amx_application_manifest_version: nativeManifestVersion,
     native_amx_application_manifest_root: nativeManifestRoot,
     native_amx_application_manifest_count: nativeManifestCount,
+    merge_carrier: mergeCarrier,
+    executed_block_wire_len: parseSumeragiUnsigned(
+      record.executed_block_wire_len,
+      `${context}.executed_block_wire_len`,
+      { positive: true },
+    ),
     executed_block_wire_hash: parseSumeragiHash(
       record.executed_block_wire_hash,
       `${context}.executed_block_wire_hash`,
@@ -19690,159 +19765,31 @@ function normalizeExplorerMetricsResponse(payload) {
 
 const EXPLORER_ACCOUNT_QR_OPTION_KEYS = new Set(["signal"]);
 const VPN_SESSION_OPTION_KEYS = new Set(["signal", "canonicalAuth"]);
-const VPN_HELPER_TICKET_BYTES = 664;
-const VPN_HELPER_TICKET_HEX_LENGTH = VPN_HELPER_TICKET_BYTES * 2;
-const VPN_EXIT_CLASSES = new Set(["standard", "low-latency", "high-security"]);
-const VPN_SESSION_STATUSES = new Set(["active"]);
-const VPN_RECEIPT_STATUSES = new Set([
-  "disconnected",
-  "expired",
-  "replaced",
-  "settled",
-]);
-const VPN_RECEIPT_SOURCES = new Set(["torii", "relay", "wsv"]);
-const VPN_LEASE_SECONDS_MAX = 0xffff_ffff;
-const VPN_QUOTE_CREATE_REQUEST_KEYS = new Set([
-  "exitClass",
-  "exit_class",
-  "meteringPublicKeyHex",
-  "metering_public_key_hex",
-]);
-const VPN_SESSION_CREATE_REQUEST_KEYS = new Set([
-  "exitClass",
-  "exit_class",
-  "quoteId",
-  "quote_id",
-  "paymentTxHash",
-  "payment_tx_hash",
-  "meteringPublicKeyHex",
-  "metering_public_key_hex",
-]);
-const VPN_RECEIPT_SUBMIT_REQUEST_KEYS = new Set([
-  "relayReceiptHex",
-  "relay_receipt_hex",
-  "clientVoucherHex",
-  "client_voucher_hex",
-  "leaseIdHex",
-  "lease_id_hex",
-]);
-const VPN_TX_INSTRUCTION_RESPONSE_FIELDS = new Set(["wire_id", "payload_hex"]);
-const VPN_PROFILE_RESPONSE_FIELDS = new Set([
-  "available",
-  "relay_endpoint",
-  "supported_exit_classes",
-  "default_exit_class",
-  "lease_secs",
-  "dns_push_interval_secs",
-  "meter_family",
-  "route_pushes",
-  "excluded_routes",
-  "dns_servers",
-  "tunnel_addresses",
-  "mtu_bytes",
-  "display_billing_label",
-  "operator_account_id",
-  "lease_fee",
-  "settlement_grace_secs",
-  "flow_label_bits",
-  "padding_budget_ms",
-  "relay_id_hex",
-  "descriptor_commit_hex",
-  "tls_server_name",
-  "relay_tls_spki_sha256_hex",
-  "relay_certificate_sha256_hex",
-  "directory_snapshot_digest_hex",
-]);
-const VPN_QUOTE_RESPONSE_FIELDS = new Set([
-  "quote_id",
-  "lease_id_hex",
-  "session_id_hex",
-  "payment_reference",
-  "account_id",
-  "exit_class",
-  "relay_endpoint",
-  "lease_secs",
-  "quote_expires_at_ms",
-  "fee_asset_id",
-  "escrow_account_id",
-  "operator_account_id",
-  "lease_fee",
-  "route_pushes",
-  "excluded_routes",
-  "dns_servers",
-  "tunnel_addresses",
-  "mtu_bytes",
-  "meter_family",
-  "flow_label_bits",
-  "padding_budget_ms",
-  "relay_id_hex",
-  "descriptor_commit_hex",
-  "tls_server_name",
-  "relay_tls_spki_sha256_hex",
-  "relay_certificate_sha256_hex",
-  "directory_snapshot_digest_hex",
-  "metering_public_key_hex",
-  "open_lease_instruction",
-]);
-const VPN_SESSION_RESPONSE_FIELDS = new Set([
-  "session_id",
-  "account_id",
-  "exit_class",
-  "relay_endpoint",
-  "lease_secs",
-  "expires_at_ms",
-  "connected_at_ms",
-  "meter_family",
-  "quote_id",
-  "payment_reference",
-  "payment_tx_hash",
-  "fee_asset_id",
-  "escrow_account_id",
-  "operator_account_id",
-  "lease_fee",
-  "flow_label_bits",
-  "padding_budget_ms",
-  "relay_id_hex",
-  "descriptor_commit_hex",
-  "tls_server_name",
-  "relay_tls_spki_sha256_hex",
-  "relay_certificate_sha256_hex",
-  "directory_snapshot_digest_hex",
-  "route_pushes",
-  "excluded_routes",
-  "dns_servers",
-  "tunnel_addresses",
-  "mtu_bytes",
-  "helper_ticket_hex",
-  "bytes_in",
-  "bytes_out",
-  "status",
-]);
-const VPN_RECEIPT_RESPONSE_FIELDS = new Set([
-  "session_id",
-  "account_id",
-  "exit_class",
-  "relay_endpoint",
-  "meter_family",
-  "connected_at_ms",
-  "disconnected_at_ms",
-  "duration_ms",
-  "bytes_in",
-  "bytes_out",
-  "status",
-  "receipt_source",
-  "quote_id",
-  "payment_tx_hash",
-  "fee_asset_id",
-  "escrow_account_id",
-  "operator_account_id",
-  "lease_fee",
-  "earned_fee",
-  "refunded_fee",
-  "lease_id_hex",
-  "settle_lease_instruction",
-]);
-const VPN_RECEIPT_LIST_RESPONSE_FIELDS = new Set(["items", "total"]);
+const {
+  VPN_HELPER_TICKET_BYTES,
+  VPN_HELPER_TICKET_HEX_LENGTH,
+  VPN_EXIT_CLASSES,
+  VPN_SESSION_STATUSES,
+  VPN_RECEIPT_STATUSES,
+  VPN_RECEIPT_SOURCES,
+  VPN_LEASE_SECONDS_MAX,
+  VPN_QUOTE_CREATE_REQUEST_KEYS,
+  VPN_SESSION_CREATE_REQUEST_KEYS,
+  VPN_RECEIPT_SUBMIT_REQUEST_KEYS,
+  VPN_TX_INSTRUCTION_RESPONSE_FIELDS,
+  VPN_PROFILE_RESPONSE_FIELDS,
+  VPN_QUOTE_RESPONSE_FIELDS,
+  VPN_SESSION_RESPONSE_FIELDS,
+  VPN_RECEIPT_RESPONSE_FIELDS,
+  VPN_RECEIPT_LIST_RESPONSE_FIELDS,
+  normalizeVpnTrustTuple,
+  requireVpnRelayEndpoint,
+  requireVpnEnum,
+  requireVpnProfileExitClasses,
+} = createVpnSchema({
+  requireExactLowerHex32String,
+  requireExactNonEmptyString,
+});
 
 function normalizeExplorerRequestOptions(options) {
   if (options === undefined) {
@@ -19945,185 +19892,6 @@ function normalizeVpnProfileResponse(payload) {
     ),
     ...trust,
   };
-}
-
-function normalizeVpnTrustTuple(record, context, { allowEmpty = false } = {}) {
-  return {
-    relayIdHex: requireVpnRelayId(record.relay_id_hex, `${context}.relay_id_hex`, {
-      allowEmpty,
-    }),
-    descriptorCommitHex: requireVpnTrustDigest(
-      record.descriptor_commit_hex,
-      `${context}.descriptor_commit_hex`,
-      { allowEmpty },
-    ),
-    tlsServerName: requireVpnTlsServerName(
-      record.tls_server_name,
-      `${context}.tls_server_name`,
-      { allowEmpty },
-    ),
-    relayTlsSpkiSha256Hex: requireVpnTrustDigest(
-      record.relay_tls_spki_sha256_hex,
-      `${context}.relay_tls_spki_sha256_hex`,
-      { allowEmpty },
-    ),
-    relayCertificateSha256Hex: requireVpnTrustDigest(
-      record.relay_certificate_sha256_hex,
-      `${context}.relay_certificate_sha256_hex`,
-      { allowEmpty },
-    ),
-    directorySnapshotDigestHex: requireVpnTrustDigest(
-      record.directory_snapshot_digest_hex,
-      `${context}.directory_snapshot_digest_hex`,
-      { allowEmpty },
-    ),
-  };
-}
-
-function requireVpnRelayId(value, context, { allowEmpty = false } = {}) {
-  if (allowEmpty && value === "") return "";
-  const literal = requireExactLowerHex32String(value, context);
-  try {
-    assertValidEd25519PublicKey(Buffer.from(literal, "hex"));
-  } catch (error) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${context} must encode a canonical prime-order Ed25519 public key`,
-      context,
-      { cause: error },
-    );
-  }
-  return literal;
-}
-
-function requireVpnTrustDigest(value, context, { allowEmpty = false } = {}) {
-  if (allowEmpty && value === "") return "";
-  const literal = requireExactLowerHex32String(value, context);
-  if (/^0+$/u.test(literal)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${context} must not be the all-zero digest`,
-      context,
-    );
-  }
-  return literal;
-}
-
-function requireVpnTlsServerName(value, context, { allowEmpty = false } = {}) {
-  if (allowEmpty && value === "") return "";
-  const literal = requireExactNonEmptyString(value, context);
-  const labels = literal.split(".");
-  if (
-    literal.length > 253 ||
-    literal !== literal.toLowerCase() ||
-    labels.some(
-      (label) =>
-        label.length === 0 ||
-        label.length > 63 ||
-        !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(label),
-    )
-  ) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must be a canonical lowercase DNS name`,
-      context,
-    );
-  }
-  return literal;
-}
-
-function requireVpnRelayEndpoint(value, context, { allowEmpty = false } = {}) {
-  if (allowEmpty && value === "") return "";
-  const literal = requireExactNonEmptyString(value, context);
-  const parts = literal.split("/");
-  if (
-    parts.length !== 6 ||
-    parts[0] !== "" ||
-    !new Set(["ip4", "ip6", "dns", "dns4", "dns6"]).has(parts[1]) ||
-    parts[3] !== "udp" ||
-    parts[5] !== "quic"
-  ) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must use /{ip4|ip6|dns|dns4|dns6}/host/udp/port/quic`,
-      context,
-    );
-  }
-  const [, protocol, host, , port] = parts;
-  if (protocol === "ip4") {
-    const octets = host.split(".");
-    if (
-      octets.length !== 4 ||
-      octets.some((octet) => {
-        const parsed = Number(octet);
-        return !/^(?:0|[1-9][0-9]{0,2})$/u.test(octet) || parsed > 255;
-      })
-    ) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_STRING,
-        `${context} must contain a canonical IPv4 address`,
-        context,
-      );
-    }
-  } else if (protocol === "ip6") {
-    let canonicalHost = null;
-    try {
-      canonicalHost = new URL(`https://[${host}]/`).hostname;
-    } catch {
-      // Handled by the canonical comparison below.
-    }
-    if (canonicalHost !== `[${host}]` || host !== host.toLowerCase()) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_STRING,
-        `${context} must contain a canonical lowercase IPv6 address`,
-        context,
-      );
-    }
-  } else {
-    requireVpnTlsServerName(host, `${context} host`);
-  }
-  const parsedPort = Number(port);
-  if (
-    !/^[1-9][0-9]{0,4}$/u.test(port) ||
-    !Number.isSafeInteger(parsedPort) ||
-    parsedPort > 65535
-  ) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_NUMERIC,
-      `${context} must contain a canonical non-zero UDP port`,
-      context,
-    );
-  }
-  return literal;
-}
-
-function requireVpnEnum(value, allowed, context) {
-  const literal = requireExactNonEmptyString(value, context);
-  if (!allowed.has(literal)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must be one of: ${[...allowed].join(", ")}`,
-      context,
-    );
-  }
-  return literal;
-}
-
-function requireVpnProfileExitClasses(value, context) {
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  const exits = value.map((entry, index) =>
-    requireVpnEnum(entry, VPN_EXIT_CLASSES, `${context}[${index}]`),
-  );
-  if (exits.length !== 3 || new Set(exits).size !== 3) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} must contain exactly three unique exit classes`,
-      context,
-    );
-  }
-  return exits;
 }
 
 function requireVpnNumericConstant(value, context, expected) {
@@ -22521,6 +22289,12 @@ function requireExactLowerHex32String(value, name) {
   return requireExactLowerHexBytesString(value, name, 32);
 }
 
+function requireOptionalExactLowerHex32String(value, name) {
+  return value === undefined || value === null
+    ? null
+    : requireExactLowerHex32String(value, name);
+}
+
 function requireExactLowerHexBytesString(value, name, expectedBytes) {
   const literal = requireExactNonEmptyString(value, name);
   if (
@@ -24085,6 +23859,12 @@ function normalizeOptionalBase64Payload(value, name) {
   return normalizeRequiredBase64Payload(value, name);
 }
 
+function normalizeOptionalExactBase64Payload(value, name) {
+  return value === undefined || value === null
+    ? null
+    : normalizeRequiredExactBase64Payload(value, name);
+}
+
 function normalizeRequiredBase64Payload(value, name) {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -24907,1140 +24687,43 @@ function normalizeAppApiTransactionDraft(
   };
 }
 
-const GOVERNANCE_WINDOW_KEYS = new Set(["lower", "upper"]);
-const GOVERNANCE_FINALIZE_REQUEST_KEYS = new Set([
-  "referendumId",
-  "proposalId",
-]);
-const GOVERNANCE_ENACT_REQUEST_KEYS = new Set(["proposalId"]);
-const GOVERNANCE_DEPLOY_CONTRACT_REQUEST_KEYS = new Set([
-  "contractAddress",
-  "contractAlias",
-  "abiVersion",
-  "codeHash",
-  "abiHash",
-  "window",
-  "mode",
-  "manifestProvenance",
-]);
-const GOVERNANCE_MANIFEST_PROVENANCE_KEYS = new Set(["signer", "signature"]);
-const GOVERNANCE_PLAIN_BALLOT_REQUEST_KEYS = new Set([
-  "authority",
-  "chainId",
-  "referendumId",
-  "owner",
-  "amount",
-  "durationBlocks",
-  "direction",
-]);
-const GOVERNANCE_PARLIAMENT_BALLOT_REQUEST_KEYS = new Set([
-  "authority",
-  "chainId",
-  "proposalId",
-  "body",
-  "decision",
-]);
-const GOVERNANCE_ZK_BALLOT_V1_REQUEST_KEYS = new Set([
-  "authority",
-  "chainId",
-  "electionId",
-  "backend",
-  "envelope",
-  "rootHint",
-  "owner",
-  "amount",
-  "durationBlocks",
-  "direction",
-  "nullifier",
-]);
-const GOVERNANCE_ZK_BALLOT_PROOF_REQUEST_KEYS = new Set([
-  "authority",
-  "chainId",
-  "electionId",
-  "ballot",
-]);
-const GOVERNANCE_BALLOT_PROOF_KEYS = new Set([
-  "backend",
-  "envelopeBytes",
-  "rootHint",
-  "owner",
-  "nullifier",
-  "amount",
-  "durationBlocks",
-  "direction",
-]);
-const GOVERNANCE_PARLIAMENT_BODIES = new Set([
-  "rules-committee",
-  "agenda-council",
-  "interest-panel",
-  "review-panel",
-  "policy-jury",
-  "oversight-committee",
-  "fma-committee",
-]);
-const GOVERNANCE_PARLIAMENT_DECISIONS = new Set([
-  "approve",
-  "reject",
-  "abstain",
-]);
-
-function rejectGovernancePrivateKeyFieldsDeep(value, context) {
-  const pending = [{ value, path: context }];
-  const visited = new WeakSet();
-  while (pending.length > 0) {
-    const current = pending.pop();
-    const candidate = current.value;
-    if (candidate === null || typeof candidate !== "object") {
-      continue;
-    }
-    if (visited.has(candidate)) {
-      continue;
-    }
-    visited.add(candidate);
-    if (Array.isArray(candidate)) {
-      for (let index = candidate.length - 1; index >= 0; index -= 1) {
-        pending.push({ value: candidate[index], path: `${current.path}[${index}]` });
-      }
-      continue;
-    }
-    if (!isPlainObject(candidate)) {
-      continue;
-    }
-    const fields = Object.keys(candidate).filter((key) =>
-      VERIFYING_KEY_PRIVATE_KEY_FIELDS.has(key),
-    );
-    if (fields.length > 0) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${current.path} does not accept private-key fields (${fields.join(", ")}); sign the returned transaction draft locally`,
-        `${current.path}.${fields[0]}`,
-      );
-    }
-    for (const [key, nested] of Object.entries(candidate)) {
-      pending.push({ value: nested, path: `${current.path}.${key}` });
-    }
-  }
-}
-
-function normalizeGovernanceFinalizePayload(input) {
-  const context = "governanceFinalizeReferendum payload";
-  const record = ensureRecord(input, context);
-  rejectGovernancePrivateKeyFieldsDeep(record, context);
-  assertSupportedOptionKeys(record, GOVERNANCE_FINALIZE_REQUEST_KEYS, context);
-  const referendumId = record.referendumId;
-  if (referendumId === undefined || referendumId === null) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      "governanceFinalizeReferendum.referendumId is required",
-      "governanceFinalizeReferendum.referendumId",
-    );
-  }
-  const proposalId = record.proposalId;
-  if (proposalId === undefined || proposalId === null) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      "governanceFinalizeReferendum.proposalId is required",
-      "governanceFinalizeReferendum.proposalId",
-    );
-  }
-  const exactReferendumId = requireExactLowerHex32String(
-    referendumId,
-    "governanceFinalizeReferendum.referendumId",
-  );
-  const exactProposalId = requireExactLowerHex32String(
-    proposalId,
-    "governanceFinalizeReferendum.proposalId",
-  );
-  if (exactReferendumId !== exactProposalId) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      "governanceFinalizeReferendum.referendumId must equal proposalId",
-      "governanceFinalizeReferendum.referendumId",
-    );
-  }
-  return {
-    referendum_id: exactReferendumId,
-    proposal_id: exactProposalId,
-  };
-}
-
-function normalizeGovernanceEnactPayload(input) {
-  const context = "governanceEnactProposal payload";
-  const record = ensureRecord(input, context);
-  rejectGovernancePrivateKeyFieldsDeep(record, context);
-  assertSupportedOptionKeys(record, GOVERNANCE_ENACT_REQUEST_KEYS, context);
-  const proposalId = record.proposalId;
-  if (proposalId === undefined || proposalId === null) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      "governanceEnactProposal.proposalId is required",
-      "governanceEnactProposal.proposalId",
-    );
-  }
-  return {
-    proposal_id: requireExactLowerHex32String(
-      proposalId,
-      "governanceEnactProposal.proposalId",
-    ),
-  };
-}
-
-const MINISTRY_AGENDA_DRAFT_REQUEST_KEYS = new Set(["proposal", "authority"]);
-const MINISTRY_AGENDA_PROPOSAL_KEYS = new Set([
-  "version",
-  "proposal_id",
-  "submitted_at_unix_ms",
-  "language",
-  "action",
-  "summary",
-  "tags",
-  "targets",
-  "evidence",
-  "submitter",
-  "duplicates",
-]);
-const MINISTRY_AGENDA_SUMMARY_KEYS = new Set([
-  "title",
-  "motivation",
-  "expected_impact",
-]);
-const MINISTRY_AGENDA_TARGET_KEYS = new Set([
-  "label",
-  "hash_family",
-  "hash_hex",
-  "reason",
-]);
-const MINISTRY_AGENDA_EVIDENCE_KEYS = new Set([
-  "kind",
-  "uri",
-  "digest_blake3_hex",
-  "description",
-]);
-const MINISTRY_AGENDA_SUBMITTER_KEYS = new Set([
-  "name",
-  "contact",
-  "organization",
-  "pgp_fingerprint",
-]);
-const MINISTRY_AGENDA_ACTIONS = new Set([
-  "add-to-denylist",
-  "remove-from-denylist",
-  "amend-policy",
-]);
-const MINISTRY_AGENDA_TAGS = new Set([
-  "csam",
-  "malware",
-  "fraud",
-  "harassment",
-  "impersonation",
-  "policy-escalation",
-  "terrorism",
-  "spam",
-]);
-const MINISTRY_AGENDA_EVIDENCE_KINDS = new Set([
-  "url",
-  "torii-case",
-  "sorafs-cid",
-  "attachment",
-]);
-
-function requireMinistryAgendaArray(value, context, { nonEmpty = false } = {}) {
-  if (!Array.isArray(value) || (nonEmpty && value.length === 0)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} must be ${nonEmpty ? "a non-empty array" : "an array"}`,
-      context,
-    );
-  }
-  return value;
-}
-
-function normalizeMinistryAgendaOptionalText(value, context) {
-  if (value === undefined) return undefined;
-  if (value === null) return null;
-  if (typeof value !== "string") {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must be a string or null`,
-      context,
-    );
-  }
-  return value;
-}
-
-function requireMinistryAgendaText(value, context) {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must contain non-whitespace text`,
-      context,
-    );
-  }
-  return value;
-}
-
-function normalizeMinistryAgendaProposal(input, context) {
-  const proposal = ensureRecord(input, context);
-  assertSupportedOptionKeys(proposal, MINISTRY_AGENDA_PROPOSAL_KEYS, context);
-
-  const version = normalizeGovernanceUint64Integer(
-    proposal.version,
-    `${context}.version`,
-  );
-  if (version !== 1) {
-    throw createValidationError(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
-      `${context}.version must be exactly 1`,
-      `${context}.version`,
-    );
-  }
-
-  const proposalId = requireExactNonEmptyString(
-    proposal.proposal_id,
-    `${context}.proposal_id`,
-  );
-  if (!/^AC-[0-9]{4}-[0-9]{3}$/u.test(proposalId)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context}.proposal_id must follow AC-YYYY-###`,
-      `${context}.proposal_id`,
-    );
-  }
-
-  const submittedAt = normalizeGovernanceUint64Integer(
-    proposal.submitted_at_unix_ms,
-    `${context}.submitted_at_unix_ms`,
-  );
-  if (submittedAt === 0) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_NUMERIC,
-      `${context}.submitted_at_unix_ms must be positive`,
-      `${context}.submitted_at_unix_ms`,
-    );
-  }
-
-  const language = requireExactNonEmptyString(
-    proposal.language,
-    `${context}.language`,
-  );
-  if (
-    language.length < 2 ||
-    language.length > 32 ||
-    !/^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/u.test(language)
-  ) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context}.language must be an exact BCP-47 language tag`,
-      `${context}.language`,
-    );
-  }
-
-  const action = requireExactNonEmptyString(proposal.action, `${context}.action`);
-  if (!MINISTRY_AGENDA_ACTIONS.has(action)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context}.action is unsupported`,
-      `${context}.action`,
-    );
-  }
-
-  const summaryContext = `${context}.summary`;
-  const summary = ensureRecord(proposal.summary, summaryContext);
-  assertSupportedOptionKeys(summary, MINISTRY_AGENDA_SUMMARY_KEYS, summaryContext);
-  const normalizedSummary = {
-    title: requireMinistryAgendaText(summary.title, `${summaryContext}.title`),
-    motivation: requireMinistryAgendaText(
-      summary.motivation,
-      `${summaryContext}.motivation`,
-    ),
-    expected_impact: requireMinistryAgendaText(
-      summary.expected_impact,
-      `${summaryContext}.expected_impact`,
-    ),
-  };
-
-  const tags = requireMinistryAgendaArray(
-    proposal.tags ?? [],
-    `${context}.tags`,
-  ).map((tag, index) => {
-    const normalized = requireExactNonEmptyString(tag, `${context}.tags[${index}]`);
-    if (!MINISTRY_AGENDA_TAGS.has(normalized)) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_STRING,
-        `${context}.tags[${index}] is unsupported`,
-        `${context}.tags[${index}]`,
-      );
-    }
-    return normalized;
-  });
-
-  const fingerprints = new Set();
-  const targets = requireMinistryAgendaArray(
-    proposal.targets,
-    `${context}.targets`,
-    { nonEmpty: true },
-  ).map((entry, index) => {
-    const targetContext = `${context}.targets[${index}]`;
-    const target = ensureRecord(entry, targetContext);
-    assertSupportedOptionKeys(target, MINISTRY_AGENDA_TARGET_KEYS, targetContext);
-    const hashFamily = requireExactNonEmptyString(
-      target.hash_family,
-      `${targetContext}.hash_family`,
-    );
-    if (
-      hashFamily.length > 48 ||
-      !/^[A-Za-z0-9._-]+$/u.test(hashFamily)
-    ) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_STRING,
-        `${targetContext}.hash_family is invalid`,
-        `${targetContext}.hash_family`,
-      );
-    }
-    const hashHex = requireExactNonEmptyString(
-      target.hash_hex,
-      `${targetContext}.hash_hex`,
-    );
-    if (hashHex.length < 32 || !/^[0-9a-fA-F]+$/u.test(hashHex)) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_STRING,
-        `${targetContext}.hash_hex must contain at least 16 bytes of hexadecimal`,
-        `${targetContext}.hash_hex`,
-      );
-    }
-    const fingerprint = `${hashFamily.toLowerCase()}:${hashHex.toLowerCase()}`;
-    if (fingerprints.has(fingerprint)) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${targetContext} duplicates an earlier target`,
-        targetContext,
-      );
-    }
-    fingerprints.add(fingerprint);
-    return {
-      label: requireMinistryAgendaText(target.label, `${targetContext}.label`),
-      hash_family: hashFamily,
-      hash_hex: hashHex,
-      reason: requireMinistryAgendaText(target.reason, `${targetContext}.reason`),
-    };
-  });
-
-  const evidence = requireMinistryAgendaArray(
-    proposal.evidence,
-    `${context}.evidence`,
-    { nonEmpty: true },
-  ).map((entry, index) => {
-    const evidenceContext = `${context}.evidence[${index}]`;
-    const attachment = ensureRecord(entry, evidenceContext);
-    assertSupportedOptionKeys(attachment, MINISTRY_AGENDA_EVIDENCE_KEYS, evidenceContext);
-    const kind = requireExactNonEmptyString(
-      attachment.kind,
-      `${evidenceContext}.kind`,
-    );
-    if (!MINISTRY_AGENDA_EVIDENCE_KINDS.has(kind)) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_STRING,
-        `${evidenceContext}.kind is unsupported`,
-        `${evidenceContext}.kind`,
-      );
-    }
-    const normalized = {
-      kind,
-      uri: requireMinistryAgendaText(attachment.uri, `${evidenceContext}.uri`),
-    };
-    if (attachment.digest_blake3_hex !== undefined && attachment.digest_blake3_hex !== null) {
-      const digest = requireExactNonEmptyString(
-        attachment.digest_blake3_hex,
-        `${evidenceContext}.digest_blake3_hex`,
-      );
-      if (!/^[0-9a-fA-F]{64}$/u.test(digest)) {
-        throw createValidationError(
-          ValidationErrorCode.INVALID_STRING,
-          `${evidenceContext}.digest_blake3_hex must be exactly 32 bytes of hexadecimal`,
-          `${evidenceContext}.digest_blake3_hex`,
-        );
-      }
-      normalized.digest_blake3_hex = digest;
-    } else if (kind === "sorafs-cid" || kind === "attachment") {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_STRING,
-        `${evidenceContext}.digest_blake3_hex is required for ${kind}`,
-        `${evidenceContext}.digest_blake3_hex`,
-      );
-    } else if (attachment.digest_blake3_hex === null) {
-      normalized.digest_blake3_hex = null;
-    }
-    if (attachment.description !== undefined) {
-      normalized.description = normalizeMinistryAgendaOptionalText(
-        attachment.description,
-        `${evidenceContext}.description`,
-      );
-    }
-    return normalized;
-  });
-
-  const submitterContext = `${context}.submitter`;
-  const submitter = ensureRecord(proposal.submitter, submitterContext);
-  assertSupportedOptionKeys(submitter, MINISTRY_AGENDA_SUBMITTER_KEYS, submitterContext);
-  const normalizedSubmitter = {
-    name: requireMinistryAgendaText(submitter.name, `${submitterContext}.name`),
-    contact: requireMinistryAgendaText(
-      submitter.contact,
-      `${submitterContext}.contact`,
-    ),
-  };
-  for (const field of ["organization", "pgp_fingerprint"]) {
-    if (submitter[field] !== undefined) {
-      normalizedSubmitter[field] = normalizeMinistryAgendaOptionalText(
-        submitter[field],
-        `${submitterContext}.${field}`,
-      );
-    }
-  }
-
-  const duplicates = requireMinistryAgendaArray(
-    proposal.duplicates ?? [],
-    `${context}.duplicates`,
-  ).map((duplicate, index) => {
-    if (typeof duplicate !== "string") {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_STRING,
-        `${context}.duplicates[${index}] must be a string`,
-        `${context}.duplicates[${index}]`,
-      );
-    }
-    return duplicate;
-  });
-
-  return {
-    version,
-    proposal_id: proposalId,
-    submitted_at_unix_ms: submittedAt,
-    language,
-    action,
-    summary: normalizedSummary,
-    tags,
-    targets,
-    evidence,
-    submitter: normalizedSubmitter,
-    duplicates,
-  };
-}
-
-function normalizeMinistryAgendaProposalDraftRequest(input) {
-  const context = "draftMinistryAgendaProposal payload";
-  const record = ensureRecord(input, context);
-  rejectGovernancePrivateKeyFieldsDeep(record, context);
-  assertSupportedOptionKeys(record, MINISTRY_AGENDA_DRAFT_REQUEST_KEYS, context);
-  return {
-    proposal: normalizeMinistryAgendaProposal(
-      record.proposal,
-      `${context}.proposal`,
-    ),
-    authority: requireExactTokenString(
-      record.authority,
-      `${context}.authority`,
-    ),
-  };
-}
-
-function normalizeMinistryAgendaProposalRecord(
-  payload,
-  context = "ministry agenda proposal record",
-) {
-  const record = ensureRecord(payload, context);
-  return {
-    proposal: ensureRecord(record.proposal, `${context}.proposal`),
-    authority: requireNonEmptyString(record.authority, `${context}.authority`),
-    submitted_tx_hash_hex: normalizeHex32String(
-      record.submitted_tx_hash_hex,
-      `${context}.submitted_tx_hash_hex`,
-    ),
-    submitted_height: ToriiClient._normalizeUnsignedInteger(
-      record.submitted_height,
-      `${context}.submitted_height`,
-      { allowZero: true },
-    ),
-  };
-}
-
-function normalizeMinistryAgendaProposalDraftResponse(
-  payload,
-  context = "ministry agenda proposal draft response",
-) {
-  const record = ensureRecord(payload, context);
-  const base = normalizeGovernanceDraftResponse(
-    {
-      ok: record.ok,
-      tx_instructions: record.tx_instructions ?? [],
-    },
-    context,
-  );
-  return {
-    ok: base.ok,
-    agenda_proposal_id: requireNonEmptyString(
-      record.agenda_proposal_id,
-      `${context}.agenda_proposal_id`,
-    ),
-    authority: requireNonEmptyString(record.authority, `${context}.authority`),
-    tx_instructions: base.tx_instructions,
-    signable_transaction_b64: requireNonEmptyString(
-      record.signable_transaction_b64,
-      `${context}.signable_transaction_b64`,
-    ),
-  };
-}
-
-function normalizeMinistryAgendaProposalGetResponse(
-  payload,
-  context = "ministry agenda proposal lookup response",
-) {
-  const record = ensureRecord(payload, context);
-  const found = Boolean(record.found);
-  const proposalRecord =
-    record.record === undefined || record.record === null
-      ? null
-      : normalizeMinistryAgendaProposalRecord(record.record, `${context}.record`);
-  return {
-    found,
-    record: proposalRecord,
-  };
-}
-
-function normalizeGovernanceWindow(value, name) {
-  const record = ensureRecord(value, name);
-  assertSupportedOptionKeys(record, GOVERNANCE_WINDOW_KEYS, name);
-  const lowerValue = record.lower;
-  const upperValue = record.upper;
-  if (lowerValue === undefined || upperValue === undefined) {
-    const basePath = normalizeErrorPath(name);
-    if (lowerValue === undefined) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_NUMERIC,
-        `${name}.lower is required`,
-        `${basePath}.lower`,
-      );
-    }
-    throw createValidationError(
-      ValidationErrorCode.INVALID_NUMERIC,
-      `${name}.upper is required`,
-      `${basePath}.upper`,
-    );
-  }
-  const lower = normalizeGovernanceUint64Integer(lowerValue, `${name}.lower`);
-  const upper = normalizeGovernanceUint64Integer(upperValue, `${name}.upper`);
-  if (upper < lower) {
-    throw createValidationError(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
-      `${name}.upper must be greater than or equal to lower`,
-      `${normalizeErrorPath(name)}.upper`,
-    );
-  }
-  return { lower, upper };
-}
-
-function normalizeGovernanceVotingMode(value, name) {
-  const canonical = requireExactNonEmptyString(value, name);
-  if (canonical === "Zk" || canonical === "Plain") {
-    return canonical;
-  }
-  throw createValidationError(
-    ValidationErrorCode.INVALID_STRING,
-    `${name} must be either 'Zk' or 'Plain'`,
-    normalizeErrorPath(name),
-  );
-}
-
-function normalizeGovernanceDraftResponse(
-  payload,
-  context = "governance draft response",
-) {
-  const record = ensureRecord(payload, context);
-  const instructionsValue = record.tx_instructions ?? [];
-  if (!Array.isArray(instructionsValue)) {
-    throw new TypeError(`${context}.tx_instructions must be an array`);
-  }
-  const txInstructions = instructionsValue.map((entry, index) => {
-    const item = ensureRecord(entry, `${context}.tx_instructions[${index}]`);
-    const wireId = requireNonEmptyString(
-      item.wire_id,
-      `${context}.tx_instructions[${index}].wire_id`,
-    );
-    const payloadHexValue = item.payload_hex;
-    const normalizedPayload =
-      payloadHexValue === undefined || payloadHexValue === null
-        ? null
-        : normalizeArbitraryHex(
-            payloadHexValue,
-            `${context}.tx_instructions[${index}].payload_hex`,
-          );
-    return normalizedPayload === null
-      ? { wire_id: wireId }
-      : { wire_id: wireId, payload_hex: normalizedPayload };
-  });
-  let proposalId = record.proposal_id ?? null;
-  if (proposalId !== null && proposalId !== undefined) {
-    proposalId = normalizeHex32String(proposalId, `${context}.proposal_id`);
-  } else {
-    proposalId = null;
-  }
-  const normalized = {
-    ok: Boolean(record.ok),
-    proposal_id: proposalId,
-    tx_instructions: txInstructions,
-  };
-  if (record.accepted !== undefined) {
-    normalized.accepted = Boolean(record.accepted);
-  }
-  if (record.reason !== undefined) {
-    normalized.reason =
-      record.reason === null || record.reason === undefined
-        ? null
-        : requireNonEmptyString(record.reason, `${context}.reason`);
-  }
-  return normalized;
-}
-
-function createEmptyGovernanceDraftResponse(context) {
-  return normalizeGovernanceDraftResponse(
-    {
-      ok: true,
-      tx_instructions: [],
-    },
-    context,
-  );
-}
-
-function normalizeTriggerMutationResponse(
-  payload,
-  context = "trigger mutation response",
-) {
-  const record = ensureRecord(payload, context);
-  const base = normalizeGovernanceDraftResponse(record, context);
-  let triggerId = record.trigger_id ?? null;
-  if (triggerId !== null && triggerId !== undefined) {
-    triggerId = requireNonEmptyString(triggerId, `${context}.trigger_id`);
-  } else {
-    triggerId = null;
-  }
-  const messageValue = record.message ?? null;
-  const message =
-    messageValue === null || messageValue === undefined
-      ? null
-      : String(messageValue);
-  const normalized = {
-    ok: base.ok,
-    trigger_id: triggerId,
-    tx_instructions: base.tx_instructions,
-  };
-  if (base.accepted !== undefined) {
-    normalized.accepted = base.accepted;
-  }
-  if (message !== null && message.length > 0) {
-    normalized.message = message;
-  }
-  return normalized;
-}
-
-function normalizeGovernanceBallotResponse(payload, context) {
-  const record = ensureRecord(payload, context);
-  if (record.accepted === undefined) {
-    throw new TypeError(`${context}.accepted is required`);
-  }
-  const base = normalizeGovernanceDraftResponse(record, context);
-  const reason =
-    record.reason === undefined || record.reason === null
-      ? null
-      : requireNonEmptyString(record.reason, `${context}.reason`);
-  return {
-    ok: base.ok,
-    proposal_id: base.proposal_id,
-    tx_instructions: base.tx_instructions,
-    accepted: Boolean(record.accepted),
-    reason,
-  };
-}
-
-function normalizeGovernanceDeployContractProposalPayload(input) {
-  const context = "governanceProposeDeployContract payload";
-  const record = ensureRecord(input, context);
-  rejectGovernancePrivateKeyFieldsDeep(record, context);
-  assertSupportedOptionKeys(record, GOVERNANCE_DEPLOY_CONTRACT_REQUEST_KEYS, context);
-  const contractAddressValue = record.contractAddress ?? null;
-  const contractAliasValue = record.contractAlias ?? null;
-  if ((contractAddressValue == null) === (contractAliasValue == null)) {
-    throw new TypeError(
-      "governanceProposeDeployContract requires exactly one of contractAddress or contractAlias",
-    );
-  }
-  const abiVersionValue =
-    record.abiVersion === undefined ? "1" : record.abiVersion;
-  const abiVersion = requireExactNonEmptyString(
-    abiVersionValue,
-    "governanceProposeDeployContract.abiVersion",
-  );
-  if (abiVersion !== "1") {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      "governanceProposeDeployContract.abiVersion must be exactly '1'",
-      "governanceProposeDeployContract.abiVersion",
-    );
-  }
-  const codeHashValue = record.codeHash;
-  if (codeHashValue === undefined || codeHashValue === null) {
-    throw new TypeError("governanceProposeDeployContract.codeHash is required");
-  }
-  const abiHashValue = record.abiHash;
-  if (abiHashValue === undefined || abiHashValue === null) {
-    throw new TypeError("governanceProposeDeployContract.abiHash is required");
-  }
-  const payload = {
-    abi_version: abiVersion,
-    code_hash: normalizeHex32String(
-      codeHashValue,
-      "governanceProposeDeployContract.codeHash",
-      { allowScheme: true, scheme: "blake2b32", exactString: true },
-    ),
-    abi_hash: normalizeHex32String(
-      abiHashValue,
-      "governanceProposeDeployContract.abiHash",
-      { allowScheme: true, scheme: "blake2b32", exactString: true },
-    ),
-  };
-  if (contractAddressValue != null) {
-    payload.contract_address = requireNonEmptyString(
-      contractAddressValue,
-      "governanceProposeDeployContract.contractAddress",
-    );
-  } else {
-    payload.contract_alias = requireNonEmptyString(
-      contractAliasValue,
-      "governanceProposeDeployContract.contractAlias",
-    );
-  }
-  const windowValue =
-    record.window;
-  if (windowValue !== undefined && windowValue !== null) {
-    payload.window = normalizeGovernanceWindow(
-      windowValue,
-      "governanceProposeDeployContract.window",
-    );
-  }
-  const modeValue = record.mode;
-  if (modeValue !== undefined && modeValue !== null) {
-    payload.mode = normalizeGovernanceVotingMode(
-      modeValue,
-      "governanceProposeDeployContract.mode",
-    );
-  }
-  const manifestProvenance = record.manifestProvenance;
-  if (manifestProvenance !== undefined) {
-    payload.manifest_provenance =
-      manifestProvenance === null
-        ? null
-        : normalizeGovernanceManifestProvenancePayload(
-            manifestProvenance,
-            "governanceProposeDeployContract.manifestProvenance",
-          );
-  }
-  return payload;
-}
-
-function normalizeGovernanceManifestProvenancePayload(value, context) {
-  const record = ensureRecord(value, context);
-  assertSupportedOptionKeys(record, GOVERNANCE_MANIFEST_PROVENANCE_KEYS, context);
-  return normalizeManifestProvenancePayload(record, context);
-}
-
-function normalizeGovernancePlainBallotPayload(input) {
-  const context = "governanceSubmitPlainBallot payload";
-  const record = ensureRecord(input, context);
-  rejectGovernancePrivateKeyFieldsDeep(record, context);
-  assertSupportedOptionKeys(record, GOVERNANCE_PLAIN_BALLOT_REQUEST_KEYS, context);
-  const direction = record.direction;
-  const payload = {
-    authority: ToriiClient._normalizeAccountId(
-      record.authority,
-      "governanceSubmitPlainBallot.authority",
-    ),
-    chain_id: requireExactTokenString(
-      record.chainId,
-      "governanceSubmitPlainBallot.chainId",
-    ),
-    referendum_id: requireGovernanceSelectorString(
-      record.referendumId,
-      "governanceSubmitPlainBallot.referendumId",
-    ),
-    owner: ToriiClient._normalizeAccountId(
-      record.owner,
-      "governanceSubmitPlainBallot.owner",
-    ),
-    amount: normalizeQuantityInput(
-      record.amount,
-      "governanceSubmitPlainBallot.amount",
-    ),
-    duration_blocks: normalizeUint64DecimalString(
-      record.durationBlocks,
-      "governanceSubmitPlainBallot.durationBlocks",
-      { allowZero: true },
-    ),
-    direction: normalizeGovernanceBallotDirection(
-      direction,
-      "governanceSubmitPlainBallot.direction",
-    ),
-  };
-  return payload;
-}
-
-function normalizeGovernanceParliamentBallotPayload(input) {
-  const context = "governanceSubmitParliamentBallot payload";
-  const record = ensureRecord(input, context);
-  rejectGovernancePrivateKeyFieldsDeep(record, context);
-  assertSupportedOptionKeys(record, GOVERNANCE_PARLIAMENT_BALLOT_REQUEST_KEYS, context);
-  return {
-    authority: ToriiClient._normalizeAccountId(
-      record.authority,
-      "governanceSubmitParliamentBallot.authority",
-    ),
-    chain_id: requireExactTokenString(
-      record.chainId,
-      "governanceSubmitParliamentBallot.chainId",
-    ),
-    proposal_id: normalizeHex32String(
-      record.proposalId,
-      "governanceSubmitParliamentBallot.proposalId",
-      { allowScheme: true, scheme: "blake2b32", exactString: true },
-    ),
-    body: normalizeGovernanceParliamentBody(
-      record.body,
-      "governanceSubmitParliamentBallot.body",
-    ),
-    decision: normalizeGovernanceParliamentDecision(
-      record.decision,
-      "governanceSubmitParliamentBallot.decision",
-    ),
-  };
-}
-
-function normalizeGovernanceParliamentBody(value, name) {
-  const body = requireExactTokenString(value, name);
-  if (!GOVERNANCE_PARLIAMENT_BODIES.has(body)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${name} must name a canonical Parliament body`,
-      name,
-    );
-  }
-  return body;
-}
-
-function normalizeGovernanceParliamentDecision(value, name) {
-  const decision = requireExactTokenString(value, name);
-  if (!GOVERNANCE_PARLIAMENT_DECISIONS.has(decision)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${name} must be approve, reject, or abstain`,
-      name,
-    );
-  }
-  return decision;
-}
-
-function normalizeGovernanceBallotDirection(value, name) {
-  const canonical = requireExactNonEmptyString(value, name);
-  if (canonical === "Aye" || canonical === "Nay" || canonical === "Abstain") {
-    return canonical;
-  }
-  throw new TypeError(`${name} must be one of Aye, Nay, or Abstain`);
-}
-
-function ensureGovernanceLockHintsComplete(source, name) {
-  const hasOwner = source.owner !== undefined && source.owner !== null;
-  const hasAmount = source.amount !== undefined && source.amount !== null;
-  const hasDuration =
-    source.durationBlocks !== undefined && source.durationBlocks !== null;
-  const hasAnyLockHint = hasOwner || hasAmount || hasDuration;
-  if (hasAnyLockHint && !(hasOwner && hasAmount && hasDuration)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${name} must include owner, amount, and durationBlocks when providing lock hints`,
-      name,
-    );
-  }
-}
-
-function normalizeGovernanceZkBallotV1Payload(input) {
-  const context = "governanceSubmitZkBallotV1 payload";
-  const record = ensureRecord(input, context);
-  rejectGovernancePrivateKeyFieldsDeep(record, context);
-  assertSupportedOptionKeys(record, GOVERNANCE_ZK_BALLOT_V1_REQUEST_KEYS, context);
-  const payload = {
-    authority: ToriiClient._normalizeAccountId(
-      record.authority,
-      "governanceSubmitZkBallotV1.authority",
-    ),
-    chain_id: requireExactTokenString(
-      record.chainId,
-      "governanceSubmitZkBallotV1.chainId",
-    ),
-    election_id: requireGovernanceSelectorString(
-      record.electionId,
-      "governanceSubmitZkBallotV1.electionId",
-    ),
-    backend: requireExactTokenString(
-      record.backend,
-      "governanceSubmitZkBallotV1.backend",
-    ),
-    envelope_b64: normalizeRequiredBase64Payload(
-      record.envelope,
-      "governanceSubmitZkBallotV1.envelope",
-    ),
-  };
-  ensureGovernanceLockHintsComplete(record, "governanceSubmitZkBallotV1");
-  const rootHint = record.rootHint;
-  if (rootHint !== undefined && rootHint !== null) {
-    payload.root_hint = normalizeHex32String(
-      rootHint,
-      "governanceSubmitZkBallotV1.rootHint",
-      { allowScheme: true, scheme: "blake2b32", exactString: true },
-    );
-  }
-  if (record.owner !== undefined && record.owner !== null) {
-    payload.owner = requireNonEmptyString(
-      record.owner,
-      "governanceSubmitZkBallotV1.owner",
-    );
-  }
-  if (record.amount !== undefined && record.amount !== null) {
-    payload.amount = normalizeQuantityInput(
-      record.amount,
-      "governanceSubmitZkBallotV1.amount",
-    );
-  }
-  const durationBlocks = record.durationBlocks;
-  if (durationBlocks !== undefined && durationBlocks !== null) {
-    payload.duration_blocks = normalizeGovernanceUint64Integer(
-      durationBlocks,
-      "governanceSubmitZkBallotV1.durationBlocks",
-    );
-  }
-  if (record.direction !== undefined && record.direction !== null) {
-    payload.direction = normalizeGovernanceBallotDirection(
-      record.direction,
-      "governanceSubmitZkBallotV1.direction",
-    );
-  }
-  const nullifier = record.nullifier;
-  if (nullifier !== undefined && nullifier !== null) {
-    payload.nullifier = normalizeHex32String(
-      nullifier,
-      "governanceSubmitZkBallotV1.nullifier",
-      { allowScheme: true, scheme: "blake2b32", exactString: true },
-    );
-  }
-  if (payload.owner !== undefined && payload.owner !== null) {
-    payload.owner = ensureCanonicalAccountId(
-      payload.owner,
-      "governanceSubmitZkBallotV1.owner",
-    );
-  }
-  return payload;
-}
-
-function normalizeGovernanceZkBallotProofPayload(input) {
-  const context = "governanceSubmitZkBallotProofV1 payload";
-  const record = ensureRecord(input, context);
-  rejectGovernancePrivateKeyFieldsDeep(record, context);
-  assertSupportedOptionKeys(record, GOVERNANCE_ZK_BALLOT_PROOF_REQUEST_KEYS, context);
-  const ballot = ensureRecord(
-    record.ballot,
-    "governanceSubmitZkBallotProofV1.ballot",
-  );
-  const ballotContext = "governanceSubmitZkBallotProofV1.ballot";
-  rejectGovernancePrivateKeyFieldsDeep(ballot, ballotContext);
-  assertSupportedOptionKeys(ballot, GOVERNANCE_BALLOT_PROOF_KEYS, ballotContext);
-  ensureGovernanceLockHintsComplete(ballot, ballotContext);
-  if (ballot.envelopeBytes === undefined || ballot.envelopeBytes === null) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${ballotContext}.envelopeBytes is required`,
-      `${ballotContext}.envelopeBytes`,
-    );
-  }
-  const normalizedBallot = {
-    backend: requireExactTokenString(ballot.backend, `${ballotContext}.backend`),
-    envelope_bytes: normalizeRequiredBase64Payload(
-      ballot.envelopeBytes,
-      `${ballotContext}.envelopeBytes`,
-    ),
-  };
-  if (Object.prototype.hasOwnProperty.call(ballot, "rootHint")) {
-    normalizedBallot.root_hint =
-      ballot.rootHint === null
-        ? null
-        : normalizeHex32String(ballot.rootHint, `${ballotContext}.rootHint`, {
-            allowScheme: true,
-            scheme: "blake2b32",
-            exactString: true,
-          });
-  }
-  if (Object.prototype.hasOwnProperty.call(ballot, "nullifier")) {
-    normalizedBallot.nullifier =
-      ballot.nullifier === null
-        ? null
-        : normalizeHex32String(ballot.nullifier, `${ballotContext}.nullifier`, {
-            allowScheme: true,
-            scheme: "blake2b32",
-            exactString: true,
-          });
-  }
-  if (Object.prototype.hasOwnProperty.call(ballot, "amount")) {
-    normalizedBallot.amount =
-      ballot.amount === null
-        ? null
-        : normalizeQuantityInput(ballot.amount, `${ballotContext}.amount`);
-  }
-  if (Object.prototype.hasOwnProperty.call(ballot, "owner")) {
-    normalizedBallot.owner =
-      ballot.owner === null
-        ? null
-        : ensureCanonicalAccountId(ballot.owner, `${ballotContext}.owner`);
-  }
-  if (Object.prototype.hasOwnProperty.call(ballot, "durationBlocks")) {
-    normalizedBallot.duration_blocks =
-      ballot.durationBlocks === null
-        ? null
-        : normalizeGovernanceUint64Integer(
-            ballot.durationBlocks,
-            `${ballotContext}.durationBlocks`,
-          );
-  }
-  if (Object.prototype.hasOwnProperty.call(ballot, "direction")) {
-    normalizedBallot.direction =
-      ballot.direction === null
-        ? null
-        : normalizeGovernanceBallotDirection(
-            ballot.direction,
-            `${ballotContext}.direction`,
-          );
-  }
-  const payload = {
-    authority: ToriiClient._normalizeAccountId(
-      record.authority,
-      "governanceSubmitZkBallotProofV1.authority",
-    ),
-    chain_id: requireExactTokenString(
-      record.chainId,
-      "governanceSubmitZkBallotProofV1.chainId",
-    ),
-    election_id: requireGovernanceSelectorString(
-      record.electionId,
-      "governanceSubmitZkBallotProofV1.electionId",
-    ),
-    ballot: normalizedBallot,
-  };
-  return payload;
-}
+const {
+  createEmptyGovernanceDraftResponse,
+  normalizeGovernanceBallotResponse,
+  normalizeGovernanceDeployContractProposalPayload,
+  normalizeGovernanceDraftResponse,
+  normalizeGovernanceEnactPayload,
+  normalizeGovernanceFinalizePayload,
+  normalizeGovernanceParliamentBallotPayload,
+  normalizeGovernancePlainBallotPayload,
+  normalizeGovernanceZkBallotProofPayload,
+  normalizeGovernanceZkBallotV1Payload,
+  normalizeMinistryAgendaProposalDraftRequest,
+  normalizeMinistryAgendaProposalDraftResponse,
+  normalizeMinistryAgendaProposalGetResponse,
+  normalizeTriggerMutationResponse,
+} = createToriiGovernanceNormalizers({
+  ToriiClient,
+  ValidationErrorCode,
+  assertSupportedOptionKeys,
+  createValidationError,
+  ensureCanonicalAccountId,
+  ensureRecord,
+  isPlainObject,
+  normalizeArbitraryHex,
+  normalizeErrorPath,
+  normalizeGovernanceUint64Integer,
+  normalizeHex32String,
+  normalizeManifestProvenancePayload,
+  normalizeQuantityInput,
+  normalizeRequiredBase64Payload,
+  normalizeUint64DecimalString,
+  requireExactLowerHex32String,
+  requireExactNonEmptyString,
+  requireExactTokenString,
+  requireGovernanceSelectorString,
+  requireNonEmptyString,
+});
 
 function normalizeArbitraryHex(value, name) {
   const normalized = requireHexString(value, name);
@@ -26198,7 +24881,8 @@ function normalizeContractOperationReceipt(payload, context) {
 }
 
 function normalizeContractCallResponse(payload) {
-  const record = ensureRecord(payload, "contractCall response");
+  const context = "contractCall response";
+  const record = ensureRecord(payload, context);
   assertSupportedOptionKeys(
     record,
     new Set([
@@ -26213,108 +24897,57 @@ function normalizeContractCallResponse(payload) {
       "tx_hash_hex",
       "pipeline_status",
       "entrypoint_hash_hex",
-      "transaction_scaffold_b64",
-      "signed_transaction_b64",
+      "transaction_payload_b64",
       "signing_message_b64",
       "entrypoint",
       "operation_receipt",
     ]),
-    "contractCall response",
+    context,
   );
   const normalized = {
-    ok: requireExactBoolean(record.ok, "contractCall response.ok"),
-    submitted: requireExactBoolean(
-      record.submitted,
-      "contractCall response.submitted",
-    ),
-    dataspace: requireExactNonEmptyString(
-      record.dataspace,
-      "contractCall response.dataspace",
-    ),
-    code_hash_hex: requireExactLowerHex32String(
-      record.code_hash_hex,
-      "contractCall response.code_hash_hex",
-    ),
-    abi_hash_hex: requireExactLowerHex32String(
-      record.abi_hash_hex,
-      "contractCall response.abi_hash_hex",
-    ),
-    creation_time_ms: requireExactJsonUnsignedInteger(
-      record.creation_time_ms,
-      "contractCall response.creation_time_ms",
-      { allowZero: true },
-    ),
+    ok: requireExactBoolean(record.ok, `${context}.ok`),
+    submitted: requireExactBoolean(record.submitted, `${context}.submitted`),
+    dataspace: requireExactNonEmptyString(record.dataspace, `${context}.dataspace`),
+    code_hash_hex: requireExactLowerHex32String(record.code_hash_hex, `${context}.code_hash_hex`),
+    abi_hash_hex: requireExactLowerHex32String(record.abi_hash_hex, `${context}.abi_hash_hex`),
+    creation_time_ms: requireExactJsonUnsignedInteger(record.creation_time_ms, `${context}.creation_time_ms`, { allowZero: true }),
     transaction_ttl_ms:
       record.transaction_ttl_ms === undefined || record.transaction_ttl_ms === null
         ? null
         : requireExactJsonUnsignedInteger(
             record.transaction_ttl_ms,
-            "contractCall response.transaction_ttl_ms",
+            `${context}.transaction_ttl_ms`,
             { allowZero: false },
           ),
   };
   if (record.contract_address !== undefined && record.contract_address !== null) {
     normalized.contract_address = requireExactNonEmptyString(
       record.contract_address,
-      "contractCall response.contract_address",
+      `${context}.contract_address`,
     );
   }
-  if (record.tx_hash_hex !== undefined && record.tx_hash_hex !== null) {
-    normalized.tx_hash_hex = requireExactLowerHex32String(
-      record.tx_hash_hex,
-      "contractCall response.tx_hash_hex",
-    );
-  } else {
-    normalized.tx_hash_hex = null;
-  }
-  normalized.entrypoint_hash_hex =
-    record.entrypoint_hash_hex === undefined || record.entrypoint_hash_hex === null
-      ? null
-      : requireExactLowerHex32String(
-          record.entrypoint_hash_hex,
-          "contractCall response.entrypoint_hash_hex",
-        );
+  normalized.tx_hash_hex = requireOptionalExactLowerHex32String(record.tx_hash_hex, `${context}.tx_hash_hex`);
+  normalized.entrypoint_hash_hex = requireOptionalExactLowerHex32String(record.entrypoint_hash_hex, `${context}.entrypoint_hash_hex`);
   normalized.entrypoint =
     record.entrypoint === undefined || record.entrypoint === null
       ? null
       : requireExactNonEmptyString(
           record.entrypoint,
-          "contractCall response.entrypoint",
+          `${context}.entrypoint`,
         );
-  normalized.transaction_scaffold_b64 =
-    record.transaction_scaffold_b64 === undefined || record.transaction_scaffold_b64 === null
-      ? null
-      : normalizeRequiredExactBase64Payload(
-          record.transaction_scaffold_b64,
-          "contractCall response.transaction_scaffold_b64",
-        );
-  normalized.signed_transaction_b64 =
-    record.signed_transaction_b64 === undefined || record.signed_transaction_b64 === null
-      ? null
-      : normalizeRequiredExactBase64Payload(
-          record.signed_transaction_b64,
-          "contractCall response.signed_transaction_b64",
-        );
-  normalized.signing_message_b64 =
-    record.signing_message_b64 === undefined || record.signing_message_b64 === null
-      ? null
-      : normalizeRequiredExactBase64Payload(
-          record.signing_message_b64,
-          "contractCall response.signing_message_b64",
-        );
+  normalized.transaction_payload_b64 = normalizeOptionalExactBase64Payload(record.transaction_payload_b64, `${context}.transaction_payload_b64`);
+  normalized.signing_message_b64 = normalizeOptionalExactBase64Payload(record.signing_message_b64, `${context}.signing_message_b64`);
   if (record.pipeline_status !== undefined) {
     normalized.pipeline_status =
       record.pipeline_status === null
         ? null
         : normalizePipelineTransactionStatus(
             record.pipeline_status,
-            "contractCall response.pipeline_status",
+            `${context}.pipeline_status`,
           );
   }
-  normalized.operation_receipt = normalizeContractOperationReceipt(
-    record.operation_receipt,
-    "contractCall response.operation_receipt",
-  );
+
+  normalized.operation_receipt = normalizeContractOperationReceipt(record.operation_receipt, `${context}.operation_receipt`);
   return normalized;
 }
 
@@ -26324,26 +24957,28 @@ function normalizeContractCallDraftResponse(payload, request) {
   if (!response.ok || response.submitted) {
     throw new TypeError("contractCall draft must be successful and not submitted");
   }
-  if (response.tx_hash_hex !== null || response.pipeline_status != null) {
+  if (
+    response.tx_hash_hex !== null ||
+    response.entrypoint_hash_hex !== null ||
+    response.pipeline_status != null
+  ) {
     throw new TypeError("contractCall draft must not contain submission state");
   }
-  if (
-    response.transaction_scaffold_b64 === null ||
-    response.transaction_scaffold_b64 !== response.signed_transaction_b64
-  ) {
-    throw new TypeError("contractCall draft must contain one exact transaction scaffold");
-  }
-  decodeVerifyingKeyDraftBase64(
-    response.signing_message_b64,
-    "contractCall response.signing_message_b64",
-    { exactBytes: 32 },
+  normalizeAppApiTransactionDraft(
+    {
+      submitted: response.submitted,
+      transaction_payload_b64: response.transaction_payload_b64,
+      signing_message_b64: response.signing_message_b64,
+    },
+    "contractCall response",
   );
   if (
     response.entrypoint !== request.entrypoint ||
     receipt.operation_kind !== "contract_call" ||
     receipt.status !== "pending_signature" ||
     receipt.entrypoint !== request.entrypoint ||
-    receipt.tx_hash_hex !== null
+    receipt.tx_hash_hex !== null ||
+    receipt.entrypoint_hash_hex !== null
   ) {
     throw new TypeError("contractCall draft is not bound to the requested entrypoint");
   }
@@ -26489,7 +25124,7 @@ function normalizeContractCallSimulateResponse(payload) {
   return normalized;
 }
 
-function normalizeZkIvmExecutionRequest(input, { context, includeProved }) {
+async function normalizeZkIvmExecutionRequest(input, { context, includeProved }) {
   const record = ensureRecord(input, `${context} request`);
   const vkRef = record.vk_ref ?? record.vkRef;
   const metadata = record.metadata ?? {};
@@ -26498,7 +25133,10 @@ function normalizeZkIvmExecutionRequest(input, { context, includeProved }) {
     `${context}.bytecode`,
   );
   const normalized = {
-    vk_ref: normalizeVerifyingKeyId(vkRef, `${context}.vk_ref`),
+    vk_ref: (await loadVerifyingKeyClient()).id(
+      vkRef,
+      `${context}.vk_ref`,
+    ),
     authority: ToriiClient._normalizeAccountId(
       record.authority,
       `${context}.authority`,
@@ -27274,29 +25912,35 @@ function normalizeMultisigContractCallResponse(
       `${context}.ok`,
     );
   }
-  return {
+  for (const retired of ["transaction_scaffold_b64", "signed_transaction_b64"]) {
+    if (Object.hasOwn(record, retired)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context} contains retired field ${retired}`,
+        `${context}.${retired}`,
+      );
+    }
+  }
+  const normalized = {
     ok: true,
     resolved_multisig_account_id: requireExactAccountId(
       record.resolved_multisig_account_id,
       `${context}.resolved_multisig_account_id`,
     ),
-    submitted: optionalBoolean(record.submitted, `${context}.submitted`),
+    submitted: requireExactBoolean(record.submitted, `${context}.submitted`),
     proposal_id: optionalString(record.proposal_id, `${context}.proposal_id`),
-    instructions_hash:
-      record.instructions_hash === undefined || record.instructions_hash === null
-        ? null
-        : normalizeHex32String(record.instructions_hash, `${context}.instructions_hash`),
-    tx_hash_hex:
-      record.tx_hash_hex === undefined || record.tx_hash_hex === null
-        ? null
-        : normalizeHex32String(record.tx_hash_hex, `${context}.tx_hash_hex`),
-    executed_tx_hash_hex:
-      record.executed_tx_hash_hex === undefined || record.executed_tx_hash_hex === null
-        ? null
-        : normalizeHex32String(
-            record.executed_tx_hash_hex,
-            `${context}.executed_tx_hash_hex`,
-          ),
+    instructions_hash: requireOptionalExactLowerHex32String(
+      record.instructions_hash,
+      `${context}.instructions_hash`,
+    ),
+    tx_hash_hex: requireOptionalExactLowerHex32String(
+      record.tx_hash_hex,
+      `${context}.tx_hash_hex`,
+    ),
+    executed_tx_hash_hex: requireOptionalExactLowerHex32String(
+      record.executed_tx_hash_hex,
+      `${context}.executed_tx_hash_hex`,
+    ),
     creation_time_ms:
       record.creation_time_ms === undefined || record.creation_time_ms === null
         ? null
@@ -27305,11 +25949,41 @@ function normalizeMultisigContractCallResponse(
             `${context}.creation_time_ms`,
             { allowZero: true },
           ),
-    signing_message_b64: normalizeOptionalBase64Payload(
+    transaction_payload_b64: normalizeOptionalExactBase64Payload(
+      record.transaction_payload_b64,
+      `${context}.transaction_payload_b64`,
+    ),
+    signing_message_b64: normalizeOptionalExactBase64Payload(
       record.signing_message_b64,
       `${context}.signing_message_b64`,
     ),
   };
+  if (normalized.submitted) {
+    if (
+      normalized.tx_hash_hex === null ||
+      normalized.transaction_payload_b64 !== null ||
+      normalized.signing_message_b64 !== null
+    ) {
+      throw new TypeError(
+        `${context} submitted response must contain only the final transaction hash`,
+      );
+    }
+  } else {
+    if (normalized.tx_hash_hex !== null) {
+      throw new TypeError(
+        `${context} unsigned response must contain exactly one payload and signing-message pair`,
+      );
+    }
+    normalizeAppApiTransactionDraft(
+      {
+        submitted: normalized.submitted,
+        transaction_payload_b64: normalized.transaction_payload_b64,
+        signing_message_b64: normalized.signing_message_b64,
+      },
+      context,
+    );
+  }
+  return normalized;
 }
 
 function normalizeMultisigSpecResponse(payload, context = "multisig spec response") {
@@ -35144,228 +33818,43 @@ const VERIFYING_KEY_ITERATOR_OPTION_KEYS = new Set([
   "maxItems",
 ]);
 
-function buildVerifyingKeyListQuery(options = {}) {
-  const { signal } = normalizeSignalOption(options, "listVerifyingKeys");
-  assertSupportedOptionKeys(
-    options ?? {},
-    VERIFYING_KEY_LIST_OPTION_KEYS,
-    "listVerifyingKeys options",
-  );
-  const params = {};
-  const backendValue = options.backend ?? options.backend_filter;
-  if (backendValue !== undefined && backendValue !== null) {
-    params.backend = assertProductionVerifyBackendLabel(
-      backendValue,
-      "listVerifyingKeys.backend",
-    );
-  }
-  const statusValue =
-    options.status ?? options.statusFilter ?? options.verifyingKeyStatus;
-  const normalizedStatus = normalizeVerifyingKeyStatusValue(
-    statusValue,
-    "listVerifyingKeys.status",
-    { optional: true },
-  );
-  if (normalizedStatus) {
-    params.status = normalizedStatus;
-  }
-  const nameContains = options.nameContains ?? options.name_contains;
-  if (nameContains !== undefined && nameContains !== null) {
-    params.name_contains = requireNonEmptyString(
-      nameContains,
-      "listVerifyingKeys.nameContains",
-    );
-  }
-  if (options.limit !== undefined && options.limit !== null) {
-    params.limit = ToriiClient._normalizeUnsignedInteger(
-      options.limit,
-      "listVerifyingKeys.limit",
-      { allowZero: false },
-    );
-  }
-  if (options.offset !== undefined && options.offset !== null) {
-    params.offset = ToriiClient._normalizeUnsignedInteger(
-      options.offset,
-      "listVerifyingKeys.offset",
-      { allowZero: true },
-    );
-  }
-  const orderValue = options.order ?? options.sort ?? options.sortOrder;
-  if (orderValue !== undefined && orderValue !== null) {
-    const normalizedOrder = requireNonEmptyString(orderValue, "listVerifyingKeys.order");
-    const lower = normalizedOrder.toLowerCase();
-    if (lower !== "asc" && lower !== "desc") {
-      throw new TypeError('listVerifyingKeys.order must be "asc" or "desc"');
-    }
-    params.order = lower;
-  }
-  const idsOnlyValue = options.idsOnly ?? options.ids_only;
-  if (idsOnlyValue !== undefined && idsOnlyValue !== null) {
-    params.ids_only = requireBooleanLike(
-      idsOnlyValue,
-      "listVerifyingKeys.idsOnly",
-    );
-  }
-  return { signal, params: Object.keys(params).length === 0 ? undefined : params };
-}
+let verifyingKeyClientPromise;
 
-function normalizeVerifyingKeyListPayload(
-  payload,
-  context = "verifying key list response",
-) {
-  if (payload === undefined || payload === null) {
-    return [];
-  }
-  if (Array.isArray(payload)) {
-    return payload.map((entry, index) =>
-      normalizeVerifyingKeyListItem(entry, `${context}[${index}]`),
-    );
-  }
-  const record = ensureRecord(payload, context);
-  if (!Array.isArray(record.items)) {
-    throw new TypeError(`${context} must be an array or { items: [] } object`);
-  }
-  return record.items.map((entry, index) =>
-    normalizeVerifyingKeyListItem(entry, `${context}.items[${index}]`),
-  );
-}
-
-function normalizeVerifyingKeyListItem(payload, context) {
-  const record = ensureRecord(payload, context);
-  let idPayload = record.id;
-  if (!idPayload && record.backend && record.name) {
-    idPayload = { backend: record.backend, name: record.name };
-  }
-  if (!idPayload) {
-    throw new TypeError(`${context} must include an id`);
-  }
-  const id = normalizeVerifyingKeyId(idPayload, `${context}.id`);
-  let normalizedRecord = null;
-  if (record.record !== undefined && record.record !== null) {
-    normalizedRecord = normalizeVerifyingKeyRecord(record.record, `${context}.record`);
-  }
-  return { id, record: normalizedRecord };
-}
-
-function normalizeVerifyingKeyDetail(
-  payload,
-  context = "verifying key detail response",
-) {
-  const record = ensureRecord(payload, context);
-  const id = normalizeVerifyingKeyId(record.id, `${context}.id`);
-  return {
-    id,
-    record: normalizeVerifyingKeyRecord(record.record, `${context}.record`),
-  };
-}
-
-function normalizeVerifyingKeyId(payload, context) {
-  const record = ensureRecord(payload, context);
-  return {
-    backend: assertProductionVerifyBackendLabel(record.backend, `${context}.backend`),
-    name: normalizeVerifyingKeyName(record.name, `${context}.name`),
-  };
-}
-
-function normalizeVerifyingKeyRecord(payload, context) {
-  const record = ensureRecord(payload, context);
-  const gasSchedule = record.gas_schedule_id ?? null;
-  const metadataCid = record.metadata_uri_cid ?? null;
-  const vkBytesCid = record.vk_bytes_cid ?? null;
-  const inlinePayload =
-    record.key ?? null;
-  const activationHeight =
-    record.activation_height === undefined || record.activation_height === null
-      ? null
-      : ToriiClient._normalizeUnsignedInteger(
-          record.activation_height,
-          `${context}.activation_height`,
-          { allowZero: true },
+function loadVerifyingKeyClient() {
+  return (verifyingKeyClientPromise ??= import(VERIFYING_KEY_CLIENT_URL).then(
+      (module) => {
+        if (typeof module.createVerifyingKeyClient !== "function") {
+          throw new TypeError("invalid verifying-key module");
+        }
+        const client = module.createVerifyingKeyClient(
+          VERIFYING_KEY_LIST_OPTION_KEYS,
+          assertSupportedOptionKeys,
+          decodeVerifyingKeyDraftBase64,
+          ensureRecord,
+          irohaPrehash,
+          ToriiClient._normalizeAccountId,
+          normalizeRequiredBase64Payload,
+          normalizeSignalOption,
+          ToriiClient._normalizeUnsignedInteger,
+          rejectVerifyingKeyPrivateKeyFields,
+          requireBooleanLike,
+          requireExactBoolean,
+          requireExactNonEmptyString,
+          requireHexString,
+          requireNonEmptyString,
         );
-  const withdrawHeight =
-    record.withdraw_height === undefined || record.withdraw_height === null
-      ? null
-      : ToriiClient._normalizeUnsignedInteger(
-          record.withdraw_height,
-          `${context}.withdraw_height`,
-          { allowZero: true },
-        );
-  validateVerifyingKeyHeightRange(activationHeight, withdrawHeight, context);
-  return {
-    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
-      allowZero: false,
-    }),
-    circuit_id: requireExactNonEmptyString(
-      record.circuit_id,
-      `${context}.circuit_id`,
-    ),
-    backend: assertProductionVerifyBackendLabel(record.backend, `${context}.backend`),
-    curve:
-      record.curve === undefined || record.curve === null
-        ? null
-        : requireNonEmptyString(record.curve, `${context}.curve`),
-    public_inputs_schema_hash: requireNonEmptyString(
-      record.public_inputs_schema_hash,
-      `${context}.public_inputs_schema_hash`,
-    ),
-    commitment_hex: requireHexString(
-      record.commitment,
-      `${context}.commitment_hex`,
-    ),
-    vk_len: ToriiClient._normalizeUnsignedInteger(
-      record.vk_len,
-      `${context}.vk_len`,
-      { allowZero: false },
-    ),
-    max_proof_bytes:
-      record.max_proof_bytes === undefined || record.max_proof_bytes === null
-        ? null
-        : ToriiClient._normalizeUnsignedInteger(
-            record.max_proof_bytes,
-            `${context}.max_proof_bytes`,
-            { allowZero: false },
-          ),
-    gas_schedule_id:
-      gasSchedule === null
-        ? null
-        : requireExactNonEmptyString(gasSchedule, `${context}.gas_schedule_id`),
-    metadata_uri_cid:
-      metadataCid === null ? null : requireNonEmptyString(metadataCid, `${context}.metadata_uri_cid`),
-    vk_bytes_cid:
-      vkBytesCid === null ? null : requireNonEmptyString(vkBytesCid, `${context}.vk_bytes_cid`),
-    activation_height: activationHeight,
-    withdraw_height: withdrawHeight,
-    status: normalizeVerifyingKeyStatusValue(record.status, `${context}.status`),
-    inline_key: normalizeVerifyingKeyInline(inlinePayload, `${context}.inline_key`),
-  };
-}
-
-function normalizeVerifyingKeyInline(value, context) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  const record = ensureRecord(value, context);
-  const backend = assertProductionVerifyBackendLabel(record.backend, `${context}.backend`);
-  const bytesValue = record.bytes_b64;
-  return {
-    backend,
-    bytes_b64: normalizeRequiredBase64Payload(bytesValue, `${context}.bytes_b64`),
-  };
-}
-
-function normalizeVerifyingKeyStatusValue(value, context, { optional = false } = {}) {
-  if (value === undefined || value === null || value === "") {
-    if (optional) {
-      return undefined;
-    }
-    throw new TypeError(`${context} must be a verifying key status`);
-  }
-  const normalized = requireNonEmptyString(String(value), context).toLowerCase();
-  const canonical = VERIFYING_KEY_STATUS_ALIASES.get(normalized);
-  if (!canonical) {
-    throw new TypeError(`${context} must be one of ${[...VERIFYING_KEY_STATUS_VALUES].join(", ")}`);
-  }
-  return canonical;
+        if (
+          !Object.isFrozen(client) ||
+          Object.keys(client).join(",") !==
+            "backend,detail,draft,id,list,listQuery,name,register,signingContext,update"
+        ) {
+          throw new TypeError(
+            "invalid verifying-key setup: expected frozen helper keys",
+          );
+        }
+        return client;
+      },
+    ));
 }
 
 const PRODUCTION_VERIFY_BACKEND_LABELS_V1 = new Set([
@@ -35382,16 +33871,6 @@ const PRODUCTION_VERIFY_BACKEND_LABELS_V1 = new Set([
   "stark/fri/poseidon2-goldilocks",
   "stark/fri/sha256_goldilocks.v1",
 ]);
-const STARK_VERIFY_BACKEND_LABELS_V1 = new Set([
-  "stark/fri",
-  "stark/fri/sha256-goldilocks",
-  "stark/fri/poseidon2-goldilocks",
-  "stark/fri/sha256_goldilocks.v1",
-]);
-
-function isProductionVerifyBackendLabel(value) {
-  return typeof value === "string" && PRODUCTION_VERIFY_BACKEND_LABELS_V1.has(value);
-}
 
 function assertProductionVerifyBackendLabel(value, context) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -35409,7 +33888,7 @@ function assertProductionVerifyBackendLabel(value, context) {
       context,
     );
   }
-  if (!isProductionVerifyBackendLabel(backend)) {
+  if (!PRODUCTION_VERIFY_BACKEND_LABELS_V1.has(backend)) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
       `${context} uses unsupported production verifier backend ${backend}`,
@@ -35435,45 +33914,6 @@ function normalizeVerifyingKeySigningChainId(value, context) {
   return chainId;
 }
 
-function requireVerifyingKeySigningContext(value, context) {
-  if (value === null) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} requires immutable ToriiClient options.localSigningContext`,
-      "ToriiClient.options.localSigningContext",
-    );
-  }
-  return value;
-}
-
-function normalizeVerifyingKeyHex32(value, context) {
-  const literal = requireExactNonEmptyString(value, context);
-  const normalized = /^0x/iu.test(literal) ? literal.slice(2) : literal;
-  if (normalized.length !== 64 || !/^[0-9a-fA-F]{64}$/u.test(normalized)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must contain exactly 32 bytes`,
-      context,
-    );
-  }
-  return normalized.toLowerCase();
-}
-
-const VERIFYING_KEY_PRIVATE_KEY_FIELDS = new Set([
-  "private_key",
-  "privateKey",
-  "private_key_hex",
-  "privateKeyHex",
-  "private_key_bytes",
-  "privateKeyBytes",
-  "private_key_seed",
-  "privateKeySeed",
-  "private_key_multihash",
-  "privateKeyMultihash",
-  "private_key_algorithm",
-  "privateKeyAlgorithm",
-]);
-
 function rejectVerifyingKeyPrivateKeyFields(record, context) {
   const fields = Object.keys(record).filter((key) =>
     VERIFYING_KEY_PRIVATE_KEY_FIELDS.has(key),
@@ -35486,194 +33926,6 @@ function rejectVerifyingKeyPrivateKeyFields(record, context) {
     `${context} does not accept private-key fields (${fields.join(", ")}); sign the returned transaction draft locally`,
     `${context}.private_key`,
   );
-}
-
-function normalizeVerifyingKeyRegisterPayload(input) {
-  const record = ensureRecord(input, "registerVerifyingKey payload");
-  rejectVerifyingKeyPrivateKeyFields(record, "registerVerifyingKey");
-  const payload = {
-    authority: ToriiClient._normalizeAccountId(
-      record.authority,
-      "registerVerifyingKey.authority",
-    ),
-    backend: assertProductionVerifyBackendLabel(record.backend, "registerVerifyingKey.backend"),
-    name: normalizeVerifyingKeyName(record.name, "registerVerifyingKey.name"),
-    version: ToriiClient._normalizeUnsignedInteger(
-      record.version,
-      "registerVerifyingKey.version",
-      { allowZero: false },
-    ),
-    circuit_id: requireExactNonEmptyString(
-      record.circuit_id,
-      "registerVerifyingKey.circuitId",
-    ),
-    public_inputs_schema_hash_hex: normalizeVerifyingKeyHex32(
-      record.public_inputs_schema_hash_hex,
-      "registerVerifyingKey.publicInputsSchemaHashHex",
-    ),
-    gas_schedule_id: requireExactNonEmptyString(
-      record.gas_schedule_id,
-      "registerVerifyingKey.gasScheduleId",
-    ),
-  };
-  assignVerifyingKeyOptionalFields(record, payload, "registerVerifyingKey");
-  return payload;
-}
-
-function normalizeVerifyingKeyUpdatePayload(input) {
-  const record = ensureRecord(input, "updateVerifyingKey payload");
-  rejectVerifyingKeyPrivateKeyFields(record, "updateVerifyingKey");
-  const payload = {
-    authority: ToriiClient._normalizeAccountId(
-      record.authority,
-      "updateVerifyingKey.authority",
-    ),
-    backend: assertProductionVerifyBackendLabel(record.backend, "updateVerifyingKey.backend"),
-    name: normalizeVerifyingKeyName(record.name, "updateVerifyingKey.name"),
-    version: ToriiClient._normalizeUnsignedInteger(
-      record.version,
-      "updateVerifyingKey.version",
-      { allowZero: false },
-    ),
-    circuit_id: requireExactNonEmptyString(
-      record.circuit_id,
-      "updateVerifyingKey.circuitId",
-    ),
-    public_inputs_schema_hash_hex: normalizeVerifyingKeyHex32(
-      record.public_inputs_schema_hash_hex,
-      "updateVerifyingKey.publicInputsSchemaHashHex",
-    ),
-  };
-  const gasSchedule = record.gas_schedule_id;
-  if (gasSchedule !== undefined && gasSchedule !== null) {
-    payload.gas_schedule_id = requireExactNonEmptyString(
-      gasSchedule,
-      "updateVerifyingKey.gasScheduleId",
-    );
-  }
-  assignVerifyingKeyOptionalFields(record, payload, "updateVerifyingKey");
-  return payload;
-}
-
-function normalizeVerifyingKeyTransactionDraft(
-  input,
-  context,
-  { chainId, operation, request },
-) {
-  const record = ensureRecord(input, context);
-  assertSupportedOptionKeys(
-    record,
-    new Set([
-      "submitted",
-      "transaction_payload_b64",
-      "signing_message_b64",
-    ]),
-    context,
-  );
-  if (requireExactBoolean(record.submitted, `${context}.submitted`) !== false) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.submitted must be false`,
-      `${context}.submitted`,
-    );
-  }
-  const transactionPayloadB64 = record.transaction_payload_b64;
-  const transactionPayload = decodeVerifyingKeyDraftBase64(
-    transactionPayloadB64,
-    `${context}.transaction_payload_b64`,
-    {
-      maxBytes: VERIFYING_KEY_TRANSACTION_PAYLOAD_MAX_BYTES,
-      limitLabel: "transaction payload",
-    },
-  );
-  const signingMessageB64 = record.signing_message_b64;
-  const signingMessage = decodeVerifyingKeyDraftBase64(
-    signingMessageB64,
-    `${context}.signing_message_b64`,
-    { exactBytes: 32 },
-  );
-  const expectedSigningMessage = irohaPrehash(transactionPayload);
-  if (!timingSafeEqual(signingMessage, expectedSigningMessage)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.signing_message_b64 must equal the canonical Iroha HashOf(transaction_payload_b64)`,
-      `${context}.signing_message_b64`,
-    );
-  }
-  let decodedInstruction;
-  try {
-    decodedInstruction = decodeCanonicalVerifyingKeyTransactionPayload(
-      transactionPayload,
-      {
-        expectedChainId: chainId,
-        expectedAuthority: request.authority,
-        operation,
-      },
-    );
-  } catch (error) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.transaction_payload_b64 is not the requested canonical verifying-key transaction: ${error.message}`,
-      `${context}.transaction_payload_b64`,
-    );
-  }
-  const expectedRecord = expectedVerifyingKeyRecord(request);
-  if (
-    decodedInstruction.id?.backend !== request.backend ||
-    decodedInstruction.id?.name !== request.name ||
-    !isDeepStrictEqual(decodedInstruction.record, expectedRecord)
-  ) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.transaction_payload_b64 does not contain the exact requested verifying-key registry record`,
-      `${context}.transaction_payload_b64`,
-    );
-  }
-  return {
-    submitted: false,
-    transaction_payload_b64: transactionPayloadB64,
-    signing_message_b64: signingMessageB64,
-  };
-}
-
-function expectedVerifyingKeyRecord(request) {
-  const keyBytes =
-    request.vk_bytes === undefined
-      ? null
-      : Buffer.from(request.vk_bytes, "base64");
-  const commitmentHex =
-    keyBytes === null
-      ? request.commitment_hex
-      : computeVerifyingKeyCommitmentHex(request.backend, request.vk_bytes);
-  return {
-    version: request.version,
-    circuit_id: request.circuit_id,
-    owner_manifest_id: null,
-    namespace: "core",
-    backend: STARK_VERIFY_BACKEND_LABELS_V1.has(request.backend)
-      ? "stark"
-      : "halo2-ipa-pasta",
-    curve: request.curve ?? "unknown",
-    public_inputs_schema_hash: Array.from(
-      Buffer.from(request.public_inputs_schema_hash_hex, "hex"),
-    ),
-    commitment: Array.from(Buffer.from(commitmentHex, "hex")),
-    vk_len: keyBytes === null ? request.vk_len : keyBytes.length,
-    max_proof_bytes: request.max_proof_bytes ?? 0,
-    gas_schedule_id: request.gas_schedule_id ?? null,
-    metadata_uri_cid: request.metadata_uri_cid ?? null,
-    vk_bytes_cid: request.vk_bytes_cid ?? null,
-    activation_height: request.activation_height ?? null,
-    withdraw_height: request.withdraw_height ?? null,
-    key:
-      keyBytes === null
-        ? null
-        : {
-            backend: request.backend,
-            bytes: Array.from(keyBytes),
-          },
-    status: request.status ?? "Active",
-  };
 }
 
 function decodeVerifyingKeyDraftBase64(
@@ -35739,188 +33991,6 @@ function decodeVerifyingKeyDraftBase64(
     );
   }
   return decoded;
-}
-
-function assignVerifyingKeyOptionalFields(record, payload, context) {
-  const curveValue = record.curve;
-  if (curveValue !== undefined && curveValue !== null) {
-    payload.curve = requireNonEmptyString(curveValue, `${context}.curve`);
-  }
-  const maxProofBytes = record.max_proof_bytes;
-  if (maxProofBytes !== undefined && maxProofBytes !== null) {
-    payload.max_proof_bytes = ToriiClient._normalizeUnsignedInteger(
-      maxProofBytes,
-      `${context}.maxProofBytes`,
-      { allowZero: true },
-    );
-  }
-  const metadataCid = record.metadata_uri_cid;
-  if (metadataCid !== undefined && metadataCid !== null) {
-    payload.metadata_uri_cid = requireNonEmptyString(
-      metadataCid,
-      `${context}.metadataUriCid`,
-    );
-  }
-  const vkBytesCid = record.vk_bytes_cid;
-  if (vkBytesCid !== undefined && vkBytesCid !== null) {
-    payload.vk_bytes_cid = requireNonEmptyString(
-      vkBytesCid,
-      `${context}.vkBytesCid`,
-    );
-  }
-  const activationHeight = record.activation_height;
-  if (activationHeight !== undefined && activationHeight !== null) {
-    payload.activation_height = ToriiClient._normalizeUnsignedInteger(
-      activationHeight,
-      `${context}.activationHeight`,
-      { allowZero: true },
-    );
-  }
-  const withdrawHeight = record.withdraw_height;
-  if (withdrawHeight !== undefined && withdrawHeight !== null) {
-    payload.withdraw_height = ToriiClient._normalizeUnsignedInteger(
-      withdrawHeight,
-      `${context}.withdrawHeight`,
-      { allowZero: true },
-    );
-  }
-  validateVerifyingKeyHeightRange(
-    payload.activation_height,
-    payload.withdraw_height,
-    context,
-  );
-  const commitmentValue = record.commitment_hex;
-  if (commitmentValue !== undefined && commitmentValue !== null) {
-    payload.commitment_hex = normalizeVerifyingKeyHex32(
-      commitmentValue,
-      `${context}.commitmentHex`,
-    );
-  }
-  const statusValue = normalizeVerifyingKeyStatusValue(
-    record.status,
-    `${context}.status`,
-    { optional: true },
-  );
-  if (statusValue) {
-    payload.status = statusValue;
-  }
-  const bytesValue =
-    record.vk_bytes ??
-    record.verifyingKeyBytes ??
-    record.bytes ??
-    record.inlineKeyBytes;
-  const lenValue = record.vk_len;
-  if (bytesValue !== undefined && bytesValue !== null) {
-    const { base64, length } = normalizeVerifyingKeyBytesValue(
-      bytesValue,
-      `${context}.vk_bytes`,
-    );
-    payload.vk_bytes = base64;
-    if (lenValue !== undefined && lenValue !== null) {
-      const normalizedLen = ToriiClient._normalizeUnsignedInteger(
-        lenValue,
-        `${context}.vkLen`,
-        { allowZero: false },
-      );
-      if (normalizedLen !== length) {
-        throw createValidationError(
-          ValidationErrorCode.INVALID_OBJECT,
-          `${context}.vk_len must match vk_bytes length (${length})`,
-          `${context}.vkLen`,
-        );
-      }
-      payload.vk_len = normalizedLen;
-    } else {
-      payload.vk_len = length;
-    }
-  } else if (lenValue !== undefined && lenValue !== null) {
-    payload.vk_len = ToriiClient._normalizeUnsignedInteger(
-      lenValue,
-      `${context}.vkLen`,
-      { allowZero: false },
-    );
-  }
-  if (payload.vk_bytes === undefined) {
-    if (payload.commitment_hex === undefined) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context}.commitment_hex is required when vk_bytes is omitted`,
-        `${context}.commitmentHex`,
-      );
-    }
-    if (payload.vk_len === undefined) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context}.vk_len is required when vk_bytes is omitted`,
-        `${context}.vkLen`,
-      );
-    }
-  }
-  if (payload.vk_bytes !== undefined && payload.commitment_hex !== undefined) {
-    const expectedCommitmentHex = computeVerifyingKeyCommitmentHex(
-      payload.backend,
-      payload.vk_bytes,
-    );
-    if (payload.commitment_hex !== expectedCommitmentHex) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context}.commitment_hex must match domain-separated SHA-256 of backend and vk_bytes`,
-        `${context}.commitmentHex`,
-      );
-    }
-  }
-}
-
-function normalizeVerifyingKeyName(value, context) {
-  const name = requireExactNonEmptyString(value, context);
-  if (name.includes(":")) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must not contain ':'`,
-      context,
-    );
-  }
-  return name;
-}
-
-function validateVerifyingKeyHeightRange(activationHeight, withdrawHeight, context) {
-  if (
-    activationHeight !== undefined &&
-    activationHeight !== null &&
-    withdrawHeight !== undefined &&
-    withdrawHeight !== null &&
-    withdrawHeight < activationHeight
-  ) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.withdraw_height must be >= activation_height`,
-      `${context}.withdrawHeight`,
-    );
-  }
-}
-
-function normalizeVerifyingKeyBytesValue(value, context) {
-  const base64 = normalizeRequiredBase64Payload(value, context);
-  const buffer = Buffer.from(base64, "base64");
-  return { base64, length: buffer.length };
-}
-
-function computeVerifyingKeyCommitmentHex(backend, base64Bytes) {
-  const backendBytes = Buffer.from(backend, "utf8");
-  const vkBytes = Buffer.from(base64Bytes, "base64");
-  return createHash("sha256")
-    .update(Buffer.from("iroha:zk:v1:vk", "utf8"))
-    .update(u64BeBuffer(backendBytes.length))
-    .update(backendBytes)
-    .update(u64BeBuffer(vkBytes.length))
-    .update(vkBytes)
-    .digest("hex");
-}
-
-function u64BeBuffer(value) {
-  const buffer = Buffer.alloc(8);
-  buffer.writeBigUInt64BE(BigInt(value));
-  return buffer;
 }
 
 function normalizeProverReportList(payload, filters, context) {

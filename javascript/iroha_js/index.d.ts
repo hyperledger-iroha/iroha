@@ -2,10 +2,14 @@
 
 import type { BrowserFeePayment } from "./transaction-codec.js";
 import type { RepoAgreementLifecycleFields } from "./repo-agreement.js";
+import type { ToriiBlockMerkleCommitment, ToriiBlockMerkleProof, ToriiBlockProofs, ToriiBlockProofTrustedAnchor, ToriiBlockProofVerification } from "./src/blockProofTypes.js";
+import type { ToriiBrowserExplorerAccountsOptions, ToriiBrowserExplorerAssetDefinition, ToriiBrowserExplorerAssetDefinitionsOptions, ToriiBrowserExplorerAssetsOptions, ToriiBrowserExplorerCursorPage, ToriiBrowserExplorerDomainsOptions, ToriiBrowserExplorerOwnedDomainOptions } from "./src/toriiBrowserExplorerTypes.js";
 export * from "./kotodama-compiler.js";
 export * from "./transaction-codec.js";
 export * from "./smart-contract-deployment.js";
 export * from "./bootle-lantern-issuance.js";
+export * from "./src/blockProofTypes.js";
+export * from "./src/toriiBrowserExplorerTypes.js";
 
 export type JsonValue =
   | null
@@ -70,9 +74,6 @@ export interface OfflineStatus {
   readonly blockers: readonly [];
 }
 
-/** @deprecated Use OfflineStatus. Offline capability is asset-neutral. */
-export type KagemushaReadinessV4 = OfflineStatus;
-
 export type KagemushaOperationKind = Readonly<{
   kind: "top_up" | "redeem";
   value: null;
@@ -121,7 +122,6 @@ export type KagemushaOperationStatus =
       }>;
     }>;
 
-export function normalizeKagemushaAssetSelector(value: string, context?: string): string;
 export function normalizeKagemushaOperationId(value: string, context?: string): string;
 export function normalizeKagemushaTopUpRequestV4(
   value: KagemushaNoritoRequestV4,
@@ -134,11 +134,6 @@ export function normalizeKagemushaRedeemRequestV4(
 export function normalizeOfflineStatus(
   payload: Record<string, unknown>,
 ): OfflineStatus;
-/** @deprecated Use normalizeOfflineStatus(payload). */
-export function normalizeKagemushaReadinessV4(
-  payload: Record<string, unknown>,
-  requestedAssetSelector?: string,
-): KagemushaReadinessV4;
 export function normalizeKagemushaOperationReference(
   payload: Record<string, unknown>,
   expected: {
@@ -594,12 +589,13 @@ export interface MultisigContractCallApprovePayload {
 export interface MultisigContractCallResponse {
   ok: boolean;
   resolved_multisig_account_id: string;
-  submitted: boolean | null;
+  submitted: boolean;
   proposal_id: string | null;
   instructions_hash: string | null;
   tx_hash_hex: string | null;
   executed_tx_hash_hex: string | null;
   creation_time_ms: number | null;
+  transaction_payload_b64: string | null;
   signing_message_b64: string | null;
 }
 
@@ -3341,30 +3337,23 @@ export type SorafsValidationOutcome =
 export interface SorafsOrderbookValidationOptions {
   label?: string;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
 }
 
 export interface SorafsAppealFinanceValidationOptions {
   label?: string;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
 }
 
 export interface SorafsPdpPayloadValidationOptions {
   label?: string;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
 }
 
 export interface SorafsPdpPairValidationOptions {
   commitmentLabel?: string;
-  commitment_label?: string;
   challengeLabel?: string;
-  challenge_label?: string;
   proofLabel?: string;
-  proof_label?: string;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
 }
 
 export type SorafsReferenceBytesInput =
@@ -3373,57 +3362,36 @@ export type SorafsReferenceBytesInput =
   | Buffer;
 
 export interface SorafsGovernanceDagBlockInput {
-  payload?: SorafsReferenceBytesInput;
-  bytes?: SorafsReferenceBytesInput;
-  noritoBytes?: SorafsReferenceBytesInput;
-  norito_bytes?: SorafsReferenceBytesInput;
+  bytes: SorafsReferenceBytesInput;
   label?: string;
 }
 
 export interface SorafsFixtureBundlePayloadInput {
   kind: SorafsFixtureBundlePayloadKind;
-  bytes?: SorafsReferenceBytesInput;
-  payload?: SorafsReferenceBytesInput;
-  noritoBytes?: SorafsReferenceBytesInput;
-  norito_bytes?: SorafsReferenceBytesInput;
+  bytes: SorafsReferenceBytesInput;
   label?: string;
 }
 
 export interface SorafsFixtureBundleValidationOptions {
   nowUnix?: number | bigint;
-  now_unix?: number | bigint;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
 }
 
-export type SorafsGovernanceLogNodeValidationOptions = {
+export interface SorafsGovernanceLogNodeValidationOptions {
   label?: string;
+  expectedNodeCid: SorafsReferenceBytesInput;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
-} & (
-  | {
-      expectedNodeCid: SorafsReferenceBytesInput;
-      expected_node_cid?: never;
-    }
-  | {
-      expectedNodeCid?: never;
-      expected_node_cid: SorafsReferenceBytesInput;
-    }
-);
+}
 
 export interface SorafsGovernanceDagBlockValidationOptions {
   label?: string;
   expectedBlockCid?: SorafsReferenceBytesInput;
-  expected_block_cid?: SorafsReferenceBytesInput;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
 }
 
 export interface SorafsGovernanceDagHeadValidationOptions {
   headLabel?: string;
-  head_label?: string;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
 }
 
 export function decodeReplicationOrder(
@@ -3956,8 +3924,8 @@ type NoritoRuntimeNamespaceExport =
 
 type CryptoRuntimeNamespaceExport =
     "CRYPTO_ALGORITHMS"
-  | "PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1"
   | "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES"
+  | "PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1"
   | "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION"
   | "SM2_DEFAULT_DISTINGUISHED_ID"
   | "SM2_PRIVATE_KEY_LENGTH"
@@ -4783,6 +4751,8 @@ export interface ToriiNativeAmxLeg {
   participant_settlement_hash: string;
   prepare_qc: Readonly<ToriiNativeAmxAttestationQc>;
   commit_qc: Readonly<ToriiNativeAmxAttestationQc>;
+  /** Full block validation must establish the mixed-role coordinator anchor. */
+  readonly requires_mixed_role_anchor_validation: boolean;
 }
 
 export interface ToriiNativeAmxReceipt {
@@ -5785,6 +5755,8 @@ export interface ToriiSumeragiV2ExecutionCommitment {
   native_amx_application_manifest_version: number;
   native_amx_application_manifest_root: string;
   native_amx_application_manifest_count: number;
+  merge_carrier: ToriiSumeragiV2MergeCarrierCommitment | null;
+  executed_block_wire_len: ToriiU64;
   executed_block_wire_hash: string;
 }
 
@@ -6225,6 +6197,7 @@ export type ToriiSumeragiAutonomousLaneExecutionStage =
   | "conflict";
 
 export type ToriiSumeragiAutonomousLaneExecutionStuckReason =
+  | "awaiting_executable_payload"
   | "awaiting_payload_availability"
   | "awaiting_lane_certification"
   | "certified_bundle_unavailable"
@@ -6241,9 +6214,12 @@ export interface ToriiSumeragiAutonomousLaneExecution {
   lane_block_height: ToriiU64;
   lane_block_view: ToriiU64;
   proposal_height: ToriiU64;
-  proposal_view: ToriiU64;
-  proposal_hash: string;
-  descriptor_hash: string;
+  proposal_view: ToriiU64 | null;
+  reservation_owner_hash: string;
+  proposal_identity_hash: string;
+  reservation_group_hash: string;
+  proposal_hash: string | null;
+  descriptor_hash: string | null;
   executable_payload_hash: string | null;
   source_bundle_hash: string | null;
   merge_entry_hash: string | null;
@@ -8151,8 +8127,7 @@ export interface ContractCallResponse {
   entrypoint_hash_hex: string | null;
   pipeline_status?: ToriiPipelineTransactionStatus | null;
   entrypoint: string | null;
-  transaction_scaffold_b64: string | null;
-  signed_transaction_b64: string | null;
+  transaction_payload_b64: string | null;
   signing_message_b64: string | null;
   operation_receipt: ContractOperationReceipt;
 }
@@ -9184,7 +9159,7 @@ export interface SorafsOrderbookEventsResponse {
 }
 
 export interface SorafsReputationWitnessHeaders
-  extends Record<string, string> {
+  extends Record<string, string | undefined> {
   /**
    * Exact canonical Norito witness. Reputation requests carrying a static
    * witness are single-attempt and are never transparently retried.
@@ -9987,216 +9962,11 @@ export interface ToriiBrowserRequestOptions {
   successStatuses?: ReadonlyArray<number>;
 }
 
-export interface ToriiBrowserExplorerCursorOptions {
-  cursor?: string;
-  limit?: NumericLike;
-  signal?: AbortSignal;
-}
-
-export interface ToriiBrowserExplorerAccountsOptions
-  extends ToriiBrowserExplorerCursorOptions {
-  domain?: string;
-  withAsset?: string;
-  addressFormat?: string;
-}
-
-export interface ToriiBrowserExplorerDomainsOptions
-  extends ToriiBrowserExplorerCursorOptions {
-  ownedBy?: string;
-}
-
-export interface ToriiBrowserExplorerAssetDefinitionsOptions
-  extends ToriiBrowserExplorerCursorOptions {
-  owningDomain?: string;
-  owning_domain?: string;
-  ownedBy?: string;
-}
-
-export interface ToriiBrowserExplorerAssetsOptions
-  extends ToriiBrowserExplorerCursorOptions {
-  ownedBy?: string;
-  definition?: string;
-  assetId?: string;
-}
-
-export interface ToriiBrowserExplorerOwnedDomainOptions
-  extends ToriiBrowserExplorerCursorOptions {
-  ownedBy?: string;
-  domain?: string;
-}
-
-export interface ToriiBrowserExplorerCursorMeta {
-  limit: number;
-  next_cursor: string | null;
-  has_more: boolean;
-}
-
-export interface ToriiBrowserExplorerCursorPage<T = unknown> {
-  pagination: ToriiBrowserExplorerCursorMeta;
-  items: ReadonlyArray<T>;
-}
-
-export interface ToriiBrowserExplorerAssetDefinition {
-  readonly id: string;
-  /** Null denotes an intentionally unowned global definition. */
-  readonly owning_domain: string | null;
-  readonly mintable: string;
-  readonly logo: string | null;
-  readonly metadata: Readonly<Record<string, unknown>>;
-  readonly owned_by: string;
-  readonly assets: number;
-  readonly total_quantity: string;
-  readonly locked_quantity: string | null;
-  readonly circulating_quantity: string | null;
-}
-
 export interface ToriiLedgerHeadersOptions {
   from?: number | string | bigint;
   limit?: number | string | bigint;
   signal?: AbortSignal;
 }
-
-export interface ToriiBlockMerkleProof {
-  readonly leaf_index: number;
-  readonly audit_path: ReadonlyArray<string | null>;
-}
-
-export interface ToriiBlockReceiptProof {
-  readonly leaf: string;
-  readonly proof: ToriiBlockMerkleProof;
-}
-
-export interface ToriiBlockMerkleCommitment {
-  readonly root: string;
-  readonly leaf_count: string;
-}
-
-export interface ToriiBlockProofTransferSmtWitness {
-  readonly root_before: string;
-  readonly root_after: string;
-  readonly path_bits: ReadonlyArray<number>;
-  readonly siblings: ReadonlyArray<string>;
-}
-
-export interface ToriiBlockProofTransferDeltaTranscript {
-  readonly from_account: string;
-  readonly to_account: string;
-  readonly asset_definition: string;
-  readonly amount: string;
-  readonly from_balance_before: string;
-  readonly from_balance_after: string;
-  readonly to_balance_before: string;
-  readonly to_balance_after: string;
-  readonly from_smt_witness: ToriiBlockProofTransferSmtWitness;
-  readonly to_smt_witness: ToriiBlockProofTransferSmtWitness;
-}
-
-export interface ToriiBlockProofTransferTranscript {
-  readonly batch_hash: string;
-  readonly deltas: ReadonlyArray<ToriiBlockProofTransferDeltaTranscript>;
-  readonly authority_digest: string;
-  readonly poseidon_preimage_digest: string | null;
-}
-
-export interface ToriiBlockProofs {
-  readonly block_height: string;
-  readonly block_hash: string;
-  readonly executed_block_wire_hash: string;
-  readonly entry_hash: string;
-  readonly entry_commitment: ToriiBlockMerkleCommitment;
-  readonly entry_proof: ToriiBlockReceiptProof;
-  readonly result_commitment: ToriiBlockMerkleCommitment;
-  readonly result_proof: ToriiBlockReceiptProof;
-  readonly fastpq_transcripts: Readonly<
-    Record<string, ReadonlyArray<ToriiBlockProofTransferTranscript>>
-  >;
-}
-
-/**
- * Structural anchor for local BlockProofs consistency checks.
- *
- * The SDK does not authenticate this value or block finality. It must come
- * from an independently authenticated block and must never be copied from the
- * ToriiBlockProofs response being checked.
- */
-export interface ToriiBlockProofTrustedAnchor {
-  readonly block_height: string;
-  readonly block_hash: string;
-  readonly executed_block_wire_hash: string;
-  readonly entry_hash: string;
-  readonly entry_index: number;
-  readonly entry_commitment: ToriiBlockMerkleCommitment;
-  readonly result_commitment: ToriiBlockMerkleCommitment;
-  readonly fastpq_transcripts: ToriiBlockProofs["fastpq_transcripts"];
-}
-
-export interface ToriiBlockProofVerification {
-  /** Consistency with the supplied anchor; this is not a finality verdict. */
-  readonly valid: boolean;
-  readonly anchor_matches: boolean;
-  readonly entry_hash_matches: boolean;
-  readonly entry_proof_valid: boolean;
-  readonly result_pair_consistent: boolean;
-  readonly result_proof_valid: boolean;
-}
-
-/** First-release native authenticated BlockProofs verifier version. */
-export const AUTHENTICATED_BLOCK_PROOFS_VERSION_V1: 1;
-/** Maximum exact executed SignedBlockWire bytes accepted by the native verifier. */
-export const AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1: 33554432;
-/** Maximum canonical Norito bytes accepted for one BridgeFinalityProof. */
-export const AUTHENTICATED_BLOCK_PROOFS_MAX_FINALITY_PROOF_BYTES_V1: 9437184;
-/** Maximum canonical Norito bytes accepted for one BlockProofs response. */
-export const AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1: 16777216;
-
-export interface AuthenticatedBlockProofInputV1 {
-  readonly version: 1;
-  /** Application-pinned canonical ChainId; this must not be sourced from the response. */
-  readonly chainId: string;
-  /** Application-pinned marked 32-byte HeightContextId. */
-  readonly trustedContextId: ArrayBufferView | ArrayBuffer | Buffer;
-  /** Application-selected marked 32-byte transaction entrypoint hash. */
-  readonly expectedEntryHash: ArrayBufferView | ArrayBuffer | Buffer;
-  /**
-   * Optional last verified BridgeFinalityProof. When present, the target proof
-   * must be its immediate cryptographic successor.
-   */
-  readonly previousFinalityProofNorito?:
-    | ArrayBufferView
-    | ArrayBuffer
-    | Buffer
-    | null;
-  /** Canonical Norito BridgeFinalityProof for the target block. */
-  readonly finalityProofNorito: ArrayBufferView | ArrayBuffer | Buffer;
-  /** Exact canonical executed SignedBlockWire for the target block. */
-  readonly executedBlockWire: ArrayBufferView | ArrayBuffer | Buffer;
-  /** Canonical Norito BlockProofs response returned by Torii. */
-  readonly blockProofsNorito: ArrayBufferView | ArrayBuffer | Buffer;
-}
-
-export interface AuthenticatedBlockProofVerdictV1 {
-  /** Finality is authenticated whenever a verdict resolves; this additionally covers BlockProofs. */
-  readonly valid: boolean;
-  readonly code: "valid" | "block_proofs_mismatch";
-  readonly blockHeight: string;
-  readonly blockHashHex: string;
-  readonly executedBlockWireHashHex: string;
-  readonly entryHashHex: string;
-  /** Verified context to retain alongside the accepted finality proof for successor state. */
-  readonly heightContextIdHex: string;
-}
-
-/**
- * Verify Torii BlockProofs through the native Rust Sumeragi-v2 finality path.
- *
- * The promise rejects on malformed, non-canonical, wrong-chain, wrong-context,
- * stale/skipped, or cryptographically invalid finality material. A valid
- * finality chain carrying inconsistent Merkle/result/transcript proofs resolves
- * to a verdict whose `valid` field is false.
- */
-export function verifyAuthenticatedBlockProofsV1(
-  input: Readonly<AuthenticatedBlockProofInputV1>,
-): Promise<Readonly<AuthenticatedBlockProofVerdictV1>>;
 
 export interface ToriiBrowserTransactionStatusOptions
   extends ToriiBrowserRequestOptions {
@@ -10339,11 +10109,6 @@ export declare class ToriiBrowserClient {
   getOfflineCapability(
     options?: { signal?: AbortSignal },
   ): Promise<OfflineStatus>;
-  /** @deprecated Use getOfflineCapability(). */
-  getKagemushaReadinessV4(
-    assetDefinitionId: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<KagemushaReadinessV4>;
   submitKagemushaTopUpV4(
     request: KagemushaNoritoRequestV4,
     options?: { signal?: AbortSignal },
@@ -10681,11 +10446,6 @@ export declare class ToriiClient {
   getOfflineCapability(
     options?: { signal?: AbortSignal },
   ): Promise<OfflineStatus>;
-  /** @deprecated Use getOfflineCapability(). */
-  getKagemushaReadinessV4(
-    assetDefinitionId: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<KagemushaReadinessV4>;
   submitKagemushaTopUpV4(
     request: KagemushaNoritoRequestV4,
     options?: { signal?: AbortSignal },
@@ -12110,7 +11870,11 @@ export const PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1: Readonly<{
   INVALID_CATALOG: 8;
 }>;
 export function isPrivacyNativeAvailable(): boolean;
-/** Return this binary's local compiled-profile catalog; use Torii for live activation/readiness. */
+/**
+ * Return this native binary's local compiled-profile catalog. This is build
+ * metadata only; network readiness requires `getPrivacyCapabilitiesV1` and a
+ * fresh committed Torii response.
+ */
 export function privacyCompiledProfileCatalogV1(): Buffer;
 
 export interface Sm2Fixture {
@@ -12148,13 +11912,18 @@ export function encodeQuantityNoritoValue(
   value: QuantityInput,
   context?: string,
 ): Uint8Array;
+/** An ordinary owned byte array; Node `Buffer` compatibility aliases are excluded. */
+export interface CancelAssetLockV1Archive extends Uint8Array<ArrayBuffer> {
+  readonly write?: never;
+}
+
 /** Encode the exact schema-bound bare `CancelAssetLock` V1 archive. */
 export function encodeCancelAssetLockV1(
   value: Readonly<CancelAssetLockV1>,
-): Buffer;
+): CancelAssetLockV1Archive;
 /** Decode an exact schema-bound bare `CancelAssetLock` V1 archive. */
 export function decodeCancelAssetLockV1(
-  bytes: ArrayBufferView | ArrayBuffer | Buffer,
+  bytes: CancelAssetLockV1Archive,
 ): CancelAssetLockV1;
 export function noritoEncodeInstruction(instruction: object | string): Buffer;
 export function noritoDecodeBlockProofs(
@@ -13960,5 +13729,4 @@ export const NumericV1: {
 
 export * from "./nexus-app.js";
 export * from "./transaction-codec.js";
-export * from "./ivm-artifact-admission-wasm.js";
 export * from "./smart-contract-deployment.js";

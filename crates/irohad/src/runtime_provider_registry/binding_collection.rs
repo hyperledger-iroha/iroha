@@ -107,6 +107,46 @@ fn append_binding(
     Ok(())
 }
 
+pub(super) fn governance_request_ingress_binding_from_service(
+    service: &iroha_config::parameters::actual::SorafsGovernanceDagService,
+    scope: sorafs_node::GovernanceDagAuthenticationScope,
+) -> Result<sorafs_node::GovernanceDagRequestIngressBindingV1, IrohaRuntimeProviderRegistryErrorV1>
+{
+    let (slot, endpoint, public_key, max_body_bytes) = match scope {
+        sorafs_node::GovernanceDagAuthenticationScope::Ipfs => {
+            let slot = IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator;
+            (
+                slot,
+                service.ipfs_api_url.as_deref(),
+                service.ipfs_request_auth_public_key,
+                sorafs_node::governance_service::authenticated_ipfs_wire_body_max_bytes(
+                    service.max_request_bytes.0,
+                )
+                .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?,
+            )
+        }
+        sorafs_node::GovernanceDagAuthenticationScope::SignedHead => (
+            IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
+            service.signed_head_url.as_deref(),
+            service.head_request_auth_public_key,
+            service.max_request_bytes.0,
+        ),
+    };
+    let endpoint = endpoint.ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
+    let endpoint_binding =
+        sorafs_node::governance_dag_request_ingress_endpoint_binding_v1(scope, endpoint)
+            .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
+    sorafs_node::GovernanceDagRequestIngressBindingV1::try_new(
+        scope,
+        endpoint_binding,
+        public_key.ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?,
+        max_body_bytes,
+        service.request_auth_max_envelope_lifetime_secs,
+        service.request_auth_max_future_skew_secs,
+    )
+    .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))
+}
+
 fn collect_storage_security_bindings(
     config: &Config,
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
@@ -202,35 +242,11 @@ fn collect_storage_security_bindings(
     }
     let governance_service = &storage.governance_dag_service;
     if governance_service.enabled {
-        let ipfs_endpoint_binding =
-            sorafs_node::governance_dag_request_ingress_endpoint_binding_v1(
-                sorafs_node::GovernanceDagAuthenticationScope::Ipfs,
-                governance_service.ipfs_api_url.as_deref().ok_or(
-                    IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                        IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
-                    ),
-                )?,
-            )
-            .map_err(|_| {
-                IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                    IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
-                )
-            })?;
         let ipfs_slot = IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator;
-        let ipfs_ingress_binding = sorafs_node::GovernanceDagRequestIngressBindingV1::try_new(
+        let ipfs_ingress_binding = governance_request_ingress_binding_from_service(
+            governance_service,
             sorafs_node::GovernanceDagAuthenticationScope::Ipfs,
-            ipfs_endpoint_binding,
-            governance_service.ipfs_request_auth_public_key.ok_or(
-                IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(ipfs_slot),
-            )?,
-            sorafs_node::governance_service::authenticated_ipfs_wire_body_max_bytes(
-                governance_service.max_request_bytes.0,
-            )
-            .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(ipfs_slot))?,
-            governance_service.request_auth_max_envelope_lifetime_secs,
-            governance_service.request_auth_max_future_skew_secs,
-        )
-        .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(ipfs_slot))?;
+        )?;
         append_required_governance_request_auth_binding(
             bindings,
             ipfs_slot,
@@ -239,40 +255,47 @@ fn collect_storage_security_bindings(
             governance_service.ipfs_authenticator_policy_digest,
             Some(ipfs_ingress_binding),
         )?;
-        let head_endpoint_binding =
-            sorafs_node::governance_dag_request_ingress_endpoint_binding_v1(
-                sorafs_node::GovernanceDagAuthenticationScope::SignedHead,
-                governance_service.signed_head_url.as_deref().ok_or(
-                    IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                        IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
-                    ),
-                )?,
-            )
-            .map_err(|_| {
-                IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+        match governance_service.head_mode.as_str() {
+            "signed_http"
+                if governance_service.ipns_name.is_none()
+                    && governance_service.ipns_key_name.is_none() =>
+            {
+                let head_slot = IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator;
+                let head_ingress_binding = governance_request_ingress_binding_from_service(
+                    governance_service,
+                    sorafs_node::GovernanceDagAuthenticationScope::SignedHead,
+                )?;
+                append_required_governance_request_auth_binding(
+                    bindings,
+                    head_slot,
+                    governance_service.head_authenticator_handle.as_deref(),
+                    governance_service.head_authenticator_revision,
+                    governance_service.head_authenticator_policy_digest,
+                    Some(head_ingress_binding),
+                )?;
+            }
+            "ipns"
+                if governance_service.signed_head_url.is_none()
+                    && governance_service
+                        .ipns_name
+                        .as_deref()
+                        .is_some_and(|name| !name.is_empty())
+                    && governance_service
+                        .ipns_key_name
+                        .as_deref()
+                        .is_some_and(|name| !name.is_empty())
+                    && governance_service.head_authenticator_handle.is_none()
+                    && governance_service.head_authenticator_revision.is_none()
+                    && governance_service
+                        .head_authenticator_policy_digest
+                        .is_none()
+                    && governance_service.head_request_auth_public_key.is_none() => {}
+            _ => {
+                return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
                     IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
-                )
-            })?;
-        let head_slot = IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator;
-        let head_ingress_binding = sorafs_node::GovernanceDagRequestIngressBindingV1::try_new(
-            sorafs_node::GovernanceDagAuthenticationScope::SignedHead,
-            head_endpoint_binding,
-            governance_service.head_request_auth_public_key.ok_or(
-                IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(head_slot),
-            )?,
-            governance_service.max_request_bytes.0,
-            governance_service.request_auth_max_envelope_lifetime_secs,
-            governance_service.request_auth_max_future_skew_secs,
-        )
-        .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(head_slot))?;
-        append_required_governance_request_auth_binding(
-            bindings,
-            head_slot,
-            governance_service.head_authenticator_handle.as_deref(),
-            governance_service.head_authenticator_revision,
-            governance_service.head_authenticator_policy_digest,
-            Some(head_ingress_binding),
-        )?;
+                ));
+            }
+        }
     } else {
         if governance_service.ipfs_authenticator_handle.is_some()
             || governance_service.ipfs_authenticator_revision.is_some()
@@ -316,14 +339,68 @@ fn collect_storage_security_bindings(
     match (
         storage.stream_tokens.signer_handle.as_deref(),
         storage.stream_tokens.signer_public_key,
+        storage.stream_tokens.signer_revision,
+        storage.stream_tokens.signer_policy_digest,
     ) {
-        (Some(handle), Some(public_key)) => bindings.push(
-            IrohaRuntimeProviderBindingV1::try_new_stream_token_signer(handle, public_key)?,
-        ),
-        (None, None) => {}
+        (Some(handle), Some(public_key), Some(revision), Some(policy_digest))
+            if storage.stream_tokens.enabled =>
+        {
+            bindings.push(IrohaRuntimeProviderBindingV1::try_new_stream_token_signer(
+                handle,
+                public_key,
+                revision,
+                policy_digest,
+            )?);
+        }
+        (None, None, None, None) if !storage.stream_tokens.enabled => {}
         _ => {
             return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
                 IrohaRuntimeProviderSlotV1::StreamTokenSigner,
+            ));
+        }
+    }
+    match (
+        storage.stream_tokens.admission_provider_handle.as_deref(),
+        storage.stream_tokens.admission_provider_revision,
+        storage.stream_tokens.admission_provider_policy_digest,
+    ) {
+        (Some(handle), Some(revision), Some(policy_digest)) if storage.stream_tokens.enabled => {
+            let compliance = config.torii.sorafs_gateway.compliance.as_ref().ok_or(
+                IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                    IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission,
+                ),
+            )?;
+            let gateway_id =
+                iroha_data_model::sorafs::reputation::derive_stream_token_gateway_id_v1(
+                    &config.common.chain,
+                    &compliance.gateway_id,
+                )
+                .map_err(|_| {
+                    IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                        IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission,
+                    )
+                })?;
+            bindings.push(
+                IrohaRuntimeProviderBindingV1::try_new_stream_token_gateway_admission(
+                    handle,
+                    iroha_torii::sorafs::StreamTokenGatewayAdmissionQualificationV1 {
+                        gateway_id,
+                        revision,
+                        policy_digest,
+                        max_pending: storage.stream_tokens.admission_max_pending,
+                        max_tracked_tokens: storage.stream_tokens.admission_max_tracked_tokens,
+                        lease_ttl_ms: storage.stream_tokens.admission_lease_ttl_ms,
+                    },
+                    storage.stream_tokens.admission_max_pending,
+                    storage.stream_tokens.admission_max_tracked_tokens,
+                    storage.stream_tokens.admission_reconcile_max_items,
+                )?,
+            );
+        }
+        (None, None, None) if !storage.stream_tokens.enabled => {}
+        _ => {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission,
             ));
         }
     }
@@ -376,6 +453,13 @@ fn collect_appeal_finance_bindings(
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
     let appeal_finance = &config.torii.sorafs_appeal_finance_settlement;
+    if appeal_finance.submitter_signers.len()
+        > iroha_config::parameters::SORAFS_APPEAL_FINANCE_MAX_SUBMITTER_SIGNERS_V1
+    {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+            IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner,
+        ));
+    }
     for binding in &appeal_finance.submitter_signers {
         bindings.push(IrohaRuntimeProviderBindingV1::try_new_appeal_finance_signer(binding)?);
     }
@@ -453,7 +537,22 @@ fn collect_moderation_viewer_bindings(
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
     let storage = &config.torii.sorafs_storage;
     if let Some(runtime) = storage.moderation_orchestrator.as_ref() {
+        validate_moderation_strict_ingress_binding(runtime)?;
+        let archive_slot = IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive;
+        if runtime.checkpoint_store_handle == runtime.panel_notification_archive_handle
+            || runtime.checkpoint_store_attestation_public_key
+                == runtime.panel_notification_archive_bootstrap_public_key
+            || runtime.checkpoint_store_attestation_public_key
+                == runtime.panel_notification_archive_public_key
+        {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                archive_slot,
+            ));
+        }
         bindings.push(IrohaRuntimeProviderBindingV1::try_new_moderation_checkpoint_store(runtime)?);
+        bindings.push(
+            IrohaRuntimeProviderBindingV1::try_new_moderation_panel_notification_archive(runtime)?,
+        );
         for (slot, handle, revision, policy_digest) in [
             (
                 IrohaRuntimeProviderSlotV1::ModerationTransactionSigner,
@@ -503,6 +602,39 @@ fn collect_moderation_viewer_bindings(
         );
     }
     Ok(())
+}
+
+fn validate_moderation_strict_ingress_binding(
+    runtime: &iroha_config::parameters::actual::SorafsModerationOrchestrator,
+) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
+    use sorafs_node::moderation_orchestrator::{
+        ModerationRuntimeProviderQualificationErrorV1 as Error,
+        ModerationRuntimeProviderQualificationV1,
+    };
+
+    let configured_qualification = ModerationRuntimeProviderQualificationV1::new(
+        runtime.strict_ingress_revision,
+        runtime.strict_ingress_policy_digest,
+    );
+    iroha_torii::sorafs::moderation_runtime::qualify_torii_moderation_strict_ingress_binding_v1(
+        &runtime.strict_ingress_handle,
+        configured_qualification,
+    )
+    .map_err(|error| match error {
+        Error::TestMarkedConfiguredHandle | Error::TestMarkedProviderHandle => {
+            IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected
+        }
+        Error::InvalidConfiguredHandle
+        | Error::InvalidProviderHandle
+        | Error::SubstitutedProvider => IrohaRuntimeProviderRegistryErrorV1::BindingMismatch,
+        Error::InvalidConfiguredQualification
+        | Error::UnavailableOrStale
+        | Error::InvalidQualification
+        | Error::QualificationMismatch
+        | Error::IdentityOrPolicyChanged
+        | Error::ArchiveIdentityChanged
+        | Error::ArchivePublicKeyChanged => IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked,
+    })
 }
 
 fn collect_pop_potr_gateway_bindings(

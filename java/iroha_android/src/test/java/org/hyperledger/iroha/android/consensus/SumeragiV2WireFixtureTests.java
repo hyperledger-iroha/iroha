@@ -5,6 +5,7 @@ package org.hyperledger.iroha.android.consensus;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertThrows;
 
 import java.io.IOException;
@@ -28,6 +29,7 @@ public final class SumeragiV2WireFixtureTests {
               "proposal",
               "vote",
               "quorum_certificate",
+              "quorum_certificate_merge_carrier",
               "commit_vote_reproposal",
               "commit_quorum_certificate_reproposal",
               "timeout_vote",
@@ -40,10 +42,51 @@ public final class SumeragiV2WireFixtureTests {
               "commit_certificate_response"));
 
   @Test
+  public void executionCommitmentsCarryAnExactMandatoryMergeCarrierOption() {
+    SumeragiV2Wire.Hash32 parent = testHash(0x21);
+    SumeragiV2Wire.Hash32 post = testHash(0x23);
+    SumeragiV2Wire.Hash32 ordinary = testHash(0x25);
+    SumeragiV2Wire.Hash32 executed = testHash(0x27);
+    SumeragiV2Wire.ExecutionCommitment base =
+        SumeragiV2Wire.ExecutionCommitment.withoutTopups(parent, post, ordinary, 123, executed);
+    SumeragiV2Wire.MergeCarrierCommitment carrier =
+        new SumeragiV2Wire.MergeCarrierCommitment(1, testHash(0x29));
+    SumeragiV2Wire.ExecutionCommitment carried =
+        new SumeragiV2Wire.ExecutionCommitment(
+            parent,
+            post,
+            ordinary,
+            null,
+            0,
+            base.nativeAmxApplicationManifestVersion,
+            base.nativeAmxApplicationManifestRoot,
+            base.nativeAmxApplicationManifestCount,
+            carrier,
+            base.executedBlockWireLen,
+            executed);
+
+    assertEquals(null, SumeragiV2Wire.ExecutionCommitment.decode(base.encode()).mergeCarrier);
+    assertEquals(
+        123L, SumeragiV2Wire.ExecutionCommitment.decode(base.encode()).executedBlockWireLen);
+    assertEquals(
+        carrier, SumeragiV2Wire.ExecutionCommitment.decode(carried.encode()).mergeCarrier);
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new SumeragiV2Wire.MergeCarrierCommitment(2, testHash(0x29)));
+  }
+
+  @Test
   public void unsafeProposalIgnoreReasonDecodesWireDiscriminantEleven() {
     assertEquals(
         SumeragiV2Wire.IgnoreReason.UNSAFE_PROPOSAL,
         SumeragiV2Wire.IgnoreReason.decode(new byte[] {11, 0, 0, 0}));
+  }
+
+  private static SumeragiV2Wire.Hash32 testHash(int seed) {
+    byte[] bytes = new byte[32];
+    Arrays.fill(bytes, (byte) seed);
+    bytes[31] |= 1;
+    return new SumeragiV2Wire.Hash32(bytes);
   }
 
   @Test
@@ -97,6 +140,32 @@ public final class SumeragiV2WireFixtureTests {
       assertArrayEquals(row.name, encoded, decoded.encode());
     }
     assertEquals(EXPECTED_MESSAGE_NAMES, names);
+  }
+
+  @Test
+  public void rustMergeCarrierFixturePinsCurrentV4Shape() throws Exception {
+    SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage payload =
+        (SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage)
+            SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+                    hexBytes(fixtureRow("message", "quorum_certificate_merge_carrier").hex))
+                .payload;
+    SumeragiV2Wire.MergeCarrierCommitment carrier =
+        payload.value.executionCommitment.mergeCarrier;
+    assertNotNull(carrier);
+    assertEquals(1, carrier.version);
+    assertEquals(32, carrier.entryHash.bytes().length);
+
+    for (String name :
+        Arrays.asList(
+            "execution_commitment_merge_carrier_wrong_version",
+            "execution_commitment_missing_merge_carrier_field")) {
+      assertThrows(
+          name,
+          IllegalArgumentException.class,
+          () ->
+              SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+                  hexBytes(fixtureRow("negative_message", name).hex)));
+    }
   }
 
   @Test
@@ -434,6 +503,7 @@ public final class SumeragiV2WireFixtureTests {
             new SumeragiV2Wire.Hash32(changedParentState),
             response.certificate.executionCommitment.postStateRoot,
             response.certificate.executionCommitment.ordinaryWritesRoot,
+            response.certificate.executionCommitment.executedBlockWireLen,
             response.certificate.executionCommitment.executedBlockWireHash);
     SumeragiV2Wire.QuorumCertificate changedExecutionCertificate =
         new SumeragiV2Wire.QuorumCertificate(
@@ -480,6 +550,7 @@ public final class SumeragiV2WireFixtureTests {
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,
+                base.executedBlockWireLen,
                 base.executedBlockWireHash));
     assertThrows(
         IllegalArgumentException.class,
@@ -493,6 +564,7 @@ public final class SumeragiV2WireFixtureTests {
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,
+                base.executedBlockWireLen,
                 base.executedBlockWireHash));
     assertThrows(
         IllegalArgumentException.class,
@@ -506,6 +578,7 @@ public final class SumeragiV2WireFixtureTests {
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,
+                base.executedBlockWireLen,
                 base.executedBlockWireHash));
     assertThrows(
         IllegalArgumentException.class,
@@ -519,6 +592,7 @@ public final class SumeragiV2WireFixtureTests {
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,
+                base.executedBlockWireLen,
                 base.executedBlockWireHash));
 
     SumeragiV2Wire.Hash32 canonicalPostState =
@@ -534,6 +608,7 @@ public final class SumeragiV2WireFixtureTests {
             base.nativeAmxApplicationManifestVersion,
             base.nativeAmxApplicationManifestRoot,
             base.nativeAmxApplicationManifestCount,
+            base.executedBlockWireLen,
             base.executedBlockWireHash);
     assertEquals(base.executedBlockWireHash, valid.executedBlockWireHash);
     assertArrayEquals(
@@ -567,6 +642,7 @@ public final class SumeragiV2WireFixtureTests {
                 SumeragiV2Wire.NATIVE_AMX_APPLICATION_MANIFEST_VERSION + 1,
                 base.nativeAmxApplicationManifestRoot,
                 0,
+                base.executedBlockWireLen,
                 base.executedBlockWireHash));
     assertThrows(
         IllegalArgumentException.class,
@@ -580,6 +656,7 @@ public final class SumeragiV2WireFixtureTests {
                 SumeragiV2Wire.NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 nonEmptyRoot,
                 0,
+                base.executedBlockWireLen,
                 base.executedBlockWireHash));
     assertThrows(
         IllegalArgumentException.class,
@@ -593,6 +670,7 @@ public final class SumeragiV2WireFixtureTests {
                 SumeragiV2Wire.NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 base.nativeAmxApplicationManifestRoot,
                 1,
+                base.executedBlockWireLen,
                 base.executedBlockWireHash));
     assertThrows(
         IllegalArgumentException.class,
@@ -606,6 +684,21 @@ public final class SumeragiV2WireFixtureTests {
                 SumeragiV2Wire.NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 nonEmptyRoot,
                 SumeragiV2Wire.MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES + 1,
+                base.executedBlockWireLen,
+                base.executedBlockWireHash));
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new SumeragiV2Wire.ExecutionCommitment(
+                base.parentStateRoot,
+                base.postStateRoot,
+                base.ordinaryWritesRoot,
+                base.topupAnchorRoot,
+                base.topupAnchorCount,
+                base.nativeAmxApplicationManifestVersion,
+                base.nativeAmxApplicationManifestRoot,
+                base.nativeAmxApplicationManifestCount,
+                0,
                 base.executedBlockWireHash));
   }
 

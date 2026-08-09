@@ -209,6 +209,8 @@ def test_validate_rejects_mutated_or_non_private_artifacts(
     manifest_sha256 = str(fixture["manifest_sha256"])
     binary = bundle / "release" / "irohad"
     release_dir = binary.parent
+    original_binary = binary.read_bytes()
+    original_binary_mode = stat.S_IMODE(binary.stat().st_mode)
     bundle.chmod(0o700)
     release_dir.chmod(0o700)
     if mutation == "binary":
@@ -232,8 +234,19 @@ def test_validate_rejects_mutated_or_non_private_artifacts(
     release_dir.chmod(0o500)
     bundle.chmod(0o500)
 
-    with pytest.raises(PrebuiltBundleError):
-        validate_bundle(repo, SOURCE_MANIFEST, bundle, manifest_sha256)
+    try:
+        with pytest.raises(PrebuiltBundleError):
+            validate_bundle(repo, SOURCE_MANIFEST, bundle, manifest_sha256)
+    finally:
+        if mutation == "symlink":
+            bundle.chmod(0o700)
+            release_dir.chmod(0o700)
+            if binary.is_symlink() or binary.exists():
+                binary.unlink()
+            binary.write_bytes(original_binary)
+            binary.chmod(original_binary_mode)
+            release_dir.chmod(0o500)
+            bundle.chmod(0o500)
 
 
 @pytest.mark.parametrize("kind", ("file", "directory"))
@@ -292,22 +305,36 @@ def test_validate_rejects_symlinked_expected_directory(tmp_path: Path) -> None:
     bundle = Path(fixture["bundle"])
     message_control = bundle / "message-control"
     release = message_control / "release"
+    binary = release / "irohad"
+    original_binary = binary.read_bytes()
+    original_binary_mode = stat.S_IMODE(binary.stat().st_mode)
     bundle.chmod(0o700)
     message_control.chmod(0o700)
     release.chmod(0o700)
-    (release / "irohad").unlink()
+    binary.unlink()
     release.rmdir()
     release.symlink_to(bundle / "release", target_is_directory=True)
     message_control.chmod(0o500)
     bundle.chmod(0o500)
 
-    with pytest.raises(PrebuiltBundleError, match="directory is not real"):
-        validate_bundle(
-            Path(fixture["repo"]),
-            SOURCE_MANIFEST,
-            bundle,
-            str(fixture["manifest_sha256"]),
-        )
+    try:
+        with pytest.raises(PrebuiltBundleError, match="directory is not real"):
+            validate_bundle(
+                Path(fixture["repo"]),
+                SOURCE_MANIFEST,
+                bundle,
+                str(fixture["manifest_sha256"]),
+            )
+    finally:
+        bundle.chmod(0o700)
+        message_control.chmod(0o700)
+        release.unlink()
+        release.mkdir()
+        binary.write_bytes(original_binary)
+        binary.chmod(original_binary_mode)
+        release.chmod(0o500)
+        message_control.chmod(0o500)
+        bundle.chmod(0o500)
 
 
 @pytest.mark.parametrize(
@@ -442,6 +469,8 @@ def test_create_rejects_malformed_or_non_private_tool_stdout(
 ) -> None:
     fixture = _fixture(tmp_path)
     cargo_version = Path(fixture["cargo_version"])
+    original_cargo_version = cargo_version.read_bytes()
+    original_cargo_version_mode = stat.S_IMODE(cargo_version.stat().st_mode)
     if mutation == "empty":
         cargo_version.write_bytes(b"")
     elif mutation == "no_newline":
@@ -459,31 +488,44 @@ def test_create_rejects_malformed_or_non_private_tool_stdout(
         alias = cargo_version.with_suffix(".alias")
         os.link(cargo_version, alias)
 
-    with pytest.raises(PrebuiltBundleError):
-        create_bundle(
-            Path(fixture["repo"]),
-            SOURCE_MANIFEST,
-            Path(fixture["default_cache"]),
-            Path(fixture["message_cache"]),
-            Path(fixture["programs"]),
-            cargo_version,
-            Path(fixture["rustc_version"]),
-        )
+    try:
+        with pytest.raises(PrebuiltBundleError):
+            create_bundle(
+                Path(fixture["repo"]),
+                SOURCE_MANIFEST,
+                Path(fixture["default_cache"]),
+                Path(fixture["message_cache"]),
+                Path(fixture["programs"]),
+                cargo_version,
+                Path(fixture["rustc_version"]),
+            )
+    finally:
+        if mutation == "symlink":
+            cargo_version.unlink()
+            cargo_version.write_bytes(original_cargo_version)
+            cargo_version.chmod(original_cargo_version_mode)
 
 
 def test_create_rejects_symlinked_build_output(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
     output = Path(fixture["default_cache"]) / "release" / "irohad"
+    original_output = output.read_bytes()
+    original_output_mode = stat.S_IMODE(output.stat().st_mode)
     output.unlink()
     output.symlink_to(Path(fixture["repo"]) / "Cargo.lock")
 
-    with pytest.raises(PrebuiltBundleError, match="non-symlink"):
-        create_bundle(
-            Path(fixture["repo"]),
-            SOURCE_MANIFEST,
-            Path(fixture["default_cache"]),
-            Path(fixture["message_cache"]),
-            Path(fixture["programs"]),
-            Path(fixture["cargo_version"]),
-            Path(fixture["rustc_version"]),
-        )
+    try:
+        with pytest.raises(PrebuiltBundleError, match="non-symlink"):
+            create_bundle(
+                Path(fixture["repo"]),
+                SOURCE_MANIFEST,
+                Path(fixture["default_cache"]),
+                Path(fixture["message_cache"]),
+                Path(fixture["programs"]),
+                Path(fixture["cargo_version"]),
+                Path(fixture["rustc_version"]),
+            )
+    finally:
+        output.unlink()
+        output.write_bytes(original_output)
+        output.chmod(original_output_mode)

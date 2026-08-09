@@ -16,6 +16,7 @@ forbidden_tracked_globs = [
   "target/**",
   "**/target/**",
   "**/node_modules/**",
+  "**/.docusaurus/**",
   "**/__pycache__/**",
   "**/.pytest_cache/**",
   "**/.ruff_cache/**",

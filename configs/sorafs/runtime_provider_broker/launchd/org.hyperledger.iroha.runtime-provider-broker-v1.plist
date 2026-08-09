@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>org.hyperledger.iroha.runtime-provider-broker-v1</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/libexec/iroha-runtime-provider-broker-v1</string>
+    <string>--catalog</string>
+    <string>/private/etc/iroha/runtime-provider-broker/catalog.norito</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/private/var/empty</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>ExitTimeOut</key>
+  <integer>60</integer>
+  <key>AbandonProcessGroup</key>
+  <false/>
+  <key>UserName</key>
+  <string>iroha</string>
+  <key>GroupName</key>
+  <string>iroha</string>
+  <key>Umask</key>
+  <integer>63</integer>
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>Core</key>
+    <integer>0</integer>
+    <key>NumberOfFiles</key>
+    <integer>65536</integer>
+  </dict>
+  <key>HardResourceLimits</key>
+  <dict>
+    <key>Core</key>
+    <integer>0</integer>
+    <key>NumberOfFiles</key>
+    <integer>65536</integer>
+  </dict>
+</dict>
+</plist>

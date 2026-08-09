@@ -10,8 +10,12 @@ summary: SFM-4b1 implementation status for PoP credential foundations and the re
 SFM-4b1 now has canonical PoP credential payloads, a production cryptographic
 membership-proof backend, a consensus-owned issuer/registry foundation, a
 durable issuer/wallet service, and the canonical authenticated Torii V1 API,
-but it is not yet deployable from the standard `irohad` binary. The
-first-release backend is a
+plus the standard-`irohad` runtime-broker injection path and public broker
+server launcher. The shared catalog-only executable shell adds secure loading,
+lifecycle, signal, and redacted-failure handling around that launcher. Release
+deployment is still blocked because the repository does not ship a genuine
+deployment-owned PoP backend registry or vendor-linked executable. The
+first-release proof backend is a
 fixed Halo2 circuit over Pasta with transparent IPA polynomial commitments. It
 proves membership in the signed active credential root and empty-leaf membership
 in the signed sparse revocation root while keeping the credential id, holder
@@ -40,23 +44,40 @@ set, and rejects missing, substituted, stale/revoked, test-marked, or drifting
 registries. Qualified HSM, KMS, authentication, private issuance/witness,
 ledger, and finalized-time wrappers recheck the pinned registry before and
 after provider operations and discard provider results on qualification drift.
+Every public read and caller-driven transition now authenticates the exact
+request before advancing the durable registry projection to the exact
+independently sampled finalized block height and hash; reader failure, a
+different cursor, or bound exhaustion rejects the request instead of serving
+or mutating against the cached projection. The
+deployment authenticator must distinguish an authenticated request from a
+verified caller-signed transaction. Enrollment, approval, issuance,
+revocation, wallet-state changes, and nullifier consumption require the latter;
+only payload-free reads and durable outbox submission/reconciliation may use
+ordinary authenticated authority. The broker wire preserves this distinction,
+so standard `irohad` cannot replace caller authority with a process-local
+trigger.
 
-The remaining local release blocker is `V1-BLOCK-POP-RUNTIME-01`: the standard
-`irohad` entrypoint does not yet construct and inject a concrete governed
-production provider registry, and the repository has no deployable shared
-external-runtime or sidecar adapter implementing that registry. Enabling
-`sorafs.storage.pop_credentials` without that injected runtime fails
-startup; no file-key, environment-key, software-signing, or process-clock
-fallback is permitted. The native registry remains available through signed
-transactions and typed queries. The authoritative moderation intake now pins
+The remaining release blocker is `V1-BLOCK-POP-RUNTIME-01`, but it is no longer
+a missing standard-daemon injection or shared sidecar transport. On Linux and
+macOS, stock `irohad` projects the validated public provider catalog and uses
+the platform-fixed authenticated broker client; the public broker launcher
+serves the exact PoP resolve, HSM signing, authentication, registry
+submit/read, issuance-draft, wallet wrap/unwrap/witness, and finalized-time
+operations. A deployment must still supply and supervise a broker executable
+whose backend registry is backed by genuine HSM/KMS, authentication, private
+issuance/witness, committed-ledger, and finalized-time providers. Enabling
+`sorafs.storage.pop_credentials` without that qualified broker fails startup;
+no file-key, environment-key, software-signing, or process-clock fallback is
+permitted. The native registry remains available through signed transactions
+and typed queries. The authoritative moderation intake now pins
 its active root, revocation list, issuer-policy digest, and audit head; juror
 enrollment verifies exact-canonical Halo2 membership proofs against that
 snapshot and persists only a proof digest, deterministic appeal nullifier,
 public eligibility class, expiry, and account binding. It rejects observers,
 expired credentials, wrong or rotated roots, revocations, duplicate accounts,
 and duplicate-person nullifiers before panel sortition. This integration is not
-a claim that the missing external runtime adapter or reference deployment is
-complete.
+a claim that the genuine deployment-owned provider backend or reference
+deployment is complete.
 `scripts/check_sorafs_pop_credentials_rollout_evidence.py` now provides the
 SFM-4b1 promotion gate for future deployed evidence. It requires payload-free
 issuer-bundle, commitment-root, revocation-registry, enrollment-portal,
@@ -73,8 +94,8 @@ revocation-list digests, so rollout packets cannot mix evidence from different
 credential publication runs. Root or revocation-list disagreements mark the
 offending anchor and downstream artifacts invalid in the emitted summary, not
 only the top-level promotion status. This checker is a rollout gate; it does
-not replace the missing standard-`irohad` external-runtime adapter, HSM/KMS
-integration, or deployed verifier evidence.
+not replace the deployment-owned broker executable, genuine HSM/KMS and
+authentication backends, or deployed verifier evidence.
 Verifier-service artifacts also publish `policy_digest_hex`; governance
 approval artifacts must bind `policy_digest_hex` to that valid verifier policy
 digest, and the checker emits those valid verifier policy digests as
@@ -218,10 +239,11 @@ registry, juror client, or deployed verifier service.
   enrollment, dual-control approval, issuance, registry reconciliation,
   revocation, wallet custody, proof generation, and verification. Its
   registry-qualified construction path pins independently configured public
-  provider identity and revalidates provider operations. Packaging a concrete
-  external runtime/sidecar provider registry into the standard daemon remains
-  deployment work; there is deliberately no local-key or process-authoritative
-  fallback.
+  provider identity and revalidates provider operations. The standard daemon's
+  broker client, the bounded PoP broker protocol, and the public broker-server
+  launcher are shipped. Packaging and supervising a concrete deployment-owned
+  broker executable with genuine provider backends remains deployment work;
+  there is deliberately no local-key or process-authoritative fallback.
 - `prove_pop_membership_v1` creates a zero-knowledge Halo2/IPA proof from the
   signed credential plus fixed-depth private credential and sparse-revocation
   paths. `verify_pop_membership_proof_v1` verifies the signed active root and
@@ -333,25 +355,29 @@ all accept/reject results are deterministic across supported hardware.
 
 | Component | Responsibility | Local state |
 |-----------|----------------|-------------|
-| Enrollment portal | Captures encrypted candidate enrollment and governed approvals. | The authenticated submit/status/approval API and durable encrypted workflow are shipped; operator UI, WebAuthn enrollment ceremony, and the deployable external authenticator adapter remain open. |
-| Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | The bounded durable service, HSM interface, strict policy binding, issuance/revocation APIs, and retry-safe outbox are shipped; standard-`irohad` HSM/KMS/provider wiring and deployment evidence remain open. |
-| Credential registry | Stores commitment roots, revocation updates, and event digests. | Consensus-owned state, typed queries, authenticated submit/reconcile/projection APIs, cursor rollback rejection, and durable reconciliation are shipped; standard-daemon transaction/reader adapters and multi-peer evidence remain open. |
-| Juror client | Stores credentials, syncs revocations, and generates proofs. | Encrypted KMS-wrapped wallet custody, delivery/import/acknowledgement, witness synchronization, and local proof APIs are shipped; a deployable KMS/witness adapter and operator client remain open. |
-| Verification service | Validates juror proofs for sortition, voting, and appeal panels. | The Halo2/IPA verifier, atomic nullifier replay defense, native moderation integration, authenticated verification API, `sorafs-validate pop`, and SDK/bridge reference gate are shipped; the external runtime adapter and reviewed deployment evidence remain open. |
+| Enrollment portal | Captures encrypted candidate enrollment and governed approvals. | The authenticated submit/status/approval API, durable encrypted workflow, and broker authentication operation are shipped; operator UI, WebAuthn enrollment ceremony, and a genuine deployment-owned authenticator backend remain open. |
+| Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | The bounded durable service, HSM interface, strict policy binding, issuance/revocation APIs, retry-safe outbox, and standard-daemon broker wiring are shipped; a genuine HSM/KMS backend and deployment evidence remain open. |
+| Credential registry | Stores commitment roots, revocation updates, and event digests. | Consensus-owned state, typed queries, authenticated submit/reconcile/projection APIs, cursor rollback rejection, durable reconciliation, and broker transaction/read operations are shipped; a deployment-owned committed-state backend and multi-peer evidence remain open. |
+| Juror client | Stores credentials, syncs revocations, and generates proofs. | Encrypted KMS-wrapped wallet custody, delivery/import/acknowledgement, witness synchronization, local proof APIs, and broker wallet operations are shipped; a genuine deployment-owned KMS/witness backend and operator client remain open. |
+| Verification service | Validates juror proofs for sortition, voting, and appeal panels. | The Halo2/IPA verifier, atomic nullifier replay defense, native moderation integration, authenticated verification API, `sorafs-validate pop`, SDK/bridge reference gate, and standard broker adapter are shipped; a genuine runtime backend and reviewed deployment evidence remain open. |
 
 Do not document `sorafs pop sync`, `sorafs pop status`,
 `sorafs pop prove`, or `sorafs pop revoke` as shipped commands until the CLI
 handlers and backing services exist. The standalone `sorafs-validate pop`
 reference validator is shipped only for local/CI payload validation.
 
-## Runtime Adapter Blocker Runbook
+## Deployment Backend Blocker Runbook
 
-`V1-BLOCK-POP-RUNTIME-01` blocks local completion and promotion. The standard
-daemon builds `ToriiRuntimeDeps` in `crates/irohad/src/main.rs`, but no
-production caller currently supplies
-`PopCredentialRuntimeProviderRegistryV1`. The runtime no longer accepts a
-caller-assembled secret bundle directly. The missing deployable shared
-external-runtime/sidecar registry implementation must resolve:
+`V1-BLOCK-POP-RUNTIME-01` blocks production completion and promotion, not the
+standard-daemon source integration. Stock `irohad` projects the exact public
+PoP binding into its fixed local broker client, and
+`RuntimeProviderBrokerDeploymentV1` is the public sidecar launcher. The shared
+`RuntimeProviderBrokerExecutableV1` adds its catalog, lifecycle, signal, and
+server process shell. The broker protocol reconstructs a qualified
+`PopCredentialRuntimeProviderRegistryV1` for the daemon. The missing deployment
+package must implement
+`RuntimeProviderBrokerBackendRegistryV1`, attach a genuine PoP registry to
+`RuntimeProviderBrokerBackendsV1`, and resolve:
 
 - the runtime-only enrollment and wallet hybrid recipient secrets;
 - the governed issuer HSM signer and KMS/PKCS#11 wallet-key wrapper;
@@ -360,7 +386,7 @@ external-runtime/sidecar registry implementation must resolve:
 - private issuance-draft and wallet-witness providers; and
 - the finalized-chain time provider with an independent clock observation.
 
-The adapter must expose a stable production handle and a non-zero public
+The deployment backend must expose a stable production handle and a non-zero public
 qualification revision/digest independently pinned by `iroha_config`. It must
 change that qualification whenever any underlying provider identity or policy
 changes, bind every non-secret handle and public key to the exact configured
@@ -370,19 +396,19 @@ only stable payload-free failures. Secret bytes, PINs, bearer material,
 credentials, witnesses, attestations, and PII must not come from
 `iroha_config`, environment overrides, repository files, or logs.
 
-Closure requires a standard-`irohad` or explicitly packaged reference-daemon
-startup test with PoP enabled, provider-unavailable and config/runtime-mismatch
-negatives, HSM/KMS/authenticator and finalized-time rotation/rollback tests,
-restart reconciliation, and a four-validator reference deployment run. Until
-those checks pass, operators must leave
+Closure requires the stock `irohad` plus a supervised deployment-broker
+executable to pass startup with PoP enabled, provider-unavailable and
+config/runtime-mismatch negatives, HSM/KMS/authenticator and finalized-time
+rotation/rollback tests, restart reconciliation, and a four-validator reference
+deployment run. Operators without that qualified deployment backend must leave
 `sorafs.storage.pop_credentials.enabled = false`; the intentional
 enabled-without-runtime startup failure must not be bypassed.
 
 ## Remaining Production Gates
 
-- Resolve `V1-BLOCK-POP-RUNTIME-01` with the shared deployable external-runtime
-  adapter described above; do not add a software-key, file-key, environment, or
-  process-clock fallback.
+- Resolve `V1-BLOCK-POP-RUNTIME-01` by packaging and supervising the genuine
+  deployment-owned backend through the shipped broker launcher; do not add a
+  software-key, file-key, environment, or process-clock fallback.
 - Deploy the native registry on a reviewed multi-validator environment and
   collect restart, reconciliation, rollback-rejection, key/time rotation, and
   audit-head evidence through the shipped Torii facade.
@@ -425,7 +451,7 @@ enabled-without-runtime startup failure must not be bypassed.
   gate also rechecks `valid_juror_sync_bindings` against `valid_root_digests`
   and `valid_revocation_list_digests` before final promotion can report ready.
 - Publish operator and juror command documentation only after the still-open
-  CLI and shared external-runtime adapter exist.
+  CLI and genuine deployment-owned broker backend exist.
 
 ## Validation
 
@@ -445,8 +471,8 @@ python3 -m pytest -q scripts/tests/check_sorafs_pop_credentials_rollout_evidence
   scripts/tests/build_sorafs_pop_credentials_canary_test.py
 ```
 
-Add the standard-daemon external-runtime adapter, operator client,
-multi-peer deployment, and deployed-verifier tests when those remaining
-integrations land.
+Add the genuine deployment-owned broker backend and executable, operator
+client, multi-peer deployment, and deployed-verifier tests when those
+remaining integrations land.
 
 The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier. The shared runner plan guard also rejects non-canonical nested required-kind, threshold, external-evidence, evidence-contract, and command-step shapes before dry-run output or verifier execution.

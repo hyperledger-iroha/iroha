@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -53,6 +55,13 @@ NATIVE_ESCROW_WORKFLOW_SPECIFIC_TRIGGER_PATHS = {
         ".github/workflows/mobile_sdk_artifacts.yml",
         "IrohaSwift/**",
         "ci/check_kagemusha_jvm_native_bridge.sh",
+        "crates/iroha_cli/**",
+        "crates/iroha_config/**",
+        "crates/iroha_core/**",
+        "crates/iroha_data_model/**",
+        "crates/iroha_kagami/**",
+        "crates/iroha_torii/**",
+        "crates/irohad/**",
         "java/iroha_android/**",
         "kotlin/**",
         "scripts/build_norito_xcframework.sh",
@@ -62,7 +71,9 @@ NATIVE_ESCROW_WORKFLOW_SPECIFIC_TRIGGER_PATHS = {
         "scripts/exec_with_file_lock.py",
         "scripts/norito_bridge_source_seal.py",
         "scripts/package_mobile_sdk_artifacts.sh",
+        "scripts/deploy_localnet.sh",
         "scripts/run_mobile_hermetic_command.py",
+        "scripts/tests/deploy_localnet_test.py",
         "scripts/tests/mobile_sdk_python312_contract.sh",
     },
     "sorafs-orchestrator-sdk.yml": {
@@ -79,6 +90,7 @@ NATIVE_ESCROW_WORKFLOW_SPECIFIC_TRIGGER_PATHS = {
         "scripts/exec_with_file_lock.py",
         "scripts/norito_bridge_source_seal.py",
         "scripts/run_mobile_hermetic_command.py",
+        "scripts/tests/check_sorafs_python_native_sdk_evidence_contract.sh",
     },
 }
 
@@ -90,12 +102,12 @@ def pull_request_paths(workflow_name: str) -> set[str]:
         REPO_ROOT / ".github" / "workflows" / workflow_name
     ).read_text(encoding="utf-8")
     pull_request = re.search(
-        r"(?ms)^  pull_request:\n(?P<body>(?:^    .*\n)*)",
+        r"(?m)^  pull_request:\n(?P<body>(?:^    [^\n]*\n)*)",
         source,
     )
     assert pull_request is not None, f"{workflow_name} must define pull_request"
     paths = re.search(
-        r"(?ms)^    paths:\n(?P<paths>(?:^      - .*\n)+)",
+        r'(?m)^    paths:\n(?P<paths>(?:^      - "[^"\n]+"\n)+)',
         pull_request.group("body"),
     )
     assert paths is not None, f"{workflow_name} must define pull_request.paths"
@@ -158,6 +170,10 @@ def test_native_sdk_workflow_triggers_are_closed_over_native_escrow_inputs(
     """Fixture, source, manifest, and artifact changes must rerun native parity."""
 
     actual = pull_request_paths(workflow_name)
+    assert not any(
+        path.startswith(("jobs:", "name:", "run:", "runs-on:", "uses:"))
+        for path in actual
+    ), f"{workflow_name} path parser leaked workflow job fields"
     required = NATIVE_ESCROW_SHARED_TRIGGER_PATHS | workflow_specific
     missing = sorted(required - actual)
     assert not missing, (
@@ -452,6 +468,286 @@ def test_manifest_loader_rejects_final_path_replacement(
         checker.load_manifest(path)
 
 
+def test_retained_native_manifest_is_private_canonical_and_payload_free(
+    tmp_path: Path,
+) -> None:
+    """Successful retention emits only the verified fixed-schema manifest."""
+
+    source = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+    manifest = checker.build_manifest(
+        sdk="python",
+        target="darwin-arm64-python312",
+        artifact_path=artifact,
+        source_root=source,
+        probe=exact_probe,
+    )
+    evidence_directory = tmp_path / "python-native-evidence"
+    retained = checker.retain_verified_manifest(
+        manifest,
+        artifact_path=artifact,
+        evidence_directory=evidence_directory,
+        source_root=source,
+        probe=exact_probe,
+    )
+
+    assert retained == evidence_directory / "python-native-abi21.json"
+    assert checker.load_manifest(retained) == manifest
+    assert {path.name for path in evidence_directory.iterdir()} == {
+        "python-native-abi21.json"
+    }
+    directory_metadata = evidence_directory.lstat()
+    manifest_metadata = retained.lstat()
+    assert stat.S_ISDIR(directory_metadata.st_mode)
+    assert stat.S_IMODE(directory_metadata.st_mode) == 0o700
+    assert stat.S_ISREG(manifest_metadata.st_mode)
+    assert manifest_metadata.st_nlink == 1
+    assert stat.S_IMODE(manifest_metadata.st_mode) == 0o600
+    retained_text = retained.read_text(encoding="ascii")
+    assert str(tmp_path) not in retained_text
+    assert "artifact_path" not in retained_text
+    assert "private_key" not in retained_text
+
+
+def test_verify_cli_retains_native_manifest_only_after_reauthentication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The shell-facing verify operation owns the opt-in retention action."""
+
+    source = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+    manifest = checker.build_manifest(
+        sdk="python",
+        target="darwin-arm64-python312",
+        artifact_path=artifact,
+        source_root=source,
+        probe=exact_probe,
+    )
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_bytes(checker.canonical_manifest_bytes(manifest))
+    evidence_directory = tmp_path / "retained"
+
+    def cli_probe(
+        _sdk: str,
+        _path: Path,
+        *,
+        node: str,
+        python: str,
+    ) -> int:
+        del node, python
+        return checker.REQUIRED_BRIDGE_ABI_VERSION
+
+    monkeypatch.setattr(checker, "probe_artifact", cli_probe)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "check_native_sdk_abi21_artifact.py",
+            "verify",
+            "--artifact",
+            str(artifact),
+            "--manifest",
+            str(manifest_path),
+            "--source-root",
+            str(source),
+            "--evidence-dir",
+            str(evidence_directory),
+        ],
+    )
+
+    assert checker.main() == 0
+    assert checker.load_manifest(
+        evidence_directory / "python-native-abi21.json"
+    ) == manifest
+
+
+def test_retained_native_manifest_is_not_created_when_reauthentication_fails(
+    tmp_path: Path,
+) -> None:
+    """Stale artifact bytes fail before the evidence directory is created."""
+
+    source = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+    manifest = checker.build_manifest(
+        sdk="python",
+        target="darwin-arm64-python312",
+        artifact_path=artifact,
+        source_root=source,
+        probe=exact_probe,
+    )
+    artifact.write_bytes(b"stale native artifact")
+    evidence_directory = tmp_path / "must-not-exist"
+
+    with pytest.raises(checker.ArtifactContractError, match="artifact bytes"):
+        checker.retain_verified_manifest(
+            manifest,
+            artifact_path=artifact,
+            evidence_directory=evidence_directory,
+            source_root=source,
+            probe=exact_probe,
+        )
+    assert not evidence_directory.exists()
+
+
+@pytest.mark.parametrize("relative", (Path("evidence"), Path("../evidence")))
+def test_retained_native_manifest_rejects_relative_output(
+    tmp_path: Path,
+    relative: Path,
+) -> None:
+    """The opt-in evidence destination must be an explicit absolute path."""
+
+    source = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+    manifest = checker.build_manifest(
+        sdk="python",
+        target="darwin-arm64-python312",
+        artifact_path=artifact,
+        source_root=source,
+        probe=exact_probe,
+    )
+
+    with pytest.raises(checker.ArtifactContractError, match="bounded absolute"):
+        checker.retain_verified_manifest(
+            manifest,
+            artifact_path=artifact,
+            evidence_directory=relative,
+            source_root=source,
+            probe=exact_probe,
+        )
+
+
+def test_retained_native_manifest_rejects_existing_or_symlinked_output(
+    tmp_path: Path,
+) -> None:
+    """Retention never merges with or follows a pre-existing leaf."""
+
+    source = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+    manifest = checker.build_manifest(
+        sdk="python",
+        target="darwin-arm64-python312",
+        artifact_path=artifact,
+        source_root=source,
+        probe=exact_probe,
+    )
+    existing = tmp_path / "existing"
+    existing.mkdir()
+    with pytest.raises(checker.ArtifactContractError, match="must be fresh"):
+        checker.retain_verified_manifest(
+            manifest,
+            artifact_path=artifact,
+            evidence_directory=existing,
+            source_root=source,
+            probe=exact_probe,
+        )
+
+    target = tmp_path / "target"
+    target.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(target, target_is_directory=True)
+    with pytest.raises(checker.ArtifactContractError, match="must be fresh"):
+        checker.retain_verified_manifest(
+            manifest,
+            artifact_path=artifact,
+            evidence_directory=linked,
+            source_root=source,
+            probe=exact_probe,
+        )
+
+
+def test_retained_native_manifest_rejects_symlinked_ancestry(
+    tmp_path: Path,
+) -> None:
+    """An alias in the requested output ancestry is rejected, not resolved."""
+
+    source = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+    manifest = checker.build_manifest(
+        sdk="python",
+        target="darwin-arm64-python312",
+        artifact_path=artifact,
+        source_root=source,
+        probe=exact_probe,
+    )
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+
+    with pytest.raises(checker.ArtifactContractError, match="must not contain symlinks"):
+        checker.retain_verified_manifest(
+            manifest,
+            artifact_path=artifact,
+            evidence_directory=linked_parent / "evidence",
+            source_root=source,
+            probe=exact_probe,
+        )
+
+
+def test_retained_native_manifest_rejects_source_tree_destination(
+    tmp_path: Path,
+) -> None:
+    """Evidence retention cannot invalidate the attested clean source tree."""
+
+    source = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+    manifest = checker.build_manifest(
+        sdk="python",
+        target="darwin-arm64-python312",
+        artifact_path=artifact,
+        source_root=source,
+        probe=exact_probe,
+    )
+
+    with pytest.raises(checker.ArtifactContractError, match="outside the source tree"):
+        checker.retain_verified_manifest(
+            manifest,
+            artifact_path=artifact,
+            evidence_directory=source / "evidence",
+            source_root=source,
+            probe=exact_probe,
+        )
+
+
+def test_python_native_evidence_retention_is_opt_in_and_uploaded() -> None:
+    """Freeze the zero-skip, final-verify, and exact-file upload ordering."""
+
+    runner = (REPO_ROOT / "ci/check_sorafs_python_native_sdk.sh").read_text(
+        encoding="utf-8"
+    )
+    workflow = (
+        REPO_ROOT / ".github/workflows/sorafs-orchestrator-sdk.yml"
+    ).read_text(encoding="utf-8")
+
+    assert 'SORAFS_PYTHON_SDK_EVIDENCE_DIR:-' in runner
+    assert runner.count("--evidence-dir") == 1
+    assert 'VERIFY_EVIDENCE_ARGS=()' in runner
+    assert '"${VERIFY_EVIDENCE_ARGS[@]}"' in runner
+    skip_audit = runner.index(
+        "SoraFS native Python SDK parity may not contain skipped tests"
+    )
+    assert skip_audit < runner.index('VERIFY_EVIDENCE_ARGS=()')
+    assert runner.index('VERIFY_EVIDENCE_ARGS=()') < runner.rindex("  verify \\")
+    assert "SDK_SESSION}/pytest.xml" in runner
+    assert "SDK_SESSION}/python-native-abi21.json" in runner
+
+    evidence_directory = (
+        "${{ runner.temp }}/iroha-sorafs-python-native-abi21-evidence"
+    )
+    evidence_file = f"{evidence_directory}/python-native-abi21.json"
+    assert f"SORAFS_PYTHON_SDK_EVIDENCE_DIR: {evidence_directory}" in workflow
+    assert "name: Upload verified Python ABI-21 evidence" in workflow
+    assert evidence_file in workflow
+    assert "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" in workflow
+    upload = workflow.split("name: Upload verified Python ABI-21 evidence", 1)[1]
+    upload = upload.split("- name: Upload parity evidence", 1)[0]
+    assert "if: always()" in upload
+    assert "if-no-files-found: error" in upload
+    assert "retention-days: 30" in upload
+    assert "pytest.xml" not in upload
+    assert "iroha-sorafs-python-sdk" not in upload
+
+
 def test_node_probe_requires_exports_and_exact_integer_abi(
     tmp_path: Path,
 ) -> None:
@@ -509,6 +805,366 @@ def test_python_probe_requires_exports_and_exact_integer_abi(
         checker.probe_python_abi(complete, checker.REQUIRED_SYMBOLS["python"])
 
 
+def run_gradle_jvm_hermetic_probe(
+    tmp_path: Path,
+    *,
+    require_sorafs_native_validation: bool,
+    profile: str = "gradle-jvm",
+    include_localnet_dir: bool = False,
+    include_localnet_test: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    """Run a dependency-free probe through the exact Gradle/JVM environment."""
+
+    python = Path(sys.executable).resolve(strict=True)
+    native = tmp_path / "native"
+    environment = {
+        "ANDROID_HOME": str(tmp_path / "android-sdk"),
+        "ANDROID_SDK_ROOT": str(tmp_path / "android-sdk"),
+        "DYLD_LIBRARY_PATH": str(native),
+        "GRADLE_USER_HOME": str(tmp_path / "gradle-home"),
+        "HOME": str(tmp_path / "home"),
+        "IROHA_NATIVE_LIBRARY_PATH": str(native),
+        "IROHA_REQUIRE_KAGEMUSHA_NATIVE": "1",
+        "JAVA_HOME": str(tmp_path / "jdk"),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "LD_LIBRARY_PATH": str(native),
+        "PATH": "/usr/bin:/bin",
+        "TMPDIR": str(tmp_path),
+    }
+    if require_sorafs_native_validation:
+        environment["IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"] = "1"
+    if include_localnet_dir:
+        environment["IROHA_LOCALNET_DIR"] = str(tmp_path / "four-peer-localnet")
+    if include_localnet_test:
+        environment["IROHA_LOCALNET_TEST"] = "1"
+
+    command = [
+        str(python),
+        "-I",
+        "-S",
+        str(REPO_ROOT / "scripts/run_mobile_hermetic_command.py"),
+        "--profile",
+        profile,
+    ]
+    for name, value in sorted(environment.items()):
+        command.extend(("--set", f"{name}={value}"))
+    command.extend(
+        (
+            "--",
+            str(python),
+            "-I",
+            "-S",
+            "-c",
+            (
+                "import json,os; names=("
+                "'IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION',"
+                "'IROHA_LOCALNET_DIR','IROHA_LOCALNET_TEST'); "
+                "print(json.dumps({name:os.environ.get(name) for name in names},"
+                "sort_keys=True))"
+            ),
+        )
+    )
+    return subprocess.run(command, check=False, capture_output=True, text=True)
+
+
+def test_gradle_jvm_hermetic_profile_forwards_sorafs_native_requirement(
+    tmp_path: Path,
+) -> None:
+    """The release subprocess receives the mandatory fail-closed SoraFS flag."""
+
+    completed = run_gradle_jvm_hermetic_probe(
+        tmp_path,
+        require_sorafs_native_validation=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    forwarded = json.loads(completed.stdout)
+    assert forwarded == {
+        "IROHA_LOCALNET_DIR": None,
+        "IROHA_LOCALNET_TEST": None,
+        "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION": "1",
+    }
+
+
+def test_gradle_jvm_hermetic_profile_requires_sorafs_native_requirement(
+    tmp_path: Path,
+) -> None:
+    """Omitting the SoraFS native requirement fails before the child executes."""
+
+    completed = run_gradle_jvm_hermetic_probe(
+        tmp_path,
+        require_sorafs_native_validation=False,
+    )
+    assert completed.returncode == 1
+    assert completed.stdout == ""
+    assert "environment inventory is not exact" in completed.stderr
+    assert "missing=['IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION']" in completed.stderr
+
+
+def test_gradle_jvm_localnet_profile_forwards_exact_runtime_handles(
+    tmp_path: Path,
+) -> None:
+    """The localnet profile forwards reviewed handles without weakening JNI gates."""
+
+    completed = run_gradle_jvm_hermetic_probe(
+        tmp_path,
+        require_sorafs_native_validation=True,
+        profile="gradle-jvm-localnet",
+        include_localnet_dir=True,
+        include_localnet_test=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    forwarded = json.loads(completed.stdout)
+    assert forwarded == {
+        "IROHA_LOCALNET_DIR": str(tmp_path / "four-peer-localnet"),
+        "IROHA_LOCALNET_TEST": "1",
+        "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION": "1",
+    }
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ("IROHA_LOCALNET_DIR", "IROHA_LOCALNET_TEST"),
+)
+def test_gradle_jvm_localnet_profile_requires_both_runtime_handles(
+    tmp_path: Path,
+    missing: str,
+) -> None:
+    """Either missing localnet handle rejects the command before child execution."""
+
+    completed = run_gradle_jvm_hermetic_probe(
+        tmp_path,
+        require_sorafs_native_validation=True,
+        profile="gradle-jvm-localnet",
+        include_localnet_dir=missing != "IROHA_LOCALNET_DIR",
+        include_localnet_test=missing != "IROHA_LOCALNET_TEST",
+    )
+    assert completed.returncode == 1
+    assert completed.stdout == ""
+    assert "environment inventory is not exact" in completed.stderr
+    assert f"missing=['{missing}']" in completed.stderr
+
+
+def test_kotlin_localnet_release_lane_is_mandatory_and_payload_free() -> None:
+    """Freeze four-peer execution, zero skips, teardown, and safe CI evidence."""
+
+    runner = (REPO_ROOT / "scripts/run_mobile_hermetic_command.py").read_text(
+        encoding="utf-8"
+    )
+    gate = (REPO_ROOT / "ci/check_kagemusha_jvm_native_bridge.sh").read_text(
+        encoding="utf-8"
+    )
+    mobile = (REPO_ROOT / ".github/workflows/mobile_sdk_artifacts.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"gradle-jvm-localnet": GRADLE_JVM_ENVIRONMENT' in runner
+    assert '"IROHA_LOCALNET_DIR"' in runner
+    assert '"IROHA_LOCALNET_TEST"' in runner
+    for token in (
+        'LOCALNET_DEPLOYER="$ROOT_DIR/scripts/deploy_localnet.sh"',
+        'LOCALNET_TEST_CLASS="org.hyperledger.iroha.sdk.client.ZkAssetShieldLocalnetTest"',
+        '--profile gradle-jvm-localnet',
+        '--set "IROHA_LOCALNET_DIR=$LOCALNET_DIR"',
+        '--set "IROHA_LOCALNET_TEST=1"',
+        '"$CARGO_BINARY" build --locked --offline --target "$HOST_TRIPLE"',
+        "-p iroha_kagami -p irohad -p iroha_cli",
+        "--peers 4",
+        "verify_four_peer_localnet",
+        '"http://${torii_address}/health"',
+        "stop_localnet || fail",
+        'aggregate["skipped"] != 0',
+        '"tests": 1, "skipped": 0, "failures": 0, "errors": 0',
+        '"peer_count": 4',
+        '"teardown_complete": True',
+    ):
+        assert token in gate
+    assert gate.count('write_exclusive("') == 3
+    assert 'write_exclusive("zk-asset-shield-localnet.junit.xml"' in gate
+    assert 'write_exclusive("c-jni-native-abi21.json"' in gate
+    assert 'write_exclusive("zk-asset-shield-localnet-summary.json"' in gate
+    for forbidden in ("client.toml", "genesis.json", "private_key"):
+        assert f'write_exclusive("{forbidden}' not in gate
+
+    assert "timeout-minutes: 180" in mobile
+    assert 'KAGEMUSHA_JVM_NATIVE_EVIDENCE_DIR: ${{ runner.temp }}/' in mobile
+    assert "name: Upload Kotlin four-peer localnet evidence" in mobile
+    assert "if: always()" in mobile
+    assert "if-no-files-found: error" in mobile
+    assert '"scripts/deploy_localnet.sh"' in mobile
+
+    kagemusha_paths = pull_request_paths("pr_kagemusha_payload_bench.yml")
+    assert {
+        "Cargo.toml",
+        "crates/iroha_cli/**",
+        "crates/iroha_config/**",
+        "crates/iroha_core/**",
+        "crates/irohad/**",
+        "kotlin/core-jvm/**",
+        "scripts/deploy_localnet.sh",
+        "scripts/run_mobile_hermetic_command.py",
+    } <= kagemusha_paths
+
+
+def kotlin_localnet_evidence_program() -> str:
+    """Extract the dependency-free JUnit/evidence checker embedded in the gate."""
+
+    gate = (REPO_ROOT / "ci/check_kagemusha_jvm_native_bridge.sh").read_text(
+        encoding="utf-8"
+    )
+    start = '  "$HOST_TRIPLE" <<\'PY\'\n'
+    end = "\nPY\n\nrun_full_suite java"
+    assert gate.count(start) == 1
+    program, separator, _ = gate.split(start, 1)[1].partition(end)
+    assert separator == end
+    return program
+
+
+def write_junit(
+    path: Path,
+    *,
+    suite: str,
+    tests: int,
+    skipped: int,
+    skipped_node: bool | None = None,
+) -> None:
+    """Write one bounded Gradle-shaped JUnit fixture."""
+
+    include_skipped_node = bool(skipped) if skipped_node is None else skipped_node
+    skipped_xml = "<skipped/>" if include_skipped_node else ""
+    path.write_text(
+        f'<testsuite name="{suite}" tests="{tests}" skipped="{skipped}" '
+        'failures="0" errors="0">'
+        f'<testcase name="case()" classname="{suite}">{skipped_xml}</testcase>'
+        "</testsuite>\n",
+        encoding="utf-8",
+    )
+
+
+def run_kotlin_localnet_evidence_program(
+    tmp_path: Path,
+    *,
+    target_skipped: int = 0,
+    aggregate_skipped: int = 0,
+    aggregate_skipped_node: bool | None = None,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    """Run the embedded validator against synthetic payload-free reports."""
+
+    expected_class = "org.hyperledger.iroha.sdk.client.ZkAssetShieldLocalnetTest"
+    result_dir = tmp_path / "results"
+    evidence_dir = tmp_path / "evidence"
+    result_dir.mkdir()
+    evidence_dir.mkdir()
+    target = result_dir / f"TEST-{expected_class}.xml"
+    write_junit(
+        target,
+        suite=expected_class,
+        tests=1,
+        skipped=target_skipped,
+    )
+    write_junit(
+        result_dir / "TEST-release-companion.xml",
+        suite="release-companion",
+        tests=1,
+        skipped=aggregate_skipped,
+        skipped_node=aggregate_skipped_node,
+    )
+    host_target = "x86_64-unknown-linux-gnu"
+    native = tmp_path / "c-jni-native-abi21.json"
+    native.write_text(
+        json.dumps(
+            {
+                "artifact_sha256": "a" * 64,
+                "bridge_abi_version": 21,
+                "sdk": "c-jni",
+                "source_commit": "b" * 40,
+                "source_tree_clean": True,
+                "target": host_target,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    python = Path(sys.executable).resolve(strict=True)
+    completed = subprocess.run(
+        (
+            str(python),
+            "-I",
+            "-S",
+            "-",
+            str(result_dir),
+            str(target),
+            str(native),
+            str(evidence_dir),
+            host_target,
+        ),
+        input=kotlin_localnet_evidence_program(),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return completed, evidence_dir
+
+
+def test_kotlin_localnet_evidence_validator_emits_only_safe_success_files(
+    tmp_path: Path,
+) -> None:
+    """A clean no-skip result emits only JUnit, ABI, and summary evidence."""
+
+    completed, evidence_dir = run_kotlin_localnet_evidence_program(tmp_path)
+    assert completed.returncode == 0, completed.stderr
+    assert {path.name for path in evidence_dir.iterdir()} == {
+        "c-jni-native-abi21.json",
+        "zk-asset-shield-localnet-summary.json",
+        "zk-asset-shield-localnet.junit.xml",
+    }
+    summary = json.loads(
+        (evidence_dir / "zk-asset-shield-localnet-summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert summary["status"] == "passed"
+    assert summary["peer_count"] == 4
+    assert summary["teardown_complete"] is True
+    assert summary["target_suite"] == {
+        "errors": 0,
+        "failures": 0,
+        "name": "org.hyperledger.iroha.sdk.client.ZkAssetShieldLocalnetTest",
+        "skipped": 0,
+        "tests": 1,
+    }
+    assert summary["aggregate"]["skipped"] == 0
+
+
+@pytest.mark.parametrize(
+    ("target_skipped", "aggregate_skipped", "aggregate_skipped_node", "message"),
+    (
+        (1, 0, None, "JUnit counters are not release-ready"),
+        (0, 1, None, "release suite may not contain skipped tests"),
+        (0, 0, True, "counters do not match outcome nodes"),
+    ),
+)
+def test_kotlin_localnet_evidence_validator_rejects_every_skip(
+    tmp_path: Path,
+    target_skipped: int,
+    aggregate_skipped: int,
+    aggregate_skipped_node: bool | None,
+    message: str,
+) -> None:
+    """Neither the target integration case nor a companion may be skipped."""
+
+    completed, evidence_dir = run_kotlin_localnet_evidence_program(
+        tmp_path,
+        target_skipped=target_skipped,
+        aggregate_skipped=aggregate_skipped,
+        aggregate_skipped_node=aggregate_skipped_node,
+    )
+    assert completed.returncode != 0
+    assert message in completed.stderr
+    assert list(evidence_dir.iterdir()) == []
+
+
 def test_repository_wires_exact_abi21_release_contract() -> None:
     """Freeze the fail-closed source and CI wiring without loading a native binary."""
 
@@ -564,8 +1220,11 @@ def test_repository_wires_exact_abi21_release_contract() -> None:
         "nativeSignerContractRevision() == REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION"
         in java_signer
     )
-    assert "REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 1" in kotlin_signer
-    assert "REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION = 1" in java_signer
+    assert "REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 2" in kotlin_signer
+    assert "REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION = 2" in java_signer
+    roadmap = read("roadmap.md")
+    assert "`NativeSignerBridge` JNI contract revision 2" in roadmap
+    assert "`NativeSignerBridge` JNI contract revision 1" not in roadmap
     assert "nativeBridgeAbiVersion() >= REQUIRED_BRIDGE_ABI_VERSION" not in kotlin_signer
     assert "nativeBridgeAbiVersion() >= REQUIRED_BRIDGE_ABI_VERSION" not in java_signer
     assert (
@@ -694,6 +1353,16 @@ def test_repository_wires_exact_abi21_release_contract() -> None:
     assert "resolve_trusted_python312()" in jni_lane
     assert "MOBILE_SDK_PYTHON_BINARY" in jni_lane
     assert "sys.version_info[:2] != (3, 12)" in jni_lane
+    assert 'if [[ -n "${NORITO_MOBILE_JAVA_HOME:-}" ]]; then' in jni_lane
+    assert 'JAVA_HOME_DIR="$NORITO_MOBILE_JAVA_HOME"' in jni_lane
+    assert (
+        jni_lane.index('if [[ -n "${NORITO_MOBILE_JAVA_HOME:-}" ]]; then')
+        < jni_lane.index("/usr/libexec/java_home -v 21")
+    )
+    assert (
+        "NORITO_MOBILE_JAVA_HOME or the macOS Java locator must provide an "
+        "absolute regular JDK directory"
+    ) in jni_lane
     assert '"$PYTHON_BINARY" -I -S' in jni_lane
     assert '--set "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION=1"' in jni_lane
     assert "--sdk c-jni" in jni_lane

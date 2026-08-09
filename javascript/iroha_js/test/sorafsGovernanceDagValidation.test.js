@@ -92,7 +92,7 @@ governanceLogNodeNativeTest(
   },
 );
 
-test("validateGovernanceLogNode requires one exact expected node CID", () => {
+test("validateGovernanceLogNode requires the canonical expected node CID field", () => {
   assert.throws(
     () => validateGovernanceLogNode(Buffer.alloc(1)),
     /options must be an object/i,
@@ -104,10 +104,9 @@ test("validateGovernanceLogNode requires one exact expected node CID", () => {
   assert.throws(
     () =>
       validateGovernanceLogNode(Buffer.alloc(1), {
-        expectedNodeCid: Buffer.alloc(32),
         expected_node_cid: Buffer.alloc(32),
       }),
-    /exactly one/i,
+    /unsupported fields/i,
   );
   for (const invalidLength of [0, 31, 33]) {
     assert.throws(
@@ -182,8 +181,8 @@ test("validateGovernanceDagBlock accepts the canonical signed fixture", () => {
 test("validateGovernanceDagBlock rejects an expected CID mismatch", () => {
   const { root } = governanceFixtures();
   const outcome = validateGovernanceDagBlock(root, {
-    expected_block_cid: Buffer.alloc(32, 0x7f),
-    generated_at: 123,
+    expectedBlockCid: Buffer.alloc(32, 0x7f),
+    generatedAtUnix: 123,
   });
 
   assertGovernanceOutcome(
@@ -198,7 +197,7 @@ test("validateGovernanceDagHeadChain accepts canonical root-to-head order", () =
     head,
     [
       {
-        payload: root,
+        bytes: root,
         label: "dag_block_0_v1.to",
       },
       {
@@ -223,8 +222,8 @@ test("validateGovernanceDagHeadChain rejects reordered blocks", () => {
   const outcome = validateGovernanceDagHeadChain(
     head,
     [
-      { payload: child },
-      { payload: root },
+      { bytes: child },
+      { bytes: root },
     ],
     { generatedAtUnix: 123 },
   );
@@ -264,8 +263,8 @@ test("governance DAG validators match canonical noncanonical, signature, and pre
   const headSignatureOutcome = validateGovernanceDagHeadChain(
     governanceFixture("dag_head_bad_signature_v1.to"),
     [
-      { payload: root, label: "dag_block_0_v1.to" },
-      { payload: child, label: "dag_block_1_v1.to" },
+      { bytes: root, label: "dag_block_0_v1.to" },
+      { bytes: child, label: "dag_block_1_v1.to" },
     ],
     {
       headLabel: "dag_head_bad_signature_v1.to",
@@ -280,9 +279,9 @@ test("governance DAG validators match canonical noncanonical, signature, and pre
   const predecessorOutcome = validateGovernanceDagHeadChain(
     governanceFixture("dag_head_bad_predecessor_v1.to"),
     [
-      { payload: root, label: "dag_block_0_v1.to" },
+      { bytes: root, label: "dag_block_0_v1.to" },
       {
-        payload: governanceFixture("dag_block_1_bad_predecessor_v1.to"),
+        bytes: governanceFixture("dag_block_1_bad_predecessor_v1.to"),
         label: "dag_block_1_bad_predecessor_v1.to",
       },
     ],
@@ -294,6 +293,41 @@ test("governance DAG validators match canonical noncanonical, signature, and pre
   assertGovernanceOutcome(
     predecessorOutcome,
     "dag_head_bad_predecessor_validation_outcome_v1.json",
+  );
+});
+
+test("governance DAG wrappers reject retired field aliases before native dispatch", () => {
+  const bytes = Buffer.alloc(1);
+  assert.throws(
+    () =>
+      validateGovernanceLogNode(bytes, {
+        expectedNodeCid: Buffer.alloc(32),
+        generated_at: 1,
+      }),
+    /unsupported fields/i,
+  );
+  for (const options of [
+    { expected_block_cid: Buffer.alloc(32) },
+    { generated_at: 1 },
+  ]) {
+    assert.throws(
+      () => validateGovernanceDagBlock(bytes, options),
+      /unsupported fields/i,
+    );
+  }
+  for (const block of [
+    { payload: bytes },
+    { noritoBytes: bytes },
+    { norito_bytes: bytes },
+  ]) {
+    assert.throws(
+      () => validateGovernanceDagHeadChain(bytes, [block]),
+      /unsupported fields/i,
+    );
+  }
+  assert.throws(
+    () => validateGovernanceDagHeadChain(bytes, [{ bytes }], { head_label: "head.to" }),
+    /unsupported fields/i,
   );
 });
 
@@ -332,7 +366,7 @@ test("governance DAG wrappers enforce label and block-count bounds", () => {
         head,
         Array.from(
           { length: SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1 + 1 },
-          () => ({ payload: root }),
+          () => ({ bytes: root }),
         ),
       ),
     /1\.\.=64 entries/i,

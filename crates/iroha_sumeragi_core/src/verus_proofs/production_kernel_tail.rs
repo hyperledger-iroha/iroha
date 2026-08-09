@@ -4,6 +4,319 @@
 
 verus! {
 
+/// Exact executable volatile-cardinality checker used by production.
+pub fn verified_volatile_summary_gate(
+    summary: ProductionVolatileSummaryProjection,
+    validator_count: u64,
+) -> (accepted: bool)
+    ensures
+        accepted ==> production_volatile_summary_well_formed(summary, validator_count),
+{
+    volatile_summary_well_formed_body!(summary, validator_count)
+}
+
+/// Exact executable signed-completion classifier used by production.
+pub fn verified_signed_message_class_gate(
+    facts: ProductionTransitionFactsProjection,
+) -> (accepted: bool)
+    ensures
+        accepted ==> production_signed_message_class_relation(facts),
+{
+    let accepted = signed_message_class_body!(facts);
+    proof {
+        reveal(production_signed_message_class_relation);
+    }
+    accepted
+}
+
+/// Exact executable stutter-action checker used by production.
+pub fn verified_stutter_action_gate(
+    facts: ProductionTransitionFactsProjection,
+) -> (accepted: bool)
+    ensures
+        accepted ==> production_stutter_action_relation(facts),
+{
+    let accepted = stutter_action_body!(facts);
+    proof {
+        reveal(production_stutter_action_relation);
+    }
+    accepted
+}
+
+/// Exact executable begin-WAL action checker used by production.
+pub fn verified_begin_wal_action_gate(
+    facts: ProductionTransitionFactsProjection,
+) -> (accepted: bool)
+    ensures
+        accepted ==> production_begin_wal_action_relation(facts),
+{
+    let accepted = begin_wal_action_body!(facts);
+    proof {
+        reveal(production_begin_wal_action_relation);
+    }
+    accepted
+}
+
+/// Exact executable acknowledge-WAL action checker used by production.
+pub fn verified_acknowledge_wal_action_gate(
+    facts: ProductionTransitionFactsProjection,
+) -> (accepted: bool)
+    ensures
+        accepted ==> production_acknowledge_wal_action_relation(facts),
+{
+    let accepted = acknowledge_wal_action_body!(facts);
+    proof {
+        reveal(production_acknowledge_wal_action_relation);
+    }
+    accepted
+}
+
+/// Exact executable successful-validation effect checker used by production.
+pub fn verified_validation_completed_action_gate(
+    facts: ProductionTransitionFactsProjection,
+) -> (accepted: bool)
+    ensures
+        accepted ==> production_validation_completed_action_relation(facts),
+{
+    let accepted = validation_completed_action_body!(facts, verified_effect_count_gate);
+    proof {
+        reveal(production_validation_completed_action_relation);
+    }
+    accepted
+}
+
+/// Exact executable body-progress action checker used by production.
+pub fn verified_body_progress_action_gate(
+    facts: ProductionTransitionFactsProjection,
+) -> (accepted: bool)
+    ensures
+        accepted ==> production_body_progress_action_relation(facts),
+{
+    let accepted = body_progress_action_body!(facts, verified_validation_completed_action_gate);
+    proof {
+        reveal(production_body_progress_action_relation);
+    }
+    accepted
+}
+
+/// Exact executable volatile-protocol action checker used by production.
+#[verifier::spinoff_prover]
+pub fn verified_volatile_protocol_action_gate(
+    facts: ProductionTransitionFactsProjection,
+) -> (accepted: bool)
+    ensures
+        accepted ==> production_volatile_protocol_action_relation(facts),
+{
+    let accepted = volatile_protocol_action_body!(facts);
+    proof {
+        reveal(production_volatile_protocol_action_relation);
+    }
+    accepted
+}
+
+/// Exact executable application-completion action checker used by production.
+pub fn verified_complete_application_action_gate(
+    facts: ProductionTransitionFactsProjection,
+) -> (accepted: bool)
+    ensures
+        accepted ==> production_complete_application_action_relation(facts),
+{
+    let accepted = complete_application_action_body!(facts);
+    proof {
+        reveal(production_complete_application_action_relation);
+    }
+    accepted
+}
+
+/// Exact executable replay-resumption checker used by production.
+pub fn verified_resume_after_replay_action_gate(
+    facts: ProductionTransitionFactsProjection,
+) -> (accepted: bool)
+    ensures
+        accepted ==> production_resume_after_replay_action_relation(facts),
+{
+    let accepted = resume_after_replay_action_body!(facts, verified_effect_count_gate);
+    proof {
+        reveal(production_resume_after_replay_action_relation);
+    }
+    accepted
+}
+
+/// Exact executable action-discriminant checker used by production.
+pub fn verified_action_kind_gate(
+    facts: ProductionTransitionFactsProjection,
+) -> (accepted: bool)
+    ensures
+        accepted ==> production_action_kind_relation(facts),
+{
+    let accepted = action_kind_relation_body!(
+        facts,
+        verified_stutter_action_gate,
+        verified_begin_wal_action_gate,
+        verified_acknowledge_wal_action_gate,
+        verified_body_progress_action_gate,
+        verified_volatile_protocol_action_gate,
+        verified_complete_application_action_gate,
+        verified_resume_after_replay_action_gate,
+    );
+    proof {
+        reveal(production_action_kind_relation);
+    }
+    accepted
+}
+
+/// Exact executable action/WAL/signature-class checker used by production.
+pub fn verified_named_action_gate(
+    facts: ProductionTransitionFactsProjection,
+) -> (accepted: bool)
+    ensures
+        accepted ==> production_named_action_relation(facts),
+{
+    let accepted = production_action_relation_body!(
+        facts,
+        verified_signed_message_class_gate,
+        verified_action_kind_gate,
+    );
+    proof {
+        reveal(production_named_action_relation);
+    }
+    accepted
+}
+
+/// Exact executable per-slot authorization checker used by production.
+pub fn verified_effect_slots_gate(
+    trace: ProductionEffectTraceProjection,
+) -> (accepted: bool)
+    ensures
+        accepted ==> production_effect_slots_authorized(trace),
+{
+    effect_slots_authorized_body!(trace)
+}
+
+/// Exact executable effect-discriminant counter used by production.
+pub fn verified_effect_count_gate(
+    trace: ProductionEffectTraceProjection,
+    kind: u8,
+) -> (count: u64)
+    ensures
+        count == production_effect_count(trace, kind),
+{
+    effect_count_body!(trace, kind)
+}
+
+/// Exact executable order constraints used by production.
+pub fn verified_effect_order_constraints_gate(
+    trace: ProductionEffectTraceProjection,
+    event_kind: u8,
+    persist_count: u64,
+    fetch_count: u64,
+    store_count: u64,
+    validate_count: u64,
+    sign_count: u64,
+    apply_count: u64,
+    enter_count: u64,
+) -> (accepted: bool)
+    ensures
+        accepted ==> production_effect_order_constraints(
+            trace,
+            event_kind,
+            persist_count,
+            fetch_count,
+            store_count,
+            validate_count,
+            sign_count,
+            apply_count,
+            enter_count,
+        ),
+{
+    effect_order_constraints_body!(
+        trace,
+        event_kind,
+        persist_count,
+        fetch_count,
+        store_count,
+        validate_count,
+        sign_count,
+        apply_count,
+        enter_count,
+    )
+}
+
+/// Exact executable vector-order checker used by production.
+pub fn verified_effect_order_gate(
+    trace: ProductionEffectTraceProjection,
+    event_kind: u8,
+) -> (accepted: bool)
+    ensures
+        accepted ==> production_effect_order_relation(trace, event_kind),
+{
+    effect_ordering_gate_body!(
+        trace,
+        event_kind,
+        verified_effect_count_gate,
+        verified_effect_order_constraints_gate,
+    )
+}
+
+/// Exact executable combined effect checker used by the production gate.
+pub fn verified_effect_trace_gate(
+    trace: ProductionEffectTraceProjection,
+    event_kind: u8,
+) -> (accepted: bool)
+    ensures
+        accepted ==> production_effect_trace_relation(trace, event_kind),
+{
+    effect_trace_gate_body!(
+        trace,
+        event_kind,
+        verified_effect_slots_gate,
+        verified_effect_order_gate,
+    )
+}
+
+/// Exact executable branch constraints used by the production gate.
+pub fn verified_transition_branch_constraints_gate(
+    facts: ProductionTransitionFactsProjection,
+    persist_count: u64,
+    fetch_count: u64,
+    sign_count: u64,
+    apply_count: u64,
+    enter_count: u64,
+) -> (accepted: bool)
+    ensures
+        accepted ==> production_transition_branch_constraints(
+            facts,
+            persist_count,
+            fetch_count,
+            sign_count,
+            apply_count,
+            enter_count,
+        ),
+{
+    transition_branch_constraints_body!(
+        facts,
+        persist_count,
+        fetch_count,
+        sign_count,
+        apply_count,
+        enter_count,
+    )
+}
+
+/// Exact executable branch checker used by the production gate.
+pub fn verified_transition_branch_gate(
+    facts: ProductionTransitionFactsProjection,
+) -> (accepted: bool)
+    ensures
+        accepted ==> production_transition_branch_relation(facts),
+{
+    transition_branch_gate_body!(
+        facts,
+        verified_effect_count_gate,
+        verified_transition_branch_constraints_gate,
+    )
+}
+
 /// Exact executable decision procedure used by `refinement::accepts` in a
 /// normal build.  The body is one shared macro expansion, not a transcription.
 pub fn verified_production_transition_gate(

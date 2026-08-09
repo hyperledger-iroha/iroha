@@ -59,8 +59,7 @@ DEFAULT_REPORT_DIR = (
 )
 DEFAULT_TRACKED_FIXTURE = (
     REPO_ROOT
-    / "docs"
-    / "source"
+    / "specs"
     / "sdk"
     / "android"
     / "generated"

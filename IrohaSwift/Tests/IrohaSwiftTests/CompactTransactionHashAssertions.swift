@@ -3,9 +3,9 @@ import XCTest
 
 func canonicalSignedTransactionPayload(_ signedTransaction: Data) throws -> Data {
     var reader = CanonicalNoritoReader(data: signedTransaction)
-    _ = try reader.readField()
-    let payload = try reader.readField()
-    _ = try reader.readField()
+    _ = try reader.readCompactField()
+    let payload = try reader.readCompactField()
+    _ = try reader.readCompactField()
     guard reader.remaining() == 0 else {
         throw CanonicalNoritoDecodingError.invalidField(
             "signed transaction must contain exactly three fields"

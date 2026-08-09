@@ -81,24 +81,39 @@ impl RuntimeProviderBrokerLifecycleV1 {
     where
         R: FnOnce(),
     {
+        match self.publish_ready_fallible(|| {
+            on_ready();
+            Ok::<(), std::convert::Infallible>(())
+        }) {
+            Ok(published) => published,
+            Err(never) => match never {},
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) fn publish_ready_fallible<R, E>(&self, on_ready: R) -> Result<bool, E>
+    where
+        R: FnOnce() -> Result<(), E>,
+    {
         let _publication = self
             .readiness_publication_gate
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self
-            .state
-            .compare_exchange(
-                BROKER_LIFECYCLE_STARTING_V1,
-                BROKER_LIFECYCLE_READY_V1,
-                std::sync::atomic::Ordering::SeqCst,
-                std::sync::atomic::Ordering::SeqCst,
-            )
-            .is_err()
-        {
-            return false;
+        if self.state.load(std::sync::atomic::Ordering::SeqCst) != BROKER_LIFECYCLE_STARTING_V1 {
+            return Ok(false);
         }
-        on_ready();
-        true
+        if let Err(error) = on_ready() {
+            self.state.store(
+                BROKER_LIFECYCLE_STOPPING_V1,
+                std::sync::atomic::Ordering::SeqCst,
+            );
+            return Err(error);
+        }
+        self.state.store(
+            BROKER_LIFECYCLE_READY_V1,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        Ok(true)
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -181,6 +196,12 @@ impl StockRuntimeProviderBrokerRegistryV1 {
     }
 }
 
+const fn stock_runtime_provider_slot_is_supported(slot: IrohaRuntimeProviderSlotV1) -> bool {
+    let wire_id = slot.wire_id();
+    wire_id >= IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper.wire_id()
+        && wire_id <= IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id()
+}
+
 impl IrohaRuntimeProviderRegistryV1 for StockRuntimeProviderBrokerRegistryV1 {
     fn resolve(
         &self,
@@ -190,68 +211,13 @@ impl IrohaRuntimeProviderRegistryV1 for StockRuntimeProviderBrokerRegistryV1 {
             return Ok(IrohaRuntimeDeps::default());
         }
 
-        // Every currently defined V1 slot is enumerated explicitly. Unknown
-        // or future roles remain deliberately fail-closed until their bounded
-        // protocol surface is reviewed and added here.
-        if bindings.iter().any(|binding| {
-            !matches!(
-                binding.slot(),
-                IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper
-                    | IrohaRuntimeProviderSlotV1::PrivacyCyclePrfProvider
-                    | IrohaRuntimeProviderSlotV1::PrivacyReleaseAnchor
-                    | IrohaRuntimeProviderSlotV1::TransparencyLeaderLease
-                    | IrohaRuntimeProviderSlotV1::FencedPrivacyPublisher
-                    | IrohaRuntimeProviderSlotV1::FencedPrivacyHeadReader
-                    | IrohaRuntimeProviderSlotV1::GovernanceDagSigner
-                    | IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator
-                    | IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator
-                    | IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore
-                    | IrohaRuntimeProviderSlotV1::StreamTokenSigner
-                    | IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner
-                    | IrohaRuntimeProviderSlotV1::AppealFinanceCheckpoint
-                    | IrohaRuntimeProviderSlotV1::ProofOutcomeTransactionSigner
-                    | IrohaRuntimeProviderSlotV1::RepairTransactionSigner
-                    | IrohaRuntimeProviderSlotV1::ReserveTransactionSigner
-                    | IrohaRuntimeProviderSlotV1::OrderbookTransactionSigner
-                    | IrohaRuntimeProviderSlotV1::ModerationTransactionSigner
-                    | IrohaRuntimeProviderSlotV1::ModerationSettlementHandoff
-                    | IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff
-                    | IrohaRuntimeProviderSlotV1::ModerationPanelNotification
-                    | IrohaRuntimeProviderSlotV1::ModerationCheckpointStore
-                    | IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource
-                    | IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSignerResolver
-                    | IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSigner
-                    | IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore
-                    | IrohaRuntimeProviderSlotV1::ProviderIngestRetentionAuthority
-                    | IrohaRuntimeProviderSlotV1::ReputationFinalizedArchiveRetentionAuthority
-                    | IrohaRuntimeProviderSlotV1::PopCredentialProviderRegistry
-                    | IrohaRuntimeProviderSlotV1::PotrGatewaySigner
-                    | IrohaRuntimeProviderSlotV1::PotrProviderSigner
-                    | IrohaRuntimeProviderSlotV1::GatewayAcmeClient
-                    | IrohaRuntimeProviderSlotV1::GatewayComplianceFeedTransport
-                    | IrohaRuntimeProviderSlotV1::ReputationJournalTransactionSubmitter
-                    | IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint
-                    | IrohaRuntimeProviderSlotV1::ReputationThresholdSigner
-                    | IrohaRuntimeProviderSlotV1::ReputationGovernanceDag
-                    | IrohaRuntimeProviderSlotV1::BillingFinalizedQuery
-                    | IrohaRuntimeProviderSlotV1::BillingJournalVerifier
-                    | IrohaRuntimeProviderSlotV1::BillingStatementSigner
-                    | IrohaRuntimeProviderSlotV1::BillingStatementPublisher
-                    | IrohaRuntimeProviderSlotV1::BillingAcknowledgementAuthority
-                    | IrohaRuntimeProviderSlotV1::BillingEpochWitnessStore
-                    | IrohaRuntimeProviderSlotV1::PorFinalizedReplayArchive
-                    | IrohaRuntimeProviderSlotV1::EvidenceViewerWebAuthn
-                    | IrohaRuntimeProviderSlotV1::EvidenceViewerGrantAuthority
-                    | IrohaRuntimeProviderSlotV1::EvidenceViewerReceiptSigner
-                    | IrohaRuntimeProviderSlotV1::EvidenceViewerErasure
-                    | IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore
-                    | IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive
-                    | IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher
-                    | IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner
-                    | IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider
-                    | IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry
-            )
-        }) {
+        // The frozen V1 wire ids are a contiguous, exhaustively tested
+        // whitelist. A future role outside that closed interval fails until
+        // this registry and its bounded protocol surface are extended.
+        if bindings
+            .iter()
+            .any(|binding| !stock_runtime_provider_slot_is_supported(binding.slot()))
+        {
             return Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution);
         }
 
@@ -346,6 +312,74 @@ fn map_governance_service_registry_error(
 mod governance_service_registry_tests {
     use super::*;
     use sorafs_node::GovernanceDagServiceRuntimeProviderRegistryErrorV1 as ServiceError;
+
+    #[test]
+    fn stock_registry_whitelists_every_frozen_v1_slot() {
+        use IrohaRuntimeProviderSlotV1 as Slot;
+
+        let slots = [
+            Slot::ModerationQuarantineKeyWrapper,
+            Slot::PrivacyCyclePrfProvider,
+            Slot::PrivacyReleaseAnchor,
+            Slot::TransparencyLeaderLease,
+            Slot::FencedPrivacyPublisher,
+            Slot::FencedPrivacyHeadReader,
+            Slot::GovernanceDagSigner,
+            Slot::GovernanceDagIpfsAuthenticator,
+            Slot::GovernanceDagHeadAuthenticator,
+            Slot::GovernanceDagCheckpointStore,
+            Slot::StreamTokenSigner,
+            Slot::AppealFinanceTransactionSigner,
+            Slot::AppealFinanceCheckpoint,
+            Slot::ProofOutcomeTransactionSigner,
+            Slot::RepairTransactionSigner,
+            Slot::ReserveTransactionSigner,
+            Slot::OrderbookTransactionSigner,
+            Slot::ModerationTransactionSigner,
+            Slot::ModerationSettlementHandoff,
+            Slot::ModerationPublicationHandoff,
+            Slot::ModerationPanelNotification,
+            Slot::EvidenceViewerWebAuthn,
+            Slot::EvidenceViewerGrantAuthority,
+            Slot::EvidenceViewerReceiptSigner,
+            Slot::EvidenceViewerErasure,
+            Slot::EvidenceViewerCheckpointStore,
+            Slot::PopCredentialProviderRegistry,
+            Slot::PotrGatewaySigner,
+            Slot::PotrProviderSigner,
+            Slot::GatewayAcmeClient,
+            Slot::GatewayComplianceFeedTransport,
+            Slot::ReputationJournalTransactionSubmitter,
+            Slot::ReputationThresholdSigner,
+            Slot::ReputationGovernanceDag,
+            Slot::BillingFinalizedQuery,
+            Slot::BillingJournalVerifier,
+            Slot::BillingStatementSigner,
+            Slot::BillingStatementPublisher,
+            Slot::BillingAcknowledgementAuthority,
+            Slot::BillingEpochWitnessStore,
+            Slot::ProviderIngestAuthenticatedSource,
+            Slot::ProviderIngestCompletionSignerResolver,
+            Slot::ProviderIngestCompletionSigner,
+            Slot::ProviderIngestCheckpointStore,
+            Slot::ProviderIngestRetentionAuthority,
+            Slot::PorFinalizedReplayArchive,
+            Slot::EvidenceViewerCompactionArchive,
+            Slot::ReputationFinalizedArchiveRetentionAuthority,
+            Slot::SoracloudRuntimeMutationSigner,
+            Slot::ReputationJournalCheckpoint,
+            Slot::SoracloudHfInferenceCredentialProvider,
+            Slot::ModerationCheckpointStore,
+            Slot::EvidenceViewerTransparencyPublisher,
+            Slot::StreamTokenGatewayAdmission,
+            Slot::ModerationPanelNotificationArchive,
+        ];
+        assert_eq!(slots.len(), 55);
+        for (index, slot) in slots.into_iter().enumerate() {
+            assert_eq!(usize::from(slot.wire_id()), index + 1);
+            assert!(stock_runtime_provider_slot_is_supported(slot));
+        }
+    }
 
     #[test]
     fn registry_errors_map_to_payload_free_service_categories() {
@@ -508,6 +542,8 @@ pub struct RuntimeProviderBrokerBackendsV1 {
     pub(super) governance_dag_checkpoint_store:
         Option<Arc<dyn sorafs_node::GovernanceDagSealedCheckpointStore>>,
     pub(super) stream_token_signer: Option<Arc<dyn iroha_torii::sorafs::StreamTokenRuntimeSigner>>,
+    pub(super) stream_token_gateway_admission:
+        Option<Arc<dyn iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1>>,
     pub(super) appeal_finance_transaction_signers:
         Vec<Arc<dyn iroha_torii::SoraFsAppealFinanceTransactionSigner>>,
     pub(super) appeal_finance_checkpoint:
@@ -541,6 +577,12 @@ pub struct RuntimeProviderBrokerBackendsV1 {
     >,
     pub(super) moderation_checkpoint_store:
         Option<Arc<dyn sorafs_node::moderation_orchestrator::ModerationCheckpointStoreV1>>,
+    pub(super) moderation_panel_notification_archive: Option<
+        Arc<
+            dyn sorafs_node::moderation_orchestrator::
+                ModerationPanelNotificationArchiveV1,
+        >,
+    >,
     pub(super) provider_ingest_authenticated_source: Option<
         Arc<
             dyn crate::sorafs_provider_ingest_runtime::
@@ -687,6 +729,10 @@ impl fmt::Debug for RuntimeProviderBrokerBackendsV1 {
             )
             .field("stream_token_signer", &self.stream_token_signer.is_some())
             .field(
+                "stream_token_gateway_admission",
+                &self.stream_token_gateway_admission.is_some(),
+            )
+            .field(
                 "appeal_finance_transaction_signer_count",
                 &self.appeal_finance_transaction_signers.len(),
             )
@@ -729,6 +775,10 @@ impl fmt::Debug for RuntimeProviderBrokerBackendsV1 {
             .field(
                 "moderation_checkpoint_store",
                 &self.moderation_checkpoint_store.is_some(),
+            )
+            .field(
+                "moderation_panel_notification_archive",
+                &self.moderation_panel_notification_archive.is_some(),
             )
             .field(
                 "provider_ingest_authenticated_source",
@@ -867,6 +917,7 @@ impl RuntimeProviderBrokerBackendsV1 {
             governance_dag_head_authenticator: None,
             governance_dag_checkpoint_store: None,
             stream_token_signer: None,
+            stream_token_gateway_admission: None,
             appeal_finance_transaction_signers: Vec::new(),
             appeal_finance_checkpoint: None,
             proof_outcome_transaction_signer: None,
@@ -878,6 +929,7 @@ impl RuntimeProviderBrokerBackendsV1 {
             moderation_publication_handoff: None,
             moderation_panel_notification: None,
             moderation_checkpoint_store: None,
+            moderation_panel_notification_archive: None,
             provider_ingest_authenticated_source: None,
             provider_ingest_signer_resolver: None,
             provider_ingest_checkpoint_store: None,
@@ -1048,6 +1100,17 @@ impl RuntimeProviderBrokerBackendsV1 {
         signer: Arc<dyn iroha_torii::sorafs::StreamTokenRuntimeSigner>,
     ) -> Self {
         self.stream_token_signer = Some(signer);
+        self
+    }
+
+    /// Attach the deployment-owned stream-token quota, sealed-sequence, and
+    /// ordered callback-outbox provider.
+    #[must_use]
+    pub fn with_stream_token_gateway_admission(
+        mut self,
+        provider: Arc<dyn iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1>,
+    ) -> Self {
+        self.stream_token_gateway_admission = Some(provider);
         self
     }
 
@@ -1460,6 +1523,18 @@ impl RuntimeProviderBrokerBackendsV1 {
         self
     }
 
+    /// Attach the deployment-owned immutable moderation notification archive.
+    #[must_use]
+    pub fn with_moderation_panel_notification_archive(
+        mut self,
+        archive: Arc<
+            dyn sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveV1,
+        >,
+    ) -> Self {
+        self.moderation_panel_notification_archive = Some(archive);
+        self
+    }
+
     /// Attach the deployment-owned signed monotonic evidence transparency publisher.
     #[must_use]
     pub fn with_evidence_viewer_transparency_publisher(
@@ -1491,6 +1566,8 @@ pub enum RuntimeProviderBrokerServerErrorV1 {
     EndpointCleanupFailed,
     /// A canonical protocol or authenticated peer invariant failed.
     Protocol,
+    /// The supervisor readiness publication boundary rejected the transition.
+    ReadinessUnavailable,
     /// This platform lacks the authenticated V1 local transport.
     UnsupportedPlatform,
 }
@@ -1506,6 +1583,9 @@ impl fmt::Display for RuntimeProviderBrokerServerErrorV1 {
                 "runtime-provider broker endpoint cleanup could not be completed safely"
             }
             Self::Protocol => "runtime-provider broker protocol failed",
+            Self::ReadinessUnavailable => {
+                "runtime-provider broker readiness publication is unavailable"
+            }
             Self::UnsupportedPlatform => {
                 "runtime-provider broker transport is unsupported on this platform"
             }
@@ -1515,11 +1595,32 @@ impl fmt::Display for RuntimeProviderBrokerServerErrorV1 {
 
 impl std::error::Error for RuntimeProviderBrokerServerErrorV1 {}
 
-/// Serve the exact catalog on the platform-fixed service-UID-owned endpoint.
+/// Fixed failure returned by a supervisor readiness callback.
+///
+/// The callback retains transport-specific diagnostics inside the deployment
+/// boundary. The broker accepts only this payload-free marker and maps it to
+/// [`RuntimeProviderBrokerServerErrorV1::ReadinessUnavailable`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RuntimeProviderBrokerReadinessErrorV1;
+
+impl fmt::Display for RuntimeProviderBrokerReadinessErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("runtime-provider broker readiness publication failed")
+    }
+}
+
+impl std::error::Error for RuntimeProviderBrokerReadinessErrorV1 {}
+
+/// Serve the exact qualified catalog on the platform-fixed
+/// service-UID-owned endpoint.
 ///
 /// This is the packaged launcher boundary for deployment-owned broker
 /// executables. It blocks in the authenticated accept loop and never loads
 /// credentials, private keys, environment overrides, or test backends.
+/// Each client authenticates a canonical non-empty subset of this catalog and
+/// is confined to that exact subset for the lifetime of its session. This lets
+/// the stock daemon and packaged standalone services share one supervised
+/// broker without weakening binding or operation isolation.
 ///
 /// # Errors
 ///
@@ -1553,9 +1654,12 @@ pub fn serve_runtime_provider_broker_v1(
 /// shutdown that wins suppresses the callback, while a shutdown that loses
 /// waits for the callback to finish before returning.
 ///
-/// The callback must be bounded and infallible, and it must not call
-/// [`RuntimeProviderBrokerLifecycleV1::request_shutdown`] reentrantly. If it
-/// panics, endpoint cleanup is attempted while the panic unwinds.
+/// The callback must be bounded and must not call
+/// [`RuntimeProviderBrokerLifecycleV1::request_shutdown`] reentrantly. The
+/// lifecycle remains in its starting state while the callback runs and becomes
+/// ready only after it returns `Ok(())`. A payload-free callback failure moves
+/// the lifecycle to stopping, removes the endpoint, and returns before the
+/// accept loop is entered.
 ///
 /// After shutdown, the server closes every accepted transport and joins every
 /// session before returning. Synchronous deployment-owned provider methods do
@@ -1566,27 +1670,60 @@ pub fn serve_runtime_provider_broker_v1(
 /// and can precede entry into the trait method by a small in-process interval.
 /// No operation is admitted after the shutdown transition.
 ///
-/// Startup binds an unpredictable staging name in a pinned parent directory,
-/// establishes the socket identity guard before permission changes, then
-/// atomically promotes that entry to the canonical name without replacement.
-/// Portable Linux/macOS pathname APIs do not provide an atomic
-/// “unlink-if-device-and-inode-match” operation. Cleanup resolves and unlinks
-/// relative to the pinned directory descriptor, checks the socket identity
-/// immediately before that unlink, and reports substitution instead of
-/// knowingly removing a different entry. These pathname APIs still leave
-/// check/use intervals around mode changes and cleanup, so the service-owned
-/// runtime directory must exclude untrusted same-UID pathname mutators. If the
-/// broker cannot establish the staging entry's identity immediately after a
-/// successful bind, it closes the listener, reports
-/// [`RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed`], and leaves
-/// that unpredictable staging entry for operator inspection rather than
-/// unlinking an unproven replacement.
+/// Startup acquires a mode-`0600`, single-link instance file with an exclusive
+/// nonblocking lock that remains held for the complete serving lifetime. A
+/// conforming active broker therefore prevents a second process from touching
+/// its endpoint, while a crash releases the lock. After acquiring it, startup
+/// recovers a socket only when the validated lock marker pre-dates this
+/// process; a newly created marker plus an existing endpoint is rejected and
+/// the new marker is removed. Recovery accepts only the exact service UID,
+/// mode, single-link count, and stable device/inode identity. It then binds an
+/// unpredictable staging name in the pinned parent directory and atomically
+/// promotes it to the canonical name without replacement. Stale recovery and
+/// orderly cleanup atomically move the candidate to an OS-random quarantine
+/// name with no replacement, verify the moved identity, and unlink only that
+/// quarantine entry. A mismatch is preserved or restored and fails closed.
+/// The service-owned runtime directory must still exclude untrusted same-UID
+/// pathname mutators.
 ///
 /// # Errors
 ///
 /// Fails before readiness if the catalog/backend set is incomplete, any live
-/// public binding is missing, substituted, stale, revoked, or test-marked, or
-/// the fixed endpoint cannot be created with the required ownership and mode.
+/// public binding is missing, substituted, stale, revoked, or test-marked, the
+/// fixed endpoint cannot be created with the required ownership and mode, or
+/// the readiness callback returns
+/// [`RuntimeProviderBrokerReadinessErrorV1`].
+pub fn serve_runtime_provider_broker_with_fallible_readiness_v1<R>(
+    bindings: &IrohaRuntimeProviderBindingsV1,
+    backends: RuntimeProviderBrokerBackendsV1,
+    lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
+    on_ready: R,
+) -> Result<(), RuntimeProviderBrokerServerErrorV1>
+where
+    R: FnOnce() -> Result<(), RuntimeProviderBrokerReadinessErrorV1>,
+{
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        protocol::serve_with_fallible_readiness(bindings, backends, lifecycle, on_ready)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        lifecycle.request_shutdown();
+        let _ = (bindings, backends, on_ready);
+        Err(RuntimeProviderBrokerServerErrorV1::UnsupportedPlatform)
+    }
+}
+
+/// Serve the exact catalog with an infallible caller-owned readiness callback.
+///
+/// This preserves the original callback contract as a wrapper around
+/// [`serve_runtime_provider_broker_with_fallible_readiness_v1`]. Use the
+/// fallible variant for supervisor transports such as systemd where readiness
+/// publication itself can fail.
+///
+/// # Errors
+///
+/// Preserves every fail-closed server error from the fallible variant.
 pub fn serve_runtime_provider_broker_with_lifecycle_v1<R>(
     bindings: &IrohaRuntimeProviderBindingsV1,
     backends: RuntimeProviderBrokerBackendsV1,
@@ -1596,14 +1733,8 @@ pub fn serve_runtime_provider_broker_with_lifecycle_v1<R>(
 where
     R: FnOnce(),
 {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        protocol::serve_with_lifecycle(bindings, backends, lifecycle, on_ready)
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        lifecycle.request_shutdown();
-        let _ = (bindings, backends, on_ready);
-        Err(RuntimeProviderBrokerServerErrorV1::UnsupportedPlatform)
-    }
+    serve_runtime_provider_broker_with_fallible_readiness_v1(bindings, backends, lifecycle, || {
+        on_ready();
+        Ok(())
+    })
 }

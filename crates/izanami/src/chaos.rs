@@ -3825,7 +3825,7 @@ impl IzanamiRunner {
                         ),
                         metadata,
                     );
-                    let payload = client.prepare_transaction_payload(&transaction);
+                    let payload = Client::prepare_transaction_payload(&transaction);
                     let next_index = built_count.fetch_add(1, Ordering::Relaxed);
                     if next_index >= buffer_capacity as u64 {
                         break;

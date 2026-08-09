@@ -82,6 +82,9 @@ highlight trend regressions.
 
 ## Tooling
 
+- Install the pinned validator dependencies with
+  `python3 -m pip install -r scripts/requirements.txt`; that exact set includes
+  the JSON Schema CLI used by the dashboard target.
 - Render both dashboards: `make swift-dashboards` (invokes schema validator + Swift renderers)
   and enforces SLA thresholds (14-day Norito diff limit, 48h regen SLA, `ci/xcode-swift-parity`
   ≥95% success rate). Override thresholds with `SWIFT_PARITY_MAX_OLDEST_HOURS`,
@@ -97,6 +100,8 @@ highlight trend regressions.
   reusing the schema validation + rendering pipeline.
 - CI entry point: `ci/check_swift_dashboards.sh`.
 - Manual render: `scripts/render_swift_dashboards.sh [/path/to/parity.json [/path/to/ci.json]]`.
+  It prints summaries when `SWIFT_DASHBOARD_OUTPUT_DIR` is unset and writes all
+  three summary files beneath that directory when it is set.
 - Schema validator: `scripts/check_swift_dashboard_data.py <files…>`.
 - Telemetry enrichment: `scripts/swift_enrich_parity_feed.py --input parity.json --salt-epoch …`
   injects salt/override/profile metadata (fed via env vars in `ci/swift_status_export.sh`) so the parity

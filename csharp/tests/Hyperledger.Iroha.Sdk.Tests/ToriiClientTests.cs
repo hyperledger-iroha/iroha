@@ -13,7 +13,7 @@ using Hyperledger.Iroha.Transactions;
 
 namespace Hyperledger.Iroha.Sdk.Tests;
 
-public sealed class ToriiClientTests
+public sealed partial class ToriiClientTests
 {
     private const string AccountOnboardingToken = "0123456789abcdef0123456789ABCDEF";
     private const string OnboardingFixtureAuthority = "sorauﾛ1PﾀR2LBﾃﾋQ8ﾅﾚHｱﾍmtX5Aﾉｽ2ｽヱﾙVｳﾁoJXWpﾄﾖFｸｼ8RC99U";
@@ -33,6 +33,8 @@ public sealed class ToriiClientTests
     private const string VerifyingKeySigningChainId = "test-chain";
     private static readonly string SoraFsAuthorityAccountId = TestAccountId(0x49);
     private static readonly string ExplorerTransactionAuthorityAccountId = TestAccountId(0x4B);
+    private static readonly string MultisigTransactionPayloadBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes("multisig"));
+    private static readonly string MultisigSigningMessageBase64 = Convert.ToBase64String(IrohaHash.Hash(Encoding.UTF8.GetBytes("multisig")));
     private static readonly string ExplorerInstructionAuthorityAccountId = TestAccountId(0x4C);
     private static readonly string ExplorerInstructionAccountId = TestAccountId(0x4D);
     private static readonly string ExplorerDirectoryAccountId = TestAccountId(0x5B);
@@ -7248,181 +7250,6 @@ public sealed class ToriiClientTests
     }
 
     [Fact]
-    public async Task SubmitVpnReceiptAsyncPostsEvidenceAndDeserializesSettlementInstruction()
-    {
-        const string quoteId = "1111111111111111111111111111111111111111111111111111111111111111";
-        const string sessionId = "8989898989898989898989898989898989898989898989898989898989898989";
-
-        using var handler = new RecordingHandler(request =>
-        {
-            var payload = ReadBodyAsJson(request);
-            Assert.Equal(HttpMethod.Post, request.Method);
-            Assert.Equal("/v1/vpn/receipts", request.RequestUri!.AbsolutePath);
-            Assert.Equal("abcd", payload.RootElement.GetProperty("relay_receipt_hex").GetString());
-            Assert.Equal("beef", payload.RootElement.GetProperty("client_voucher_hex").GetString());
-            Assert.Equal(quoteId, payload.RootElement.GetProperty("lease_id_hex").GetString());
-
-            return new HttpResponseMessage(HttpStatusCode.Created)
-            {
-                Content = new StringContent($$"""
-                    {
-                      "session_id": "{{sessionId}}",
-                      "account_id": "{{VpnAccountId}}",
-                      "exit_class": "standard",
-                      "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
-                      "meter_family": "vpn-standard",
-                      "connected_at_ms": 1699999400000,
-                      "disconnected_at_ms": 1700000000000,
-                      "duration_ms": 600000,
-                      "bytes_in": 123,
-                      "bytes_out": 456,
-                      "status": "settled",
-                      "receipt_source": "relay",
-                      "quote_id": "{{quoteId}}",
-                      "payment_tx_hash": "2222222222222222222222222222222222222222222222222222222222222222",
-                      "fee_asset_id": "xor#universal.universal",
-                      "escrow_account_id": "{{VpnEscrowAccountId}}",
-                      "operator_account_id": "{{VpnOperatorAccountId}}",
-                      "lease_fee": "1000000.25",
-                      "earned_fee": "500000.125",
-                      "refunded_fee": "500000.125",
-                      "lease_id_hex": "{{quoteId}}",
-                      "settle_lease_instruction": {
-                        "wire_id": "SettleVpnLease",
-                        "payload_hex": "cafe"
-                      }
-                    }
-                    """),
-            };
-        });
-
-        using var client = CreateSignedVpnClient(handler);
-        var receipt = await client.SubmitVpnReceiptAsync(new ToriiVpnReceiptSubmitRequest
-        {
-            RelayReceiptHex = "0XABCD",
-            ClientVoucherHex = "0xbeef",
-            LeaseIdHex = "0X" + quoteId.ToUpperInvariant(),
-        }, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal(sessionId, receipt.SessionId);
-        Assert.Equal(VpnAccountId, receipt.AccountId);
-        Assert.Equal(VpnEscrowAccountId, receipt.EscrowAccountId);
-        Assert.Equal(VpnOperatorAccountId, receipt.OperatorAccountId);
-        Assert.Equal("settled", receipt.Status);
-        Assert.Equal("SettleVpnLease", receipt.SettleLeaseInstruction?.WireId);
-        Assert.Equal("500000.125", receipt.EarnedFee);
-    }
-
-    public static IEnumerable<object[]> InvalidVpnReceiptSubmitRequests()
-    {
-        var valid = new ToriiVpnReceiptSubmitRequest
-        {
-            RelayReceiptHex = "abcd",
-            ClientVoucherHex = "beef",
-            LeaseIdHex = new string('d', 64),
-        };
-
-        yield return new object[] { valid with { RelayReceiptHex = null! }, "RelayReceiptHex", "null or whitespace" };
-        yield return new object[] { valid with { RelayReceiptHex = "" }, "RelayReceiptHex", "null or whitespace" };
-        yield return new object[] { valid with { RelayReceiptHex = " abcd" }, "RelayReceiptHex", "whitespace" };
-        yield return new object[] { valid with { RelayReceiptHex = "ab cd" }, "RelayReceiptHex", "whitespace" };
-        yield return new object[] { valid with { RelayReceiptHex = "abcd\u0001" }, "RelayReceiptHex", "control characters" };
-        yield return new object[] { valid with { RelayReceiptHex = "abc" }, "RelayReceiptHex", "even number of hexadecimal characters" };
-        yield return new object[] { valid with { RelayReceiptHex = "zz" }, "RelayReceiptHex", "even number of hexadecimal characters" };
-        yield return new object[] { valid with { ClientVoucherHex = null! }, "ClientVoucherHex", "null or whitespace" };
-        yield return new object[] { valid with { ClientVoucherHex = "" }, "ClientVoucherHex", "null or whitespace" };
-        yield return new object[] { valid with { ClientVoucherHex = " beef" }, "ClientVoucherHex", "whitespace" };
-        yield return new object[] { valid with { ClientVoucherHex = "bee" }, "ClientVoucherHex", "even number of hexadecimal characters" };
-        yield return new object[] { valid with { ClientVoucherHex = "zz" }, "ClientVoucherHex", "even number of hexadecimal characters" };
-        yield return new object[] { valid with { LeaseIdHex = " " }, "LeaseIdHex", "null or whitespace" };
-        yield return new object[] { valid with { LeaseIdHex = " " + new string('d', 64) }, "LeaseIdHex", "whitespace" };
-        yield return new object[] { valid with { LeaseIdHex = new string('d', 63) }, "LeaseIdHex", "32-byte hex string" };
-        yield return new object[] { valid with { LeaseIdHex = new string('j', 64) }, "LeaseIdHex", "32-byte hex string" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidVpnReceiptSubmitRequests))]
-    public async Task SubmitVpnReceiptAsyncRejectsMalformedRequestBeforeDispatch(
-        ToriiVpnReceiptSubmitRequest request,
-        string expectedParamName,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ =>
-            throw new InvalidOperationException("malformed VPN receipt request reached HTTP dispatch"));
-        using var client = CreateSignedVpnClient(handler);
-
-        var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.SubmitVpnReceiptAsync(request, cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Equal(expectedParamName, error.ParamName);
-        Assert.Contains(expectedMessage, error.Message);
-        Assert.Null(handler.LastRequest);
-    }
-
-    [Fact]
-    public async Task ListVpnReceiptsAsyncDeserializesNativeSettlementItems()
-    {
-        const string quoteId = "3333333333333333333333333333333333333333333333333333333333333333";
-        const string sessionId = "4545454545454545454545454545454545454545454545454545454545454545";
-
-        using var handler = new RecordingHandler(request =>
-        {
-            Assert.Equal(HttpMethod.Get, request.Method);
-            Assert.Equal("/v1/vpn/receipts", request.RequestUri!.AbsolutePath);
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent($$"""
-                    {
-                      "items": [
-                        {
-                          "session_id": "{{sessionId}}",
-                          "account_id": "{{VpnAccountId}}",
-                          "exit_class": "standard",
-                          "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
-                          "meter_family": "vpn-standard",
-                          "connected_at_ms": 1699999400000,
-                          "disconnected_at_ms": 1700000000000,
-                          "duration_ms": 600000,
-                          "bytes_in": 123,
-                          "bytes_out": 456,
-                          "status": "settled",
-                          "receipt_source": "relay",
-                          "quote_id": "{{quoteId}}",
-                          "payment_tx_hash": "4444444444444444444444444444444444444444444444444444444444444444",
-                          "fee_asset_id": "xor#universal.universal",
-                          "escrow_account_id": "{{VpnEscrowAccountId}}",
-                          "operator_account_id": "{{VpnOperatorAccountId}}",
-                          "lease_fee": "1000000.25",
-                          "earned_fee": "500000.125",
-                          "refunded_fee": "500000.125",
-                          "lease_id_hex": "{{quoteId}}",
-                          "settle_lease_instruction": {
-                            "wire_id": "SettleVpnLease",
-                            "payload_hex": "cafe"
-                          }
-                        }
-                      ],
-                      "total": 1
-                    }
-                    """),
-            };
-        });
-
-        using var client = CreateSignedVpnClient(handler);
-        var receipts = await client.ListVpnReceiptsAsync(cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal((ulong)1, receipts.Total);
-        var items = Assert.IsType<ToriiVpnReceipt[]>(receipts.Items);
-        Assert.Single(items);
-        Assert.Equal(sessionId, items[0].SessionId);
-        Assert.Equal(VpnAccountId, items[0].AccountId);
-        Assert.Equal(quoteId, items[0].LeaseIdHex);
-        items[0] = ValidVpnReceipt() with { SessionId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" };
-        Assert.Equal(sessionId, receipts.Items[0].SessionId);
-        Assert.Equal("SettleVpnLease", receipts.Items[0].SettleLeaseInstruction?.WireId);
-    }
-
-    [Fact]
     public async Task DeleteVpnSessionAsyncReturnsNullForNotFound()
     {
         var missingSessionId = new string('4', 64);
@@ -7779,7 +7606,7 @@ public sealed class ToriiClientTests
         });
 
         Assert.Contains(expectedField, error.Message);
-        Assert.Contains("non-empty", error.Message);
+        Assert.Contains(ExpectedVpnEmptyFieldMessage(operation, expectedField), error.Message);
     }
 
     [Theory]
@@ -7848,7 +7675,7 @@ public sealed class ToriiClientTests
         yield return new object[] { "profile", "padding_budget_ms", RemoveTopLevelJsonField(VpnProfileRawResponseJson("padding_budget_ms", 50), "padding_budget_ms"), "must not be null" };
         yield return new object[] { "profile", "padding_budget_ms", VpnProfileRawResponseJson("padding_budget_ms", 0), "between 1" };
         yield return new object[] { "profile", "padding_budget_ms", VpnProfileRawResponseJson("padding_budget_ms", 65536), "unsigned 16-bit" };
-        yield return new object[] { "profile", "relay_tls_spki_sha256_hex", RemoveTopLevelJsonField(VpnProfileRawResponseJson("relay_tls_spki_sha256_hex", null), "relay_tls_spki_sha256_hex"), "required" };
+        yield return new object[] { "profile", "relay_tls_spki_sha256_hex", RemoveTopLevelJsonField(VpnProfileRawResponseJson("relay_tls_spki_sha256_hex", null), "relay_tls_spki_sha256_hex"), "must not be null" };
         yield return new object[] { "profile", "relay_tls_spki_sha256_hex", VpnProfileRawResponseJson("relay_tls_spki_sha256_hex", "0x" + VpnSpkiSha256Hex), "32-byte hex string" };
         foreach (var invalidAccountId in new[]
         {
@@ -7996,14 +7823,14 @@ public sealed class ToriiClientTests
         yield return new object[] { "quote", "mtu_bytes", VpnQuoteRawResponseJson("mtu_bytes", 1279), "equal 1280" };
         yield return new object[] { "quote", "flow_label_bits", VpnQuoteRawResponseJson("flow_label_bits", 23), "equal 24" };
         yield return new object[] { "quote", "padding_budget_ms", VpnQuoteRawResponseJson("padding_budget_ms", 0), "between 1" };
-        yield return new object[] { "quote", "relay_tls_spki_sha256_hex", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("relay_tls_spki_sha256_hex", null), "relay_tls_spki_sha256_hex"), "required" };
-        yield return new object[] { "quote", "open_lease_instruction", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("open_lease_instruction", null), "open_lease_instruction"), "required" };
+        yield return new object[] { "quote", "relay_tls_spki_sha256_hex", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("relay_tls_spki_sha256_hex", null), "relay_tls_spki_sha256_hex"), "must not be null" };
+        yield return new object[] { "quote", "open_lease_instruction", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("open_lease_instruction", null), "open_lease_instruction"), "must not be null" };
         yield return new object[] { "session", "exit_class", VpnSessionRawResponseJson("exit_class", "premium"), "must be one of" };
         yield return new object[] { "session", "lease_secs", VpnSessionRawResponseJson("lease_secs", (ulong)uint.MaxValue + 1), "between 1" };
         yield return new object[] { "session", "mtu_bytes", VpnSessionRawResponseJson("mtu_bytes", 1279), "equal 1280" };
         yield return new object[] { "session", "flow_label_bits", VpnSessionRawResponseJson("flow_label_bits", 23), "equal 24" };
         yield return new object[] { "session", "padding_budget_ms", VpnSessionRawResponseJson("padding_budget_ms", 0), "between 1" };
-        yield return new object[] { "session", "relay_tls_spki_sha256_hex", RemoveTopLevelJsonField(VpnSessionRawResponseJson("relay_tls_spki_sha256_hex", null), "relay_tls_spki_sha256_hex"), "required" };
+        yield return new object[] { "session", "relay_tls_spki_sha256_hex", RemoveTopLevelJsonField(VpnSessionRawResponseJson("relay_tls_spki_sha256_hex", null), "relay_tls_spki_sha256_hex"), "must not be null" };
         yield return new object[] { "session", "status", VpnSessionRawResponseJson("status", "connected"), "equal active" };
         yield return new object[] { "receipt", "exit_class", VpnReceiptRawResponseJson("exit_class", "premium"), "must be one of" };
         yield return new object[] { "receipt", "status", VpnReceiptRawResponseJson("status", "active"), "must be one of" };
@@ -9167,670 +8994,6 @@ public sealed class ToriiClientTests
                 cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("must contain only", error.Message);
-    }
-
-    [Fact]
-    public async Task RegisterVerifyingKeyAsyncCanonicalizesInlineCommitmentPayload()
-    {
-        var vkBytes = "abc"u8.ToArray();
-        var expectedVkBytes = vkBytes.ToArray();
-        var commitmentHex = VerifyingKeyCommitmentHex("halo2/ipa", expectedVkBytes);
-        using var handler = new RecordingHandler(request =>
-        {
-            Assert.Equal("/v1/zk/vk/register", request.RequestUri!.AbsolutePath);
-            using var body = ReadBodyAsJson(request);
-            var root = body.RootElement;
-            Assert.Equal(VerifyingKeyAuthorityAccountId, root.GetProperty("authority").GetString());
-            Assert.False(root.TryGetProperty("private_key", out _));
-            Assert.Equal("halo2/ipa", root.GetProperty("backend").GetString());
-            Assert.Equal("vk_main", root.GetProperty("name").GetString());
-            Assert.Equal(1u, root.GetProperty("version").GetUInt32());
-            Assert.Equal(new string('a', 64), root.GetProperty("public_inputs_schema_hash_hex").GetString());
-            Assert.Equal(commitmentHex, root.GetProperty("commitment_hex").GetString());
-            Assert.Equal(Convert.ToBase64String(expectedVkBytes), root.GetProperty("vk_bytes").GetString());
-            Assert.Equal(3u, root.GetProperty("vk_len").GetUInt32());
-            Assert.Equal("Active", root.GetProperty("status").GetString());
-            return JsonResponse(VerifyingKeyTransactionDraftResponseJson());
-        });
-        using var client = CreateVerifyingKeyClient(handler);
-
-        var registerRequest = new ToriiVerifyingKeyRegisterRequest
-        {
-            Authority = VerifyingKeyAuthorityAccountId,
-            Backend = "halo2/ipa",
-            Name = "vk_main",
-            Version = 1,
-            CircuitId = "halo2/ipa::transfer_v1",
-            PublicInputsSchemaHashHex = "0x" + new string('A', 64),
-            GasScheduleId = "halo2_default",
-            VerifyingKeyBytes = vkBytes,
-            CommitmentHex = commitmentHex.ToUpperInvariant(),
-            Status = "active",
-        };
-        vkBytes[0] = (byte)'z';
-        var detachedVkBytes = Assert.IsType<byte[]>(registerRequest.VerifyingKeyBytes);
-        detachedVkBytes[1] = (byte)'z';
-        Assert.Equal(expectedVkBytes, Assert.IsType<byte[]>(registerRequest.VerifyingKeyBytes));
-
-        var response = await client.RegisterVerifyingKeyAsync(registerRequest, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.False(response.Submitted);
-        Assert.Equal(CanonicalVerifyingKeyTransactionPayload(), response.TransactionPayload);
-        Assert.Equal(IrohaHash.Hash(response.TransactionPayload), response.SigningMessage);
-    }
-
-    [Fact]
-    public async Task UpdateVerifyingKeyAsyncCanonicalizesInlineCommitmentPayload()
-    {
-        var vkBytes = "abcd"u8.ToArray();
-        var expectedVkBytes = vkBytes.ToArray();
-        var commitmentHex = VerifyingKeyCommitmentHex("halo2/ipa", expectedVkBytes);
-        var expectedDraftRequest = ValidVerifyingKeyUpdateRequest() with
-        {
-            GasScheduleId = null,
-            Status = "Withdrawn",
-        };
-        using var handler = new RecordingHandler(request =>
-        {
-            Assert.Equal("/v1/zk/vk/update", request.RequestUri!.AbsolutePath);
-            using var body = ReadBodyAsJson(request);
-            var root = body.RootElement;
-            Assert.Equal(VerifyingKeyAuthorityAccountId, root.GetProperty("authority").GetString());
-            Assert.False(root.TryGetProperty("private_key", out _));
-            Assert.Equal("halo2/ipa", root.GetProperty("backend").GetString());
-            Assert.Equal("vk_main", root.GetProperty("name").GetString());
-            Assert.Equal(2u, root.GetProperty("version").GetUInt32());
-            Assert.Equal(new string('b', 64), root.GetProperty("public_inputs_schema_hash_hex").GetString());
-            Assert.Equal(commitmentHex, root.GetProperty("commitment_hex").GetString());
-            Assert.Equal(Convert.ToBase64String(expectedVkBytes), root.GetProperty("vk_bytes").GetString());
-            Assert.Equal(4u, root.GetProperty("vk_len").GetUInt32());
-            Assert.Equal("Withdrawn", root.GetProperty("status").GetString());
-            return JsonResponse(
-                VerifyingKeyTransactionDraftResponseJson(expectedDraftRequest));
-        });
-        using var client = CreateVerifyingKeyClient(handler);
-
-        var updateRequest = new ToriiVerifyingKeyUpdateRequest
-        {
-            Authority = VerifyingKeyAuthorityAccountId,
-            Backend = "halo2/ipa",
-            Name = "vk_main",
-            Version = 2,
-            CircuitId = "halo2/ipa::transfer_v2",
-            PublicInputsSchemaHashHex = "0x" + new string('B', 64),
-            VerifyingKeyBytes = vkBytes,
-            CommitmentHex = commitmentHex.ToUpperInvariant(),
-            Status = "withdrawn",
-        };
-        vkBytes[0] = (byte)'z';
-        var detachedVkBytes = Assert.IsType<byte[]>(updateRequest.VerifyingKeyBytes);
-        detachedVkBytes[1] = (byte)'z';
-        Assert.Equal(expectedVkBytes, Assert.IsType<byte[]>(updateRequest.VerifyingKeyBytes));
-
-        var response = await client.UpdateVerifyingKeyAsync(updateRequest, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.False(response.Submitted);
-        Assert.Equal(
-            CanonicalVerifyingKeyTransactionPayload(expectedDraftRequest),
-            response.TransactionPayload);
-        Assert.Equal(IrohaHash.Hash(response.TransactionPayload), response.SigningMessage);
-    }
-
-    [Fact]
-    public async Task GetVerifyingKeyAsyncEncodesIdentifierAndValidatesResponse()
-    {
-        using var handler = new RecordingHandler(_ =>
-            JsonResponse(VerifyingKeyDetailResponseJson()));
-        using var client = new ToriiClient(
-            new Uri("https://torii.example"),
-            new HttpClient(handler));
-
-        using var response = await client.GetVerifyingKeyAsync("halo2/ipa", "vk_main", cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal("halo2/ipa", response.RootElement.GetProperty("id").GetProperty("backend").GetString());
-        Assert.Equal("Active", response.RootElement.GetProperty("record").GetProperty("status").GetString());
-        Assert.Contains("/v1/zk/vk/halo2%2Fipa/vk_main", handler.LastRequest!.RequestUri!.AbsoluteUri);
-    }
-
-    [Fact]
-    public async Task UpdateVerifyingKeyAsyncRejectsMismatchedInlineCommitmentBeforeRequest()
-    {
-        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request must not be sent"));
-        using var client = CreateVerifyingKeyClient(handler);
-
-        var error = await Assert.ThrowsAsync<ArgumentException>(() =>
-            client.UpdateVerifyingKeyAsync(new ToriiVerifyingKeyUpdateRequest
-            {
-                Authority = VerifyingKeyAuthorityAccountId,
-                Backend = "halo2/ipa",
-                Name = "vk_main",
-                Version = 2,
-                CircuitId = "halo2/ipa::transfer_v2",
-                PublicInputsSchemaHashHex = new string('b', 64),
-                VerifyingKeyBytes = "abc"u8.ToArray(),
-                CommitmentHex = new string('0', 64),
-            }, cancellationToken: TestContext.Current.CancellationToken));
-        Assert.Contains("commitment_hex must match domain-separated SHA-256", error.Message);
-        Assert.Null(handler.LastRequest);
-    }
-
-    public static IEnumerable<object?[]> InvalidVerifyingKeyDetailResponses()
-    {
-        yield return new object?[] { "id", VerifyingKeyDetailResponseJson("id", null), "must not be null" };
-        yield return new object?[]
-        {
-            "id.backend",
-            VerifyingKeyDetailResponseJson("id.backend", " halo2/ipa"),
-            "surrounding whitespace",
-        };
-        yield return new object?[]
-        {
-            "id.name",
-            VerifyingKeyDetailResponseJson("id.name", "vk:main"),
-            "':'",
-        };
-        yield return new object?[] { "record", VerifyingKeyDetailResponseJson("record", null), "must not be null" };
-        yield return new object?[]
-        {
-            "record.backend",
-            VerifyingKeyDetailResponseJson("record.backend", "halo2/ipa-pasta-cycle-v1"),
-            "must match",
-        };
-        yield return new object?[] { "record.version", VerifyingKeyDetailResponseJson("record.version", 0), "positive" };
-        yield return new object?[]
-        {
-            "record.circuit_id",
-            VerifyingKeyDetailResponseJson("record.circuit_id", "halo2/ipa::transfer v2"),
-            "whitespace",
-        };
-        yield return new object?[]
-        {
-            "record.curve",
-            VerifyingKeyDetailResponseJson("record.curve", " pallas"),
-            "surrounding whitespace",
-        };
-        yield return new object?[]
-        {
-            "record.public_inputs_schema_hash",
-            VerifyingKeyDetailResponseJson("record.public_inputs_schema_hash", "0x" + new string('a', 64)),
-            "32-byte hex string",
-        };
-        yield return new object?[]
-        {
-            "record.public_inputs_schema_hash",
-            VerifyingKeyDetailResponseJson("record.public_inputs_schema_hash", new string('A', 64)),
-            "lowercase",
-        };
-        yield return new object?[]
-        {
-            "record.commitment",
-            VerifyingKeyDetailResponseJson("record.commitment", new string('g', 64)),
-            "32-byte hex string",
-        };
-        yield return new object?[] { "record.vk_len", VerifyingKeyDetailResponseJson("record.vk_len", 0), "positive" };
-        yield return new object?[]
-        {
-            "record.max_proof_bytes",
-            VerifyingKeyDetailResponseJson("record.max_proof_bytes", 0),
-            "positive",
-        };
-        yield return new object?[]
-        {
-            "record.gas_schedule_id",
-            VerifyingKeyDetailResponseJson("record.gas_schedule_id", "halo2 default"),
-            "whitespace",
-        };
-        yield return new object?[]
-        {
-            "record.metadata_uri_cid",
-            VerifyingKeyDetailResponseJson("record.metadata_uri_cid", " ipfs://vk-meta"),
-            "surrounding whitespace",
-        };
-        yield return new object?[]
-        {
-            "record.vk_bytes_cid",
-            VerifyingKeyDetailResponseJson("record.vk_bytes_cid", "ipfs://vk bundle"),
-            "whitespace",
-        };
-        yield return new object?[]
-        {
-            "record.activation_height",
-            VerifyingKeyDetailResponseJson("record.activation_height", -1),
-            "unsigned integer",
-        };
-        yield return new object?[]
-        {
-            "record.withdraw_height",
-            VerifyingKeyDetailResponseJson("record.withdraw_height", 1023),
-            "greater than or equal",
-        };
-        yield return new object?[]
-        {
-            "record.status",
-            VerifyingKeyDetailResponseJson("record.status", "active"),
-            "must be one of",
-        };
-        yield return new object?[] { "record.key", VerifyingKeyDetailResponseJson("record.key", "inline"), "must be an object" };
-        yield return new object?[]
-        {
-            "record.key.backend",
-            VerifyingKeyDetailResponseJson("record.key.backend", "halo2/ipa-pasta-cycle-v1"),
-            "must match",
-        };
-        yield return new object?[]
-        {
-            "record.key.bytes_b64",
-            VerifyingKeyDetailResponseJson("record.key.bytes_b64", "AQID "),
-            "whitespace",
-        };
-        yield return new object?[]
-        {
-            "record.key.bytes_b64",
-            VerifyingKeyDetailResponseJson("record.key.bytes_b64", ""),
-            "empty bytes",
-        };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidVerifyingKeyDetailResponses))]
-    public async Task GetVerifyingKeyAsyncRejectsMalformedResponse(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ => JsonResponse(json));
-        using var client = new ToriiClient(
-            new Uri("https://torii.example"),
-            new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            client.GetVerifyingKeyAsync("halo2/ipa", "vk_main", cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-        Assert.Contains("/v1/zk/vk/halo2%2Fipa/vk_main", handler.LastRequest!.RequestUri!.AbsoluteUri);
-    }
-
-    public static IEnumerable<object?[]> InvalidVerifyingKeyWriteResponses()
-    {
-        var nonCanonicalPayloadSigningBase64 =
-            Convert.ToBase64String(IrohaHash.Hash(new byte[] { 1, 2, 3 }));
-        foreach (var operation in new[] { "register", "update" })
-        {
-            object request = operation == "register"
-                ? ValidVerifyingKeyRegisterRequest()
-                : ValidVerifyingKeyUpdateRequest();
-            var payload = CanonicalVerifyingKeyTransactionPayload(request);
-            var payloadBase64 = Convert.ToBase64String(payload);
-            var signingBase64 = Convert.ToBase64String(IrohaHash.Hash(payload));
-            yield return new object?[]
-            {
-                operation,
-                "verifying key " + operation,
-                "[]",
-                "must be an object",
-            };
-            yield return new object?[]
-            {
-                operation,
-                "verifying key " + operation,
-                "{}",
-                "must contain exactly",
-            };
-            yield return new object?[]
-            {
-                operation,
-                "submitted",
-                $$"""{"submitted":true,"transaction_payload_b64":"{{payloadBase64}}","signing_message_b64":"{{signingBase64}}"}""",
-                "must be false",
-            };
-            yield return new object?[]
-            {
-                operation,
-                "submitted",
-                $$"""{"submitted":"false","transaction_payload_b64":"{{payloadBase64}}","signing_message_b64":"{{signingBase64}}"}""",
-                "must be false",
-            };
-            yield return new object?[]
-            {
-                operation,
-                "transaction_payload_b64",
-                $$"""{"submitted":false,"transaction_payload_b64":"AQI","signing_message_b64":"{{signingBase64}}"}""",
-                "canonical",
-            };
-            yield return new object?[]
-            {
-                operation,
-                "transaction_payload_b64",
-                $$"""{"submitted":false,"transaction_payload_b64":"AQID","signing_message_b64":"{{nonCanonicalPayloadSigningBase64}}"}""",
-                "canonical nine-field",
-            };
-            yield return new object?[]
-            {
-                operation,
-                "signing_message_b64",
-                $$"""{"submitted":false,"transaction_payload_b64":"{{payloadBase64}}","signing_message_b64":"{{Convert.ToBase64String(new byte[31])}}"}""",
-                "exactly 32 bytes",
-            };
-            yield return new object?[]
-            {
-                operation,
-                "signing_message_b64",
-                $$"""{"submitted":false,"transaction_payload_b64":"{{payloadBase64}}","signing_message_b64":"{{Convert.ToBase64String(new byte[32])}}"}""",
-                "exact Iroha prehash",
-            };
-            yield return new object?[]
-            {
-                operation,
-                "verifying key " + operation,
-                $$"""{"submitted":false,"transaction_payload_b64":"{{payloadBase64}}","signing_message_b64":"{{signingBase64}}","private_key":"retired"}""",
-                "must contain exactly",
-            };
-            yield return new object?[]
-            {
-                operation,
-                "submitted",
-                $$"""{"submitted":false,"submitted":false,"transaction_payload_b64":"{{payloadBase64}}","signing_message_b64":"{{signingBase64}}"}""",
-                "must not appear more than once",
-            };
-        }
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidVerifyingKeyWriteResponses))]
-    public async Task VerifyingKeyWriteResponsesRejectMalformedTransactionDraft(
-        string operation,
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ => JsonResponse(json));
-        using var client = CreateVerifyingKeyClient(handler);
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            InvokeVerifyingKeyWriteOperationAsync(
-                client,
-                operation,
-                operation == "register"
-                    ? ValidVerifyingKeyRegisterRequest()
-                    : ValidVerifyingKeyUpdateRequest()));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-        Assert.Equal($"/v1/zk/vk/{operation}", handler.LastRequest!.RequestUri!.AbsolutePath);
-    }
-
-    [Theory]
-    [InlineData("register")]
-    [InlineData("update")]
-    public async Task VerifyingKeyWriteResponsesRequireHttp200(string operation)
-    {
-        using var handler = new RecordingHandler(_ =>
-            JsonResponse(VerifyingKeyTransactionDraftResponseJson(), HttpStatusCode.Accepted));
-        using var client = CreateVerifyingKeyClient(handler);
-
-        var error = await Assert.ThrowsAsync<ToriiApiException>(() =>
-            InvokeVerifyingKeyWriteOperationAsync(
-                client,
-                operation,
-                operation == "register"
-                    ? ValidVerifyingKeyRegisterRequest()
-                    : ValidVerifyingKeyUpdateRequest()));
-
-        Assert.Equal(HttpStatusCode.Accepted, error.StatusCode);
-    }
-
-    [Fact]
-    public async Task VerifyingKeyWritesRequireImmutableLocalSigningContextBeforeDispatch()
-    {
-        using var handler = new RecordingHandler(_ =>
-            throw new InvalidOperationException("request must not be sent"));
-        using var client = new ToriiClient(
-            new Uri("https://torii.example"),
-            new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            client.RegisterVerifyingKeyAsync(
-                ValidVerifyingKeyRegisterRequest(),
-                cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Contains("ToriiLocalSigningContext", error.Message);
-        Assert.Null(handler.LastRequest);
-        Assert.Throws<ArgumentException>(() => new ToriiLocalSigningContext(""));
-        Assert.Throws<ArgumentException>(() => new ToriiLocalSigningContext("chain/other"));
-    }
-
-    [Fact]
-    public async Task RegisterVerifyingKeyAsyncRejectsSemanticallySubstitutedDrafts()
-    {
-        var request = ValidVerifyingKeyRegisterRequest();
-        var substitutions = new (string Label, byte[] Payload, string ExpectedMessage)[]
-        {
-            (
-                "wrong operation",
-                CanonicalVerifyingKeyTransactionPayload(
-                    request,
-                    wireNameOverride:
-                        "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey"),
-                "requested verifying-key registry operation"
-            ),
-            (
-                "wrong identifier",
-                CanonicalVerifyingKeyTransactionPayload(
-                    request,
-                    idNameOverride: "vk_substituted"),
-                "identifier does not match"
-            ),
-            (
-                "wrong full record",
-                CanonicalVerifyingKeyTransactionPayload(
-                    request,
-                    recordVersionOverride: 2),
-                "full requested record"
-            ),
-            (
-                "wrong chain",
-                CanonicalVerifyingKeyTransactionPayload(
-                    request,
-                    chainId: "other-chain"),
-                "configured chain"
-            ),
-            (
-                "wrong authority",
-                CanonicalVerifyingKeyTransactionPayload(
-                    request,
-                    authorityOverride: SoraFsAuthorityAccountId),
-                "requested authority"
-            ),
-        };
-
-        foreach (var substitution in substitutions)
-        {
-            using var handler = new RecordingHandler(_ =>
-                JsonResponse(
-                    VerifyingKeyTransactionDraftResponseJson(
-                        request,
-                        substitution.Payload)));
-            using var client = CreateVerifyingKeyClient(handler);
-
-            var error = await Assert.ThrowsAsync<JsonException>(() =>
-                client.RegisterVerifyingKeyAsync(
-                    request,
-                    cancellationToken: TestContext.Current.CancellationToken));
-
-            Assert.Contains(substitution.ExpectedMessage, error.Message);
-        }
-    }
-
-    [Theory]
-    [InlineData("register")]
-    [InlineData("update")]
-    public void VerifyingKeyRequestsRejectRetiredPrivateKeyFieldDuringDeserialization(string operation)
-    {
-        const string json = """{"authority":"alice","private_key":"must-not-be-accepted"}""";
-
-        Assert.Throws<JsonException>(() =>
-        {
-            if (operation == "register")
-            {
-                _ = JsonSerializer.Deserialize<ToriiVerifyingKeyRegisterRequest>(json);
-            }
-            else
-            {
-                _ = JsonSerializer.Deserialize<ToriiVerifyingKeyUpdateRequest>(json);
-            }
-        });
-    }
-
-    public static IEnumerable<object?[]> InvalidVerifyingKeyWriteExactTextRequests()
-    {
-        var register = ValidVerifyingKeyRegisterRequest();
-        var update = ValidVerifyingKeyUpdateRequest();
-
-        foreach (var (request, paramName) in new (ToriiVerifyingKeyRegisterRequest Request, string ParamName)[]
-        {
-            (register with { Authority = " " + VerifyingKeyAuthorityAccountId }, "Authority"),
-            (register with { Name = " vk_main" }, "Name"),
-            (register with { CircuitId = "halo2/ipa::transfer v1" }, "CircuitId"),
-            (register with { PublicInputsSchemaHashHex = "0x " + new string('a', 64) }, "PublicInputsSchemaHashHex"),
-            (register with { Curve = " bn254" }, "Curve"),
-            (register with { GasScheduleId = " halo2_default" }, "GasScheduleId"),
-            (register with { MetadataUriCid = " bafymeta" }, "MetadataUriCid"),
-            (register with { VerifyingKeyBytesCid = "bafyvk " }, "VerifyingKeyBytesCid"),
-            (register with { CommitmentHex = register.CommitmentHex + " " }, "CommitmentHex"),
-            (register with { Status = " active" }, "Status"),
-        })
-        {
-            yield return new object?[] { "register", request, paramName, "whitespace" };
-        }
-
-        foreach (var request in new[]
-        {
-            register with { Authority = "merchant@sora" },
-            register with { Authority = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" },
-            register with { Authority = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" },
-        })
-        {
-            yield return new object?[] { "register", request, "Authority", "canonical I105" };
-        }
-
-        foreach (var (request, paramName) in new (ToriiVerifyingKeyUpdateRequest Request, string ParamName)[]
-        {
-            (update with { Authority = VerifyingKeyAuthorityAccountId + " " }, "Authority"),
-            (update with { Name = "vk_main " }, "Name"),
-            (update with { CircuitId = "halo2/ipa::transfer v2" }, "CircuitId"),
-            (update with { PublicInputsSchemaHashHex = "0x" + new string('b', 64) + " " }, "PublicInputsSchemaHashHex"),
-            (update with { Curve = " bn254" }, "Curve"),
-            (update with { GasScheduleId = "halo2_default " }, "GasScheduleId"),
-            (update with { MetadataUriCid = "bafymeta " }, "MetadataUriCid"),
-            (update with { VerifyingKeyBytesCid = " bafyvk" }, "VerifyingKeyBytesCid"),
-            (update with { CommitmentHex = update.CommitmentHex + "\u0001" }, "CommitmentHex"),
-            (update with { Status = "withdrawn " }, "Status"),
-        })
-        {
-            var expectedMessage = paramName == "CommitmentHex" ? "control characters" : "whitespace";
-            yield return new object?[] { "update", request, paramName, expectedMessage };
-        }
-
-        foreach (var request in new[]
-        {
-            update with { Authority = "merchant@sora" },
-            update with { Authority = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" },
-            update with { Authority = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" },
-        })
-        {
-            yield return new object?[] { "update", request, "Authority", "canonical I105" };
-        }
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidVerifyingKeyWriteExactTextRequests))]
-    public async Task VerifyingKeyWriteRequestsRejectNonExactTextBeforeDispatch(
-        string operation,
-        object request,
-        string expectedParamName,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ =>
-            throw new InvalidOperationException("malformed verifying-key request reached HTTP dispatch"));
-        using var client = CreateVerifyingKeyClient(handler);
-
-        var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            InvokeVerifyingKeyWriteOperationAsync(client, operation, request));
-
-        Assert.Equal(expectedParamName, error.ParamName);
-        Assert.Contains(expectedMessage, error.Message);
-        Assert.Null(handler.LastRequest);
-    }
-
-    [Fact]
-    public async Task VerifyingKeyRequestsRejectMalformedInputsBeforeRequest()
-    {
-        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request must not be sent"));
-        using var client = CreateVerifyingKeyClient(handler);
-
-        var valid = ValidVerifyingKeyRegisterRequest();
-        ToriiVerifyingKeyRegisterRequest[] invalid =
-        {
-            valid with { Backend = " halo2/ipa" },
-            valid with { Backend = "halo2/ipa/orchard" },
-            valid with { Backend = "halo2/\u200Bipa" },
-            valid with { Name = "vk:main" },
-            valid with { Name = " " },
-            valid with { Version = 0 },
-            valid with { PublicInputsSchemaHashHex = "abc123" },
-            valid with { GasScheduleId = "" },
-            valid with { VerifyingKeyBytes = Array.Empty<byte>() },
-            valid with { VerifyingKeyLength = 99 },
-            valid with { MaxProofBytes = 0 },
-            valid with { VerifyingKeyBytes = null, VerifyingKeyLength = 3, CommitmentHex = null },
-            valid with { ActivationHeight = 10, WithdrawHeight = 9 },
-            valid with { Status = "production-ready" },
-        };
-
-        foreach (var request in invalid)
-        {
-            await Assert.ThrowsAnyAsync<ArgumentException>(() => client.RegisterVerifyingKeyAsync(request, cancellationToken: TestContext.Current.CancellationToken));
-            Assert.Null(handler.LastRequest);
-        }
-
-        foreach (var backend in new[] { "halo2/ipa ", "halo2\uFF0Fipa", "mock/dev" })
-        {
-            await Assert.ThrowsAnyAsync<ArgumentException>(() => client.GetVerifyingKeyAsync(backend, "vk_main", cancellationToken: TestContext.Current.CancellationToken));
-            Assert.Null(handler.LastRequest);
-        }
-
-        await Assert.ThrowsAnyAsync<ArgumentException>(() => client.GetVerifyingKeyAsync("halo2/ipa", " vk_main", cancellationToken: TestContext.Current.CancellationToken));
-        Assert.Null(handler.LastRequest);
-
-        await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.UpdateVerifyingKeyAsync(new ToriiVerifyingKeyUpdateRequest
-            {
-                Authority = VerifyingKeyAuthorityAccountId,
-                Backend = "halo2/ipa",
-                Name = "vk_main",
-                Version = 2,
-                CircuitId = "halo2/ipa::transfer_v2",
-                PublicInputsSchemaHashHex = new string('b', 64),
-                MaxProofBytes = 0,
-                CommitmentHex = new string('c', 64),
-            }, cancellationToken: TestContext.Current.CancellationToken));
-        Assert.Null(handler.LastRequest);
-
-        await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.UpdateVerifyingKeyAsync(new ToriiVerifyingKeyUpdateRequest
-            {
-                Authority = VerifyingKeyAuthorityAccountId,
-                Backend = "halo2/ipa",
-                Name = "vk_main",
-                Version = 2,
-                CircuitId = "halo2/ipa::transfer_v2",
-                PublicInputsSchemaHashHex = new string('b', 64),
-                ActivationHeight = 10,
-                WithdrawHeight = 9,
-            }, cancellationToken: TestContext.Current.CancellationToken));
-        Assert.Null(handler.LastRequest);
-
     }
 
     public static IEnumerable<object?[]> InvalidDirectSoraFsResponseMetadata()
@@ -17063,7 +16226,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public async Task CallContractAsyncDeserializesScaffoldResponse()
+    public async Task CallContractAsyncDeserializesUnsignedPayloadResponse()
     {
         using var handler = new RecordingHandler(request =>
         {
@@ -17086,7 +16249,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.True(response.Ok);
         Assert.False(response.Submitted);
         Assert.NotNull(response.ContractAddress);
-        Assert.Equal("c2NhZmZvbGQ=", response.TransactionScaffoldBase64);
+        Assert.Equal("cGF5bG9hZA==", response.TransactionPayloadBase64);
         Assert.Equal("/v1/contracts/call", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.Equal(HttpMethod.Post, handler.LastRequest.Method);
     }
@@ -17115,10 +16278,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Theory]
-    [InlineData("transaction_scaffold_b64", "", "non-empty")]
-    [InlineData("transaction_scaffold_b64", " c2NhZmZvbGQ=", "surrounding whitespace")]
-    [InlineData("signed_transaction_b64", "c2ln bmVk", "whitespace")]
-    [InlineData("signed_transaction_b64", "c2ln\u00A0bmVk", "whitespace")]
+    [InlineData("transaction_payload_b64", "", "non-empty")]
+    [InlineData("transaction_payload_b64", " cGF5bG9hZA==", "surrounding whitespace")]
+    [InlineData("transaction_scaffold_b64", "c2NhZmZvbGQ=", "retired")]
+    [InlineData("signed_transaction_b64", "c2lnbmVk", "retired")]
     [InlineData("signing_message_b64", "bWVzc2FnZQ==\u0001", "control characters")]
     [InlineData("signing_message_b64", "not-base64", "valid base64")]
     [InlineData("signing_message_b64", "AR==", "canonical base64")]
@@ -17220,8 +16383,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { "creation_time_ms", ContractCallRawResponseJson("creation_time_ms", -1), "unsigned integer" };
         yield return new object[] { "creation_time_ms", ContractCallRawResponseJson("creation_time_ms", 0), "positive" };
         yield return new object[] { "tx_hash_hex", ContractCallRawResponseJson("tx_hash_hex", " " + ToriiTransactionHashHex), "surrounding whitespace" };
-        yield return new object[] { "transaction_scaffold_b64", ContractCallRawResponseJson("transaction_scaffold_b64", ""), "non-empty base64 string" };
-        yield return new object[] { "signed_transaction_b64", ContractCallRawResponseJson("signed_transaction_b64", "c2ln bmVk"), "whitespace" };
+        yield return new object[] { "transaction_payload_b64", ContractCallRawResponseJson("transaction_payload_b64", ""), "non-empty base64 string" };
+        yield return new object[] { "transaction_scaffold_b64", ContractCallRawResponseJson("transaction_scaffold_b64", "c2NhZmZvbGQ="), "retired" };
+        yield return new object[] { "signed_transaction_b64", ContractCallRawResponseJson("signed_transaction_b64", "c2lnbmVk"), "retired" };
         yield return new object[] { "signing_message_b64", ContractCallRawResponseJson("signing_message_b64", "AR=="), "canonical base64" };
         yield return new object[] { "entrypoint", ContractCallRawResponseJson("entrypoint", " main"), "surrounding whitespace" };
         yield return new object[]
@@ -17551,8 +16715,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object?[] { "contract-call", "AbiHashHex", new string('B', 64) };
         yield return new object?[] { "contract-call", "CreationTimeMilliseconds", 0UL };
         yield return new object?[] { "contract-call", "TransactionHashHex", " " + ToriiTransactionHashHex };
-        yield return new object?[] { "contract-call", "TransactionScaffoldBase64", "" };
-        yield return new object?[] { "contract-call", "SignedTransactionBase64", "c2ln bmVk" };
+        yield return new object?[] { "contract-call", "TransactionPayloadBase64", "" };
         yield return new object?[] { "contract-call", "SigningMessageBase64", "AR==" };
         yield return new object?[] { "contract-call", "Entrypoint", " main" };
 
@@ -18001,7 +17164,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public async Task ProposeMultisigContractCallAsyncDeserializesScaffoldResponse()
+    public async Task ProposeMultisigContractCallAsyncDeserializesUnsignedPayloadResponse()
     {
         using var handler = new RecordingHandler(request =>
         {
@@ -18020,7 +17183,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                   "tx_hash_hex": null,
                   "executed_tx_hash_hex": null,
                   "creation_time_ms": 321,
-                  "signing_message_b64": "bXVsdGlzaWc="
+                  "transaction_payload_b64": "{{MultisigTransactionPayloadBase64}}", "signing_message_b64": "{{MultisigSigningMessageBase64}}"
                 }
                 """),
             };
@@ -18434,6 +17597,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object?[] { "generic", "TransactionHashHex", " " + ToriiTransactionHashHex };
         yield return new object?[] { "generic", "ExecutedTransactionHashHex", "0x" + ToriiTransactionHashHex };
         yield return new object?[] { "generic", "CreationTimeMilliseconds", 0UL };
+        yield return new object?[] { "generic", "TransactionPayloadBase64", "" };
         yield return new object?[] { "generic", "SigningMessageBase64", "AR==" };
 
         yield return new object?[] { "contract-call", "Ok", false };
@@ -18443,6 +17607,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object?[] { "contract-call", "TransactionHashHex", ToriiTransactionHashHex.ToUpperInvariant() };
         yield return new object?[] { "contract-call", "ExecutedTransactionHashHex", " " + ToriiTransactionHashHex };
         yield return new object?[] { "contract-call", "CreationTimeMilliseconds", 0UL };
+        yield return new object?[] { "contract-call", "TransactionPayloadBase64", "" };
         yield return new object?[] { "contract-call", "SigningMessageBase64", "" };
     }
 
@@ -18529,7 +17694,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                       "tx_hash_hex": null,
                       "executed_tx_hash_hex": null,
                       "creation_time_ms": 123,
-                      "signing_message_b64": "bXVsdGlzaWc="
+                      "transaction_payload_b64": "{{MultisigTransactionPayloadBase64}}", "signing_message_b64": "{{MultisigSigningMessageBase64}}"
                     }
                     """),
             };
@@ -18549,7 +17714,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.False(response.Submitted);
         Assert.Equal(MultisigProposalIdHex, response.ProposalId);
         Assert.Equal(MultisigInstructionsHashHex, response.InstructionsHash);
-        Assert.Equal("bXVsdGlzaWc=", response.SigningMessageBase64);
+        Assert.Equal(MultisigTransactionPayloadBase64, response.TransactionPayloadBase64);
+        Assert.Equal(MultisigSigningMessageBase64, response.SigningMessageBase64);
     }
 
     [Fact]
@@ -18564,10 +17730,11 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("""
+                Content = new StringContent($$"""
                     {
                       "ok": true,
-                      "resolved_multisig_account_id": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
+                      "resolved_multisig_account_id": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53", "submitted": false,
+                      "transaction_payload_b64": "{{MultisigTransactionPayloadBase64}}", "signing_message_b64": "{{MultisigSigningMessageBase64}}"
                     }
                     """),
             };
@@ -18622,7 +17789,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 Content = new StringContent($$"""
                     {
                       "ok": true,
-                      "resolved_multisig_account_id": "{{CanonicalMultisigAccountId}}"
+                      "resolved_multisig_account_id": "{{CanonicalMultisigAccountId}}", "submitted": false,
+                      "transaction_payload_b64": "{{MultisigTransactionPayloadBase64}}", "signing_message_b64": "{{MultisigSigningMessageBase64}}"
                     }
                     """),
             };
@@ -18876,7 +18044,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public async Task ApproveMultisigContractCallAsyncDeserializesScaffoldResponse()
+    public async Task ApproveMultisigContractCallAsyncDeserializesUnsignedPayloadResponse()
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -18890,7 +18058,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                   "tx_hash_hex": null,
                   "executed_tx_hash_hex": null,
                   "creation_time_ms": 654,
-                  "signing_message_b64": "YXBwcm92ZQ=="
+                  "transaction_payload_b64": "{{MultisigTransactionPayloadBase64}}", "signing_message_b64": "{{MultisigSigningMessageBase64}}"
                 }
                 """),
         });
@@ -20558,6 +19726,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 CreationTimeMilliseconds = RequiredUInt64Value(value),
             },
+            ("generic", "TransactionPayloadBase64") => ValidMultisigResponse() with { TransactionPayloadBase64 = RequiredStringValue(value) },
             ("generic", "SigningMessageBase64") => ValidMultisigResponse() with
             {
                 SigningMessageBase64 = RequiredStringValue(value),
@@ -20590,6 +19759,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 CreationTimeMilliseconds = RequiredUInt64Value(value),
             },
+            ("contract-call", "TransactionPayloadBase64") => ValidMultisigContractCallResponse() with { TransactionPayloadBase64 = RequiredStringValue(value) },
             ("contract-call", "SigningMessageBase64") => ValidMultisigContractCallResponse() with
             {
                 SigningMessageBase64 = RequiredStringValue(value),
@@ -20611,10 +19781,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Submitted = false,
             ProposalId = MultisigProposalIdHex,
             InstructionsHash = MultisigInstructionsHashHex,
-            TransactionHashHex = ToriiTransactionHashHex,
+            TransactionHashHex = null,
             ExecutedTransactionHashHex = null,
             CreationTimeMilliseconds = 321,
-            SigningMessageBase64 = "bXVsdGlzaWc=",
+            TransactionPayloadBase64 = MultisigTransactionPayloadBase64, SigningMessageBase64 = MultisigSigningMessageBase64,
         };
     }
 
@@ -20627,10 +19797,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Submitted = false,
             ProposalId = MultisigProposalIdHex,
             InstructionsHash = MultisigInstructionsHashHex,
-            TransactionHashHex = ToriiTransactionHashHex,
+            TransactionHashHex = null,
             ExecutedTransactionHashHex = null,
             CreationTimeMilliseconds = 321,
-            SigningMessageBase64 = "bXVsdGlzaWc=",
+            TransactionPayloadBase64 = MultisigTransactionPayloadBase64, SigningMessageBase64 = MultisigSigningMessageBase64,
         };
     }
 
@@ -21034,14 +20204,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 TransactionHashHex = RequiredStringValue(value),
             },
-            ("contract-call", "TransactionScaffoldBase64") => ValidContractCallResponse() with
-            {
-                TransactionScaffoldBase64 = RequiredStringValue(value),
-            },
-            ("contract-call", "SignedTransactionBase64") => ValidContractCallResponse() with
-            {
-                SignedTransactionBase64 = RequiredStringValue(value),
-            },
+            ("contract-call", "TransactionPayloadBase64") => ValidContractCallResponse() with { TransactionPayloadBase64 = RequiredStringValue(value) },
             ("contract-call", "SigningMessageBase64") => ValidContractCallResponse() with
             {
                 SigningMessageBase64 = RequiredStringValue(value),
@@ -21161,10 +20324,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             CodeHashHex = ContractCodeHashHex,
             AbiHashHex = ContractAbiHashHex,
             CreationTimeMilliseconds = 123456,
-            TransactionHashHex = ToriiTransactionHashHex,
-            TransactionScaffoldBase64 = "c2NhZmZvbGQ=",
-            SignedTransactionBase64 = "c2lnbmVk",
-            SigningMessageBase64 = "bWVzc2FnZQ==",
+            TransactionHashHex = null,
+            TransactionPayloadBase64 = "cGF5bG9hZA==", SigningMessageBase64 = Convert.ToBase64String(IrohaHash.Hash(Encoding.UTF8.GetBytes("payload"))),
             Entrypoint = "main",
             OperationReceipt = ValidContractCallOperationReceipt(),
         };
@@ -27800,9 +26961,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["abi_hash_hex"] = ContractAbiHashHex,
             ["creation_time_ms"] = 123456,
             ["tx_hash_hex"] = null,
-            ["transaction_scaffold_b64"] = "c2NhZmZvbGQ=",
-            ["signed_transaction_b64"] = "c2lnbmVk",
-            ["signing_message_b64"] = "bWVzc2FnZQ==",
+            ["transaction_payload_b64"] = "cGF5bG9hZA==",
+            ["signing_message_b64"] = Convert.ToBase64String(IrohaHash.Hash(Encoding.UTF8.GetBytes("payload"))),
             ["entrypoint"] = "main",
             ["operation_receipt"] = ContractCallOperationReceiptJsonObject(),
         };
@@ -28981,7 +28141,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["tx_hash_hex"] = null,
             ["executed_tx_hash_hex"] = null,
             ["creation_time_ms"] = 321,
-            ["signing_message_b64"] = "bXVsdGlzaWc=",
+            ["transaction_payload_b64"] = MultisigTransactionPayloadBase64,
+            ["signing_message_b64"] = MultisigSigningMessageBase64,
         };
 
         response[field] = JsonValueForMultisig(value);
@@ -29150,7 +28311,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             VpnQuoteIdHex,
             VpnPaymentTransactionHashHex,
             VpnQuoteIdHex,
-            "cafe",
             "cafe");
         response[field] = JsonValueForVpnResponse(value);
         return response.ToJsonString();
@@ -29176,7 +28336,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 VpnQuoteIdHex,
                 VpnPaymentTransactionHashHex,
                 VpnQuoteIdHex,
-                "cafe",
                 "cafe")),
             ["total"] = 1,
         };
@@ -29207,7 +28366,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 VpnQuoteIdHex,
                 VpnPaymentTransactionHashHex,
                 VpnQuoteIdHex,
-                "cafe",
                 "cafe")),
             ["total"] = 1,
         };
@@ -30592,39 +29750,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         offset += 8;
         Buffer.BlockCopy(bytes, 0, preimage, offset, bytes.Length);
         return Convert.ToHexString(SHA256.HashData(preimage)).ToLowerInvariant();
-    }
-
-    private static void WriteUInt64BigEndian(byte[] target, int offset, ulong value)
-    {
-        for (var index = 7; index >= 0; index--)
-        {
-            target[offset + index] = (byte)(value & 0xff);
-            value >>= 8;
-        }
-    }
-
-    private static string EventFilterQuery(string filterJson)
-    {
-        return "filter=" + Uri.EscapeDataString(filterJson);
-    }
-
-    private static string QueryParameter(string query, string name)
-    {
-        var queryText = query.StartsWith("?", StringComparison.Ordinal) ? query[1..] : query;
-        foreach (var segment in queryText.Split('&'))
-        {
-            var equalsIndex = segment.IndexOf('=');
-            var rawName = equalsIndex >= 0 ? segment[..equalsIndex] : segment;
-            if (!string.Equals(Uri.UnescapeDataString(rawName), name, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            var rawValue = equalsIndex >= 0 ? segment[(equalsIndex + 1)..] : string.Empty;
-            return Uri.UnescapeDataString(rawValue.Replace("+", " ", StringComparison.Ordinal));
-        }
-
-        throw new InvalidOperationException($"Query parameter {name} was not present.");
     }
 
     private static string TestAccountId(byte publicKeyByte)

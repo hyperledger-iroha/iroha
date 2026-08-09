@@ -46,11 +46,11 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             "IrohaSwift/Package.resolved": '{"pins":[],"version":3}\n',
             "IrohaSwift/Sources/IrohaSwift/Core.swift": "public struct Core {}\n",
             "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift": (
-                'let hashes = [\n'
-                '    "macos-arm64": "' + ("1" * 64) + '",\n'
-                '    "ios-arm64": "' + ("2" * 64) + '",\n'
-                '    "ios-arm64_x86_64-simulator": "' + ("3" * 64) + '"\n'
-                ']\n'
+                "    private static let expectedHashes: [String: String] = [\n"
+                '        "macos-arm64_x86_64": "' + ("1" * 64) + '",\n'
+                '        "ios-arm64": "' + ("2" * 64) + '",\n'
+                '        "ios-arm64_x86_64-simulator": "' + ("3" * 64) + '"\n'
+                "    ]\n"
             ),
             "IrohaSwift/Sources/IrohaSwiftMobileTransports/Nfc.swift":
                 "public struct Nfc {}\n",
@@ -291,9 +291,9 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             3,
         )
 
-    def test_apple_builder_uses_one_selected_lock_for_all_four_builds(self) -> None:
+    def test_apple_builder_uses_one_selected_lock_for_all_five_builds(self) -> None:
         builder = APPLE_BUILDER.read_text(encoding="utf-8")
-        self.assertEqual(builder.count("run_hermetic_apple_cargo \\\n"), 4)
+        self.assertEqual(builder.count("run_hermetic_apple_cargo \\\n"), 5)
         self.assertIn(
             '-Z unstable-options --lockfile-path "$CARGO_LOCKFILE"',
             builder,

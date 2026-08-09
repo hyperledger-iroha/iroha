@@ -66,8 +66,15 @@ test("Kagemusha JavaScript surface is transport-only ABI-21/V4", () => {
   assert.equal(KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES, 512 * 1024);
   assert.equal(KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES, 48 * 1024 * 1024);
   assert.equal(distSdk.KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION, 21);
+  assert.equal(typeof sdk.ToriiClient.prototype.getOfflineCapability, "function");
   assert.equal(typeof distSdk.ToriiClient.prototype.getOfflineCapability, "function");
-  assert.equal(typeof distSdk.ToriiClient.prototype.getKagemushaReadinessV4, "function");
+  for (const Client of [ToriiClient, ToriiBrowserClient]) {
+    assert.equal(Client.prototype.getKagemushaReadinessV4, undefined);
+  }
+  for (const publicSurface of [sdk, distSdk]) {
+    assert.equal(publicSurface.normalizeKagemushaAssetSelector, undefined);
+    assert.equal(publicSurface.normalizeKagemushaReadinessV4, undefined);
+  }
   assert.equal(
     Object.keys(sdk).some((name) => /kagemusha.*prover/iu.test(name)),
     false,
@@ -191,23 +198,6 @@ test("ToriiBrowserClient exposes the same transport-only Kagemusha contract", as
       `/v1/offline/operations/${OPERATION_ID}`,
     ],
   );
-});
-
-test("deprecated asset selectors are ignored by both Torii clients", async () => {
-  for (const Client of [ToriiClient, ToriiBrowserClient]) {
-    const observed = [];
-    const client = new Client("https://torii.example", {
-      fetchImpl: async (url) => {
-        observed.push(new URL(url));
-        return jsonResponse(universalCapability());
-      },
-      maxRetries: 0,
-    });
-
-    const capability = await client.getKagemushaReadinessV4("not-an-asset-selector");
-    assert.equal(capability.cash_handoff_capability, "cash_handoff_v1");
-    assert.equal(observed[0].search, "");
-  }
 });
 
 test("operation parsing rejects a V3 top-up anchor instead of upgrading it", async () => {

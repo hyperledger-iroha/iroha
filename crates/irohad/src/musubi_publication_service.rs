@@ -27,16 +27,11 @@
 // public query response or publisher-supplied bytes as finality evidence, or revive the retired
 // public Torii upload path.
 
-use std::{
-    future::Future,
-    pin::Pin,
-    sync::Arc,
-    time::Duration,
-};
+use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
-use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_core::{queue::Queue, state::State};
 use iroha_data_model::ChainId;
+use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 
 /// Live daemon-owned dependencies made available only after trusted startup replay.
 ///
@@ -144,10 +139,7 @@ pub trait MusubiPublicationPrivateServiceFactoryV1: Send + 'static {
     fn build(
         self: Box<Self>,
         context: MusubiPublicationPrivateServiceContextV1,
-    ) -> Result<
-        MusubiPublicationPrivateDeploymentV1,
-        MusubiPublicationPrivateServiceFactoryErrorV1,
-    >;
+    ) -> Result<MusubiPublicationPrivateDeploymentV1, MusubiPublicationPrivateServiceFactoryErrorV1>;
 }
 
 /// Redacted terminal failure from a deployment-owned private HTTPS ingress.
@@ -264,10 +256,7 @@ pub fn build_and_start_injected_musubi_publication_private_service_v1(
     context: MusubiPublicationPrivateServiceContextV1,
     shutdown: ShutdownSignal,
 ) -> Result<
-    (
-        MusubiPublicationPrivateServiceAvailabilityV1,
-        Option<Child>,
-    ),
+    (MusubiPublicationPrivateServiceAvailabilityV1, Option<Child>),
     MusubiPublicationPrivateServiceFactoryErrorV1,
 > {
     let Some(factory) = factory else {
@@ -406,13 +395,12 @@ mod tests {
 
     #[test]
     fn absent_factory_is_fail_closed_and_starts_no_child() {
-        let (availability, child) =
-            build_and_start_injected_musubi_publication_private_service_v1(
-                None,
-                factory_context(),
-                ShutdownSignal::new(),
-            )
-            .expect("absent factory is not an error");
+        let (availability, child) = build_and_start_injected_musubi_publication_private_service_v1(
+            None,
+            factory_context(),
+            ShutdownSignal::new(),
+        )
+        .expect("absent factory is not an error");
         assert_eq!(
             availability,
             MusubiPublicationPrivateServiceAvailabilityV1::Unavailable
@@ -448,13 +436,12 @@ mod tests {
         };
         let mut supervisor = Supervisor::new();
         let shutdown = supervisor.shutdown_signal();
-        let (availability, child) =
-            build_and_start_injected_musubi_publication_private_service_v1(
-                Some(Box::new(factory)),
-                context,
-                shutdown.clone(),
-            )
-            .expect("qualified factory builds");
+        let (availability, child) = build_and_start_injected_musubi_publication_private_service_v1(
+            Some(Box::new(factory)),
+            context,
+            shutdown.clone(),
+        )
+        .expect("qualified factory builds");
         assert_eq!(
             availability,
             MusubiPublicationPrivateServiceAvailabilityV1::Supervised

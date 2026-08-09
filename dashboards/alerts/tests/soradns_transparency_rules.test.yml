@@ -5,7 +5,7 @@ tests:
   - interval: 1m
     input_series:
       - series: 'soradns_bundle_proof_age_seconds{resolver_id="resolver-1"}'
-        values: '0 0 0 1000 1500 2000 2500 3000 3100 3200 3300 4000'
+        values: '0 0 0 1000 1500 4000 4000 4000 4000 4000 4000 4000'
       - series: 'soradns_bundle_cid_drift_total{resolver_id="resolver-1",namehash="deadbeef"}'
         values: '0 0 0 0 0 0 0 1 1 1 2 2'
     alert_rule_test:
@@ -20,6 +20,8 @@ tests:
               resolver_id: resolver-1
             exp_annotations:
               summary: "SoraDNS proof age exceeded"
+              description: |
+                Resolver resolver-1 served bundles older than one hour (age 4000s). Investigate Signed Tree Head ingestion and transparency tailer pipelines.
       - alertname: SoradnsCidDriftDetected
         eval_time: 6m
         exp_alerts: []
@@ -32,3 +34,5 @@ tests:
               namehash: deadbeef
             exp_annotations:
               summary: "SoraDNS CID drift detected"
+              description: |
+                Resolver resolver-1 observed CID drift for deadbeef within the last 10 minutes. Validate GAR approvals and confirm bundle provenance.

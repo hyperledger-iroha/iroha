@@ -9,7 +9,8 @@ use iroha_data_model::{
         BlockSubject, CertifiedBodyRequest, CertifiedBodyResponse, CommitCertificateRequest,
         CommitCertificateResponse, ConsensusMessageV2, ConsensusMessageV2Payload, ConsensusMode,
         ConsensusRound, DataAvailabilityLayout, DualQuorum, ExecutionCommitment, GlobalPhase,
-        HeightContext, PROTOCOL_VERSION, PayloadChunk, PayloadEncoding, PayloadManifest, Proposal,
+        HeightContext, MergeCarrierCommitmentV1, NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+        PROTOCOL_VERSION, PayloadChunk, PayloadEncoding, PayloadManifest, Proposal,
         ProposalJustification, QuorumCertificate, SumeragiV2BodyState,
         SumeragiV2HeightContextStatus, SumeragiV2IgnoreCount, SumeragiV2IgnoreReason,
         SumeragiV2LivenessBlocker, SumeragiV2LivenessStatus, SumeragiV2LocalWorkStage,
@@ -20,6 +21,7 @@ use iroha_data_model::{
         SumeragiV2VoteQuorumStatus, SumeragiV2WorkStatus, TimeoutCertificate, TimeoutJustification,
         TimeoutVote, TimeoutVoteGroup, ValidatorPower, Vote, encode_payload_chunks,
     },
+    merge::MergeLedgerEntry,
     peer::PeerId,
 };
 use norito::codec::{DecodeAll, Encode};
@@ -85,12 +87,13 @@ fn subject(seed: u8) -> BlockSubject {
 }
 
 fn execution_commitment(seed: u8) -> ExecutionCommitment {
-    ExecutionCommitment::new(
+    ExecutionCommitment::new_without_merge_carrier(
         Hash::new([seed, 3]),
         Hash::new([seed, 4]),
         Hash::new([seed, 5]),
         None,
         0,
+        1,
         Hash::new([seed, 6]),
     )
     .expect("canonical fixture execution commitment")
@@ -108,6 +111,33 @@ fn qc(context: &HeightContext, view: u64, phase: GlobalPhase) -> QuorumCertifica
         signers: vec![0, 1, 2],
         aggregate_signature: vec![0x5a; 48],
     }
+}
+
+fn merge_carrier_entry_hash() -> HashOf<MergeLedgerEntry> {
+    HashOf::from_untyped_unchecked(Hash::new(b"sumeragi-v2-v4-merge-carrier-fixture"))
+}
+
+fn merge_carrier_execution_commitment(seed: u8) -> ExecutionCommitment {
+    ExecutionCommitment::new_with_native_amx_application_manifest_and_merge_carrier(
+        Hash::new([seed, 3]),
+        Hash::new([seed, 4]),
+        Hash::new([seed, 5]),
+        None,
+        0,
+        NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+        native_amx_application_manifest_empty_root(),
+        0,
+        Some(MergeCarrierCommitmentV1::new(merge_carrier_entry_hash())),
+        1,
+        Hash::new([seed, 6]),
+    )
+    .expect("canonical merge-carrier fixture execution commitment")
+}
+
+fn merge_carrier_qc(context: &HeightContext) -> QuorumCertificate {
+    let mut certificate = qc(context, 4, GlobalPhase::Prepare);
+    certificate.execution_commitment = merge_carrier_execution_commitment(5);
+    certificate
 }
 
 fn fixture_rows() -> BTreeMap<(String, String), String> {
@@ -132,6 +162,8 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
     let context = context();
     let body = b"body";
     let prepare = qc(&context, 1, GlobalPhase::Prepare);
+    let merge_carrier_prepare = merge_carrier_qc(&context);
+    assert_eq!(merge_carrier_prepare.validate(&context), Ok(()));
     let timeout = TimeoutCertificate {
         round: round(&context, 2),
         groups: vec![TimeoutVoteGroup {
@@ -189,6 +221,10 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
     insert_message(
         "quorum_certificate",
         ConsensusMessageV2Payload::QuorumCertificate(prepare.clone()),
+    );
+    insert_message(
+        "quorum_certificate_merge_carrier",
+        ConsensusMessageV2Payload::QuorumCertificate(merge_carrier_prepare),
     );
     insert_message(
         "timeout_vote",
@@ -441,6 +477,7 @@ fn shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation() {
         "commit_request_truncated_signature",
         "commit_response_truncated_signature",
         "commit_request_invalid_chain_utf8",
+        "execution_commitment_missing_merge_carrier_field",
     ] {
         assert!(
             decode("negative_message", name).is_err(),
@@ -456,6 +493,18 @@ fn shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation() {
         .expect("noncanonical signer order is structurally decodable");
     let ConsensusMessageV2Payload::QuorumCertificate(certificate) = noncanonical.payload else {
         panic!("noncanonical signer fixture used the wrong payload")
+    };
+    assert!(certificate.validate(&context).is_err());
+
+    let merge_carrier_wrong_version = decode(
+        "negative_message",
+        "execution_commitment_merge_carrier_wrong_version",
+    )
+    .expect("wrong merge-carrier version is structurally decodable");
+    let ConsensusMessageV2Payload::QuorumCertificate(certificate) =
+        merge_carrier_wrong_version.payload
+    else {
+        panic!("wrong merge-carrier version fixture used the wrong payload")
     };
     assert!(certificate.validate(&context).is_err());
 

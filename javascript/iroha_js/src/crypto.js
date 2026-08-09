@@ -903,7 +903,7 @@ function privacyNativeOutputToBuffer(native, result, operation, options = {}) {
       PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1.VALID
     ) {
       throw new Error(
-        `native ${operation} returned an invalid local compiled-profile catalog archive`,
+        `native ${operation} returned an invalid typed privacy compiled-profile catalog`,
       );
     }
     return Buffer.from(output);
@@ -931,9 +931,11 @@ export function isPrivacyNativeAvailable() {
 }
 
 /**
- * Return this binary's canonical Norito V1 compiled-profile catalog.
- * This is local build metadata; obtain activation and readiness from Torii's
- * live privacy capability endpoint.
+ * Return this native binary's canonical local compiled-profile catalog.
+ *
+ * The catalog contains no committed height, governance activation, or network
+ * readiness. Use `getPrivacyCapabilitiesV1` with a configured Torii client for
+ * the authoritative fresh committed snapshot.
  * @returns {Buffer}
  */
 export function privacyCompiledProfileCatalogV1() {

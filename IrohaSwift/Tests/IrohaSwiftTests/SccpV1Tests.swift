@@ -739,21 +739,34 @@ final class SccpV1Tests: XCTestCase {
             publicSignalSchemaHash()
         )
         let finalityAnchor = outboundProofPolicy.soraFinalityAnchor
-        XCTAssertEqual(finalityAnchor.protocolVersion, 3)
+        XCTAssertEqual(finalityAnchor.protocolVersion, 4)
         XCTAssertEqual(finalityAnchor.checkpointContextId, Data(repeating: 0xa2, count: 32))
         XCTAssertEqual(finalityAnchor.checkpointFinalityArtifactHash, Data(repeating: 0xa3, count: 32))
         XCTAssertEqual(
             finalityAnchor.anchorHash,
-            Data(hexString: "EC6C821CAF5FA74368C08E9101AB310F132FB7F627A09F6F9481AA9484054BBA")
+            Data(hexString: "4410EE4CCFD06F2D0E3A658615D516AC8CF65255D8A8716CE511EA95E135C8C3")
         )
         let currentRequest = try SccpGroth16ProofRequestV1.parse(
             try proofRequestJSON(protocolVersion: 4)
         )
         XCTAssertEqual(currentRequest.soraFinalityAnchor.protocolVersion, 4)
-        XCTAssertNotEqual(currentRequest.soraFinalityAnchor.anchorHash, finalityAnchor.anchorHash)
+        XCTAssertEqual(currentRequest.soraFinalityAnchor.anchorHash, finalityAnchor.anchorHash)
+        let historicalRequest = try SccpGroth16ProofRequestV1.parse(
+            try proofRequestJSON(protocolVersion: 3)
+        )
+        XCTAssertEqual(historicalRequest.soraFinalityAnchor.protocolVersion, 3)
+        XCTAssertEqual(
+            historicalRequest.soraFinalityAnchor.anchorHash,
+            Data(hexString: "EC6C821CAF5FA74368C08E9101AB310F132FB7F627A09F6F9481AA9484054BBA")
+        )
+        XCTAssertNotEqual(
+            historicalRequest.soraFinalityAnchor.anchorHash,
+            currentRequest.soraFinalityAnchor.anchorHash
+        )
 
         let invalidFinalityAnchors: [(inout [String: Any]) -> Void] = [
             { $0["protocol_version"] = 1 },
+            { $0["protocol_version"] = "4" },
             { $0["protocol_version"] = 5 },
             { $0["protocol_version"] = "3" },
             { $0["protocol_version"] = true },
@@ -773,8 +786,8 @@ final class SccpV1Tests: XCTestCase {
         let canonicalJSON = String(data: valid, encoding: .utf8)!
         XCTAssertThrowsError(try SccpRegistryV1.parse(Data(
             canonicalJSON.replacingOccurrences(
-                of: "\"protocol_version\":3",
-                with: "\"protocol_version\":3.0"
+                of: "\"protocol_version\":4",
+                with: "\"protocol_version\":4.0"
             ).utf8
         )))
         XCTAssertThrowsError(try SccpRegistryV1.parse(Data(
@@ -1567,7 +1580,7 @@ final class SccpV1Tests: XCTestCase {
         ])
     }
 
-    private func proofRequestJSON(protocolVersion: Int = 3) throws -> Data {
+    private func proofRequestJSON(protocolVersion: Int = 4) throws -> Data {
         let key = verifyingKey()
         let hashes = policyHashes()
         let anchor = finalityAnchor(protocolVersion: protocolVersion)
@@ -1747,7 +1760,7 @@ final class SccpV1Tests: XCTestCase {
         return (semantic, finalityAnchor().hash)
     }
 
-    private func finalityAnchor(protocolVersion: Int = 3) -> (object: [String: Any], hash: Data) {
+    private func finalityAnchor(protocolVersion: Int = 4) -> (object: [String: Any], hash: Data) {
         let chainId = Data(hexString: "fc56984b2be7431d840e21514d1883f0")!
         let chainHash = irohaKeccak256(chainId)
         let checkpoint = Data(repeating: 0xa1, count: 32)
@@ -1992,7 +2005,7 @@ final class SccpV1Tests: XCTestCase {
         var creation = CompactNoritoWriter()
         creation.writeUInt64LE(creationTimeMs)
         var emptyMetadata = CompactNoritoWriter()
-        emptyMetadata.writeLength(0)
+        emptyMetadata.writeUInt64LE(0)
 
         var payload = CompactNoritoWriter()
         payload.writeField(chain.data)

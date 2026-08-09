@@ -17,17 +17,21 @@
 pub(crate) mod accumulator_air;
 pub(crate) mod accumulator_stark;
 pub(crate) mod air;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) mod codec;
 pub(crate) mod credential_pre_aux;
 pub(crate) mod credential_stark;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) mod der;
 pub(crate) mod der_air;
+pub(crate) mod der_limits;
 pub(crate) mod der_stark;
 pub(crate) mod engine;
 pub(crate) mod fixed_algebraic;
 pub(crate) mod fixed_algebraic_p256;
 pub(crate) mod fixed_algebraic_sha;
 pub(crate) mod io_air;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) mod main_assembly;
 pub(crate) mod main_io;
 pub(crate) mod merkle;
@@ -44,10 +48,13 @@ pub(crate) mod p256_value_bus;
 pub(crate) mod p256_window_air;
 pub(crate) mod profile;
 pub(crate) mod projection_air;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) mod relation;
 pub(crate) mod rfc5280_stark;
+#[cfg(test)]
 pub(crate) mod sha256_air;
 pub(crate) mod sha256_word_air;
 pub(crate) mod sha_call_bus_stark;
 pub(crate) mod sha_word_stark;
 pub(crate) mod stark;
+pub(crate) mod verifier_profile;

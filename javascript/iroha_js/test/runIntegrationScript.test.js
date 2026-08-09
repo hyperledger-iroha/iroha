@@ -10,6 +10,7 @@ import test from "node:test";
 import {
   composeUpArgs,
   validateDefaultComposeGenesisArtifacts,
+  validateQualificationEnvironment,
 } from "../scripts/run_integration.mjs";
 
 test("default Compose startup does not narrow the validator stack", () => {
@@ -62,4 +63,51 @@ test("default Compose artifact preflight fails closed and accepts exact records"
 
   await writeFile(hashPath, `${"0".repeat(63)}1\n`);
   await validateDefaultComposeGenesisArtifacts(env);
+});
+
+test("release qualification preflight requires the complete live SoraFS context", () => {
+  assert.throws(
+    () => validateQualificationEnvironment({}),
+    /release qualification requires explicit live inputs/u,
+  );
+
+  const complete = {
+    IROHA_TORII_INTEGRATION_URL: "https://torii.example.invalid",
+    IROHA_TORII_INTEGRATION_MUTATE: "1",
+    IROHA_TORII_INTEGRATION_SORAFS_ENABLED: "1",
+    IROHA_TORII_INTEGRATION_SORAFS_FETCH_MANIFEST: "01".repeat(32),
+    IROHA_TORII_INTEGRATION_SORAFS_FETCH_LENGTH: "4096",
+    IROHA_TORII_INTEGRATION_SORAFS_POR_WEEK: "2026-W31",
+    IROHA_TORII_INTEGRATION_UAID: `uaid:${"03".repeat(32)}`,
+    IROHA_TORII_INTEGRATION_UAID_DATASPACE: "7",
+    IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_ENABLED: "1",
+    IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_MANIFEST: "/runtime/manifest.json",
+    IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_REVOKE_EPOCH: "11",
+    IROHA_TORII_INTEGRATION_DA_ENABLED: "1",
+    IROHA_TORII_INTEGRATION_DA_TICKET: "05".repeat(32),
+    IROHA_TORII_INTEGRATION_DA_GATEWAYS: JSON.stringify([
+      { name: "gateway-a" },
+      { name: "gateway-b" },
+    ]),
+  };
+  assert.doesNotThrow(() => validateQualificationEnvironment(complete));
+
+  assert.throws(
+    () =>
+      validateQualificationEnvironment({
+        ...complete,
+        IROHA_TORII_INTEGRATION_UAID_DATASPACE: "",
+      }),
+    /IROHA_TORII_INTEGRATION_UAID_DATASPACE/u,
+  );
+  assert.throws(
+    () =>
+      validateQualificationEnvironment({
+        ...complete,
+        IROHA_TORII_INTEGRATION_DA_GATEWAYS: JSON.stringify([
+          { name: "gateway-a" },
+        ]),
+      }),
+    /at least two gateways/u,
+  );
 });

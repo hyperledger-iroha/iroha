@@ -15,10 +15,10 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::SessionKey;
 
-#[cfg(feature = "soranet-record-io")]
 mod io;
-#[cfg(feature = "soranet-record-io")]
-pub use io::{RecordReader, RecordWriter};
+
+#[doc(hidden)]
+pub use zeroize::Zeroize as __RecordZeroize;
 
 /// Magic and protocol version carried by every protected record.
 pub const RECORD_MAGIC: [u8; 4] = *b"SNR1";

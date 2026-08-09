@@ -42,6 +42,24 @@ ANDROID_CARGO_ENVIRONMENT = APPLE_CARGO_ENVIRONMENT | {
     "ANDROID_NDK_HOME",
     "ANDROID_NDK_ROOT",
 }
+GRADLE_JVM_ENVIRONMENT = frozenset(
+    {
+        "ANDROID_HOME",
+        "ANDROID_SDK_ROOT",
+        "DYLD_LIBRARY_PATH",
+        "GRADLE_USER_HOME",
+        "HOME",
+        "IROHA_NATIVE_LIBRARY_PATH",
+        "IROHA_REQUIRE_KAGEMUSHA_NATIVE",
+        "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION",
+        "JAVA_HOME",
+        "LANG",
+        "LC_ALL",
+        "LD_LIBRARY_PATH",
+        "PATH",
+        "TMPDIR",
+    }
+)
 AUTHENTICATED_CARGO_PROFILES = frozenset(
     {
         "android-cargo",
@@ -72,23 +90,12 @@ PROFILES = {
     },
     "android-cargo": ANDROID_CARGO_ENVIRONMENT,
     "host-cargo": COMMON_CARGO_ENVIRONMENT,
-    "gradle-jvm": frozenset(
-        {
-            "ANDROID_HOME",
-            "ANDROID_SDK_ROOT",
-            "DYLD_LIBRARY_PATH",
-            "GRADLE_USER_HOME",
-            "HOME",
-            "IROHA_NATIVE_LIBRARY_PATH",
-            "IROHA_REQUIRE_KAGEMUSHA_NATIVE",
-            "JAVA_HOME",
-            "LANG",
-            "LC_ALL",
-            "LD_LIBRARY_PATH",
-            "PATH",
-            "TMPDIR",
-        }
-    ),
+    "gradle-jvm": GRADLE_JVM_ENVIRONMENT,
+    "gradle-jvm-localnet": GRADLE_JVM_ENVIRONMENT
+    | {
+        "IROHA_LOCALNET_DIR",
+        "IROHA_LOCALNET_TEST",
+    },
 }
 
 

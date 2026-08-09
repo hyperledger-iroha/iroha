@@ -37,25 +37,34 @@ use rustix::fs::{RenameFlags, renameat_with};
 
 use super::{
     AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES, AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
-    AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX, AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE,
-    AutonomousLaneBlockArtifact, AutonomousLaneBlockLatestAttemptV1, BlockStore,
-    BlockStoreCommitMarker, BoundProgressDirectory, BoundProgressNamespace, BoundProgressPair,
+    AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX, AUTONOMOUS_LANE_MERGE_BUNDLES_DATA_FILE,
+    AUTONOMOUS_LANE_MERGE_BUNDLES_INDEX_FILE, AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE,
+    AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX, AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
+    AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES, AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES,
+    AutonomousLaneBlockArtifact, AutonomousLaneBlockLatestAttemptV1, AutonomousLaneMergeBundleV1,
+    AutonomousLifecycleBootstrapRecoveryStage, AutonomousLifecycleBootstrapV1,
+    AutonomousLifecycleCursorPhaseKindV2, AutonomousLifecycleCursorPhaseV2,
+    AutonomousLifecycleCursorV2, AutonomousLifecycleTerminalOutcomeSourceV1,
+    AutonomousLifecycleTerminalOutcomeV1, BlockStore, BlockStoreCommitMarker,
+    BoundProgressDirectory, BoundProgressNamespace, BoundProgressPair,
     BoundProgressRecoveryFailure, CERTIFIED_LANE_BLOCKS_DATA_FILE,
     CERTIFIED_LANE_BLOCKS_INDEX_FILE, COUNT_FILE_NAME, DATA_FILE_NAME, Error, HASHES_FILE_NAME,
-    INDEX_FILE_NAME, Kura, LANE_ARTIFACTS_DATA_FILE, LANE_ARTIFACTS_DIR_NAME,
-    LANE_ARTIFACTS_INDEX_FILE, LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE,
+    HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1, HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+    HistoricalAutonomousLaneRecoveryRecordV1, INDEX_FILE_NAME, Kura, LANE_ARTIFACTS_DATA_FILE,
+    LANE_ARTIFACTS_DIR_NAME, LANE_ARTIFACTS_INDEX_FILE, LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE,
     LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE, LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE,
     LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE, LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE,
     LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE, LANE_MERGE_APPLICATION_FRONTIER_FILE,
     LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_BUILD_FILE, LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_FILE,
     LaneBlockApplicationReceiptArtifact, LaneBlockApplicationReceiptArtifactFormat,
     LaneBlockExecutionInputArtifact, LaneBlockExecutionPreflightArtifact,
-    LaneMergeApplicationFrontierV1, MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES,
-    MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES, MergeLedgerCarrierRecord,
-    NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE, NativeAmxEvidenceKind,
-    NativeAmxParticipantApplicationManifestArtifactV1,
+    LaneHistoryCompactionOutcome, LaneMergeApplicationFrontierV1,
+    MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES, MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES,
+    MergeLedgerCarrierRecord, NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE,
+    NativeAmxEvidenceKind, NativeAmxParticipantApplicationManifestArtifactV1,
     NativeAmxParticipantApplicationReceiptArtifact, RecoveredLaneBlockPayload, Result,
-    STRICT_INIT_MAX_BLOCK_BYTES, create_dir_all_with_context, sync_dir,
+    STRICT_INIT_MAX_BLOCK_BYTES, bounded_historical_autonomous_recovery_entries,
+    create_dir_all_with_context, sync_dir,
 };
 #[cfg(test)]
 use super::{
@@ -100,53 +109,13 @@ const MAX_GEOMETRY_ARCHIVE_ENTRIES: usize = 4_000_000;
 const MAX_LANE_MARKER_BYTES: u64 = 4 * 1024;
 const MAX_BLOCK_STORE_COMMIT_MARKER_BYTES: u64 = 4 * 1024;
 const MAX_LANE_RETIREMENT_WORK_ITEMS_PER_SIDECAR: usize = 65_536;
-const LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE: usize = 5;
+const LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE: usize = 6;
 const LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE: usize = 2;
+// Beyond six regular pairs, each route may retain certified, Native latest-index, and merge-application frontiers.
+const LANE_RETIREMENT_FIXED_FRONTIERS_PER_ROUTE: usize = 3;
 const LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE: usize =
-    LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE * 2 + 2;
-
-/// Bound the aggregate retirement scan without treating legitimate route
-/// multiplicity as corruption.
-///
-/// Each route can retain five ordinary histories (autonomous payload, input,
-/// preflight, certificate, and application receipt), plus two Native evidence
-/// artifact families sharing one configured byte bound. Ordinary histories may also contain
-/// the globally bounded pending-merge depth beyond their terminal frontier.
-/// Startup recovery may admit one entry beyond the compact Native window, but
-/// retirement runs only after startup repair and therefore accepts exactly the
-/// configured retained record count.
-fn lane_retirement_aggregate_work_item_limit(
-    route_count: usize,
-    regular_retention: usize,
-    native_retention: usize,
-    pending_work_allowance: usize,
-) -> Option<usize> {
-    let regular_per_route = regular_retention
-        .checked_add(pending_work_allowance)?
-        .checked_mul(LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE)?;
-    let native_per_route =
-        native_retention.checked_mul(LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE)?;
-    route_count.checked_mul(regular_per_route.checked_add(native_per_route)?)
-}
-
-/// Return whether Native manifest and receipt windows are the same complete,
-/// contiguous retained suffix.
-///
-/// Publication may transiently leave one highest half-pair, but retirement
-/// and archive validation run only after repair and pair pruning. Neither path
-/// may accept family-skewed or punctured evidence.
-fn native_amx_retained_windows_are_complete(
-    manifest_heights: &BTreeSet<u64>,
-    receipt_heights: &BTreeSet<u64>,
-) -> bool {
-    manifest_heights == receipt_heights
-        && manifest_heights
-            .iter()
-            .copied()
-            .collect::<Vec<_>>()
-            .windows(2)
-            .all(|pair| pair[0].checked_add(1) == Some(pair[1]))
-}
+    LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE * 2 + LANE_RETIREMENT_FIXED_FRONTIERS_PER_ROUTE;
+const LANE_RETIREMENT_HISTORICAL_RECOVERY_NAMESPACES_PER_ROUTE: usize = 1;
 
 #[cfg(test)]
 static CONFIGURED_CATALOG_PREFLIGHT_IDENTITY_SWAP: std::sync::Mutex<Option<PathBuf>> =
@@ -2689,6 +2658,8 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         self.resolve_canonical_storage_before_mutation()?;
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
 
         let previous_bindings =
@@ -2873,7 +2844,11 @@ impl Kura {
             }
             let operations = journal.records[existing_index].operations.clone();
             let retiring = self.geometry_retirement_identities(previous, &operations)?;
-            self.ensure_lane_retirement_admissible_locked(&retiring, &certified_retirements)?;
+            self.ensure_lane_retirement_admissible_locked(
+                pending_canonical_bytes,
+                &retiring,
+                &certified_retirements,
+            )?;
             // Keep the retained terminal phase until the replay finishes. Downgrading a
             // `RolledBack` record to `Intent` would let a crash erase the fact that subsequent
             // recovery must authenticate existing storage rather than provision an empty pair.
@@ -2929,7 +2904,11 @@ impl Kura {
             replaced_lane_ids,
         )?;
         let retiring = self.geometry_retirement_identities(previous, &operations)?;
-        self.ensure_lane_retirement_admissible_locked(&retiring, &certified_retirements)?;
+        self.ensure_lane_retirement_admissible_locked(
+            pending_canonical_bytes,
+            &retiring,
+            &certified_retirements,
+        )?;
         let intent = LaneGeometryIntent {
             transition_id,
             transition_sequence,
@@ -4025,48 +4004,27 @@ impl Kura {
                 "merge execution context height differs from its canonical carrier mapping",
             ));
         }
-        let height = NonZeroUsize::new(usize::try_from(record.block_height)?).ok_or_else(|| {
-            self.geometry_error(
-                ErrorKind::InvalidData,
-                "merge execution carrier block height is zero",
-            )
-        })?;
-        let durable_hash = self.get_durable_block_hash(height).ok_or_else(|| {
-            self.geometry_error(
-                ErrorKind::NotFound,
-                "merge execution carrier block is not durable",
-            )
-        })?;
-        let carrier = self.get_block(height).ok_or_else(|| {
-            self.geometry_error(
-                ErrorKind::NotFound,
-                "merge execution carrier block payload is unavailable",
-            )
-        })?;
-        if durable_hash != record.block_hash || carrier.hash() != record.block_hash {
-            return Err(Error::BlockHeightConflict {
-                height: record.block_height,
-                expected: record.block_hash,
-                actual: carrier.hash(),
-            });
-        }
-        let reference = carrier
-            .execution_context()
-            .and_then(|bundle| bundle.merge_entry.as_ref())
+        let (carrier_header, finality, _) = self
+            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+                record.block_height,
+            )?
             .ok_or_else(|| {
                 self.geometry_error(
-                    ErrorKind::InvalidData,
-                    "merge execution carrier block has no certified merge reference",
+                    ErrorKind::NotFound,
+                    "merge execution carrier has no retained finality evidence",
                 )
             })?;
-        if !reference.matches_entry(entry)
-            || reference.entry_hash != entry_hash
-            || reference.execution_batch_hash != Some(batch.batch_hash)
-            || reference.epoch_id != entry.epoch_id
+        let expected_commitment =
+            iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1::new(entry_hash);
+        if carrier_header.hash() != record.block_hash
+            || finality.block_hash != record.block_hash
+            || finality.commit_qc.execution_commitment.merge_carrier != Some(expected_commitment)
+            || crate::merge::merge_application_header_from_carrier(&carrier_header)
+                != batch.application_block_header
         {
             return Err(self.geometry_error(
                 ErrorKind::InvalidData,
-                "merge execution carrier reference does not identify its durable merge entry",
+                "merge execution carrier finality does not identify its durable merge entry",
             ));
         }
         Ok(LaneGeometryMergeCarrier {
@@ -4079,7 +4037,7 @@ impl Kura {
     fn geometry_merge_carrier_map(
         &self,
     ) -> Result<BTreeMap<HashOf<MergeLedgerEntry>, MergeLedgerCarrierRecord>> {
-        let records = self.merge_carrier_records()?;
+        let records = self.merge_carrier_records_under_prune_and_canonical_guards()?;
         let mut carriers = BTreeMap::new();
         for record in records {
             if carriers.insert(record.entry_hash, record).is_some() {
@@ -4737,15 +4695,163 @@ impl Kura {
         Ok((manifests, receipts))
     }
 
+    /// Read and durability-attest the one bounded historical-autonomous
+    /// recovery subdirectory carried by a lane incarnation. The outer
+    /// lane-artifact snapshot accounts for the directory entry; this reader
+    /// separately accounts every immutable record and encoded byte.
+    #[allow(clippy::too_many_arguments)]
+    fn read_geometry_historical_autonomous_recovery_records(
+        &self,
+        lane_artifacts: &Path,
+        artifact_snapshot: &BoundProgressDirectorySnapshot,
+        lane_id: LaneId,
+        expected_dataspace_id: Option<DataSpaceId>,
+        expected_incarnation: Hash,
+        activation_height: u64,
+        entry_limit: usize,
+        aggregate_byte_limit: u64,
+        context: &str,
+    ) -> Result<(Vec<HistoricalAutonomousLaneRecoveryRecordV1>, u64)> {
+        let raw_name = std::ffi::OsStr::new(HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1);
+        let Some(snapshot) = artifact_snapshot.get(raw_name) else {
+            return Ok((Vec::new(), 0));
+        };
+        let directory = lane_artifacts.join(raw_name);
+        if snapshot.kind != BoundProgressDirectoryEntryKind::Directory {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("{context} historical recovery namespace is not a directory"),
+                ),
+                directory,
+            ));
+        }
+        let before = fs::symlink_metadata(&directory)
+            .map_err(|error| Error::IO(error, directory.clone()))?;
+        if before.file_type().is_symlink()
+            || !before.file_type().is_dir()
+            || geometry_file_identity(&before) != snapshot.identity
+            || self.canonical_sidecar_directory(&directory)?.is_none()
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("{context} historical recovery directory changed or escaped Kura"),
+                ),
+                directory,
+            ));
+        }
+        let entry_limit = entry_limit.min(HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS);
+        let (entries, encoded_bytes) = bounded_historical_autonomous_recovery_entries(
+            &directory,
+            entry_limit,
+            aggregate_byte_limit,
+            |path| {
+                let metadata = fs::symlink_metadata(path)
+                    .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+                Ok((metadata.clone(), metadata))
+            },
+        )?;
+        let mut records = Vec::with_capacity(entries.len());
+        for (path, accounted) in entries {
+            let record = self
+                .read_historical_autonomous_recovery_record_from_inventory(
+                    &path,
+                    &directory,
+                    Some(&accounted),
+                )?
+                .ok_or_else(|| {
+                    Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            format!("{context} historical recovery record disappeared"),
+                        ),
+                        path.clone(),
+                    )
+                })?;
+            let descriptor = &record.payload.origin_proposal.descriptor;
+            if descriptor.lane_id != lane_id
+                || descriptor.lane_incarnation != expected_incarnation
+                || descriptor.proposal_height <= activation_height
+                || expected_dataspace_id
+                    .is_some_and(|dataspace_id| descriptor.dataspace_id != dataspace_id)
+            {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("{context} historical recovery record has a stale lane binding"),
+                    ),
+                    path,
+                ));
+            }
+            let (retained_header, finality, _) = self
+                .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+                    record.canonical_body.height,
+                )?
+                .ok_or_else(|| {
+                    Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            format!("{context} historical recovery finality is unavailable"),
+                        ),
+                        path.clone(),
+                    )
+                })?;
+            if retained_header.hash() != record.canonical_body.block_hash
+                || retained_header.height().get() != record.canonical_body.height
+                || retained_header.view_change_index() != record.carrier_view
+                || finality.height != record.canonical_body.height
+                || finality.block_hash != record.canonical_body.block_hash
+                || HashOf::new(&finality) != record.canonical_body.finality_artifact_hash
+                || finality.commit_qc.execution_commitment
+                    != record.canonical_body.execution_commitment
+                || finality.height_context != record.historical_context
+                || finality.verify().is_err()
+                || finality.validate_for_header(&retained_header).is_err()
+            {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("{context} historical recovery has conflicting retained finality"),
+                    ),
+                    path,
+                ));
+            }
+            File::open(&path)
+                .and_then(|file| file.sync_all())
+                .map_err(|error| Error::IO(error, path))?;
+            records.push(record);
+        }
+        self.validate_historical_autonomous_recovery_inventory_collisions(&records)?;
+        sync_dir(&directory).map_err(|error| Error::IO(error, directory.clone()))?;
+        let after = fs::symlink_metadata(&directory)
+            .map_err(|error| Error::IO(error, directory.clone()))?;
+        if after.file_type().is_symlink()
+            || !after.file_type().is_dir()
+            || geometry_file_identity(&after) != snapshot.identity
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("{context} historical recovery directory changed while reading"),
+                ),
+                directory,
+            ));
+        }
+        Ok((records, encoded_bytes))
+    }
+
     /// Admit first-release lane retirement only when durable work is terminal
     /// or is owned by the exact globally certified retiring incarnation.
     fn ensure_lane_retirement_admissible_locked(
         &self,
+        pending_canonical_bytes: u64,
         retiring: &[LaneRetirementIdentity],
         certified_retirements: &BTreeSet<LaneRetirementIdentity>,
     ) -> Result<()> {
         self.validate_certified_retirements_against_geometry(retiring, certified_retirements)?;
         self.ensure_first_release_lane_retirement_admissible_with_certified_locked(
+            pending_canonical_bytes,
             retiring,
             certified_retirements,
         )
@@ -4755,9 +4861,11 @@ impl Kura {
     #[cfg(test)]
     fn ensure_first_release_lane_retirement_admissible_locked(
         &self,
+        pending_canonical_bytes: u64,
         retiring: &[LaneRetirementIdentity],
     ) -> Result<()> {
         self.ensure_first_release_lane_retirement_admissible_with_certified_locked(
+            pending_canonical_bytes,
             retiring,
             &BTreeSet::new(),
         )
@@ -4766,6 +4874,7 @@ impl Kura {
     /// Apply the Native-aware, fail-closed first-release retirement policy.
     fn ensure_first_release_lane_retirement_admissible_with_certified_locked(
         &self,
+        pending_canonical_bytes: u64,
         retiring: &[LaneRetirementIdentity],
         certified_retirements: &BTreeSet<LaneRetirementIdentity>,
     ) -> Result<()> {
@@ -4782,6 +4891,9 @@ impl Kura {
             .iter()
             .map(|(lane_id, entry)| (*lane_id, entry.clone()))
             .collect::<Vec<_>>();
+        let lifecycle_process_generation = self
+            .read_autonomous_lifecycle_process_generation_record()?
+            .map(|(record, _)| record);
         let aggregate_work_item_limit = lane_retirement_aggregate_work_item_limit(
             entries.len(),
             self.roster_sidecar_retention().get(),
@@ -4794,26 +4906,21 @@ impl Kura {
                 "configured lane retirement work-item bound overflows",
             )
         })?;
-        let per_route_artifact_file_limit = self
-            .native_amx_participant_evidence_retention()
-            .get()
-            .checked_mul(LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE)
-            .and_then(|native_files| {
-                native_files
-                    .checked_add(MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES)
-                    .and_then(|files| {
-                        files.checked_add(LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE)
-                    })
-            })
-            .ok_or_else(|| {
-                self.geometry_error(
-                    ErrorKind::InvalidData,
-                    "configured per-route lane retirement artifact-file bound overflows",
-                )
-            })?;
+        let per_route_artifact_file_limit = lane_retirement_per_route_artifact_file_limit(
+            self.native_amx_participant_evidence_retention().get(),
+        )
+        .ok_or_else(|| {
+            self.geometry_error(
+                ErrorKind::InvalidData,
+                "configured per-route lane retirement artifact-file bound overflows",
+            )
+        })?;
         let aggregate_artifact_file_limit = entries
             .len()
             .checked_mul(per_route_artifact_file_limit)
+            .and_then(|outer_limit| {
+                outer_limit.checked_add(HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS)
+            })
             .ok_or_else(|| {
                 self.geometry_error(
                     ErrorKind::InvalidData,
@@ -4824,11 +4931,17 @@ impl Kura {
         let mut inputs = BTreeMap::new();
         let mut preflights = BTreeMap::new();
         let mut certified = BTreeMap::new();
+        let mut merge_bundles = BTreeMap::new();
         let mut receipts = BTreeMap::new();
         let mut native_manifests = BTreeMap::new();
         let mut native_receipts = BTreeMap::new();
+        let mut historical_recoveries = BTreeMap::new();
         let mut artifact_files_seen = 0_usize;
         let mut work_items_seen = 0_usize;
+        let mut historical_recovery_records_seen = 0_usize;
+        let mut historical_recovery_bytes_seen = 0_u64;
+        let historical_recovery_byte_limit =
+            self.historical_autonomous_recovery_aggregate_byte_limit();
         let count_work_items = |current: &mut usize, additional: usize| -> Result<()> {
             *current = current.checked_add(additional).ok_or_else(|| {
                 self.geometry_error(
@@ -4872,6 +4985,8 @@ impl Kura {
                 Self::lane_block_execution_preflight_paths_for_entry(&entry, &self.store_root);
             let (certified_data, certified_index) =
                 Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
+            let (merge_bundle_data, merge_bundle_index) =
+                Self::autonomous_lane_merge_bundle_paths_for_entry(&entry, &self.store_root);
             let (receipt_data, receipt_index) =
                 Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
             let native_receipt_latest =
@@ -4907,7 +5022,7 @@ impl Kura {
                     &frontier_read.snapshot,
                 );
             }
-            let fixed_progress_pairs: [(&Path, &Path, &str); 5] = [
+            let fixed_progress_pairs: [(&Path, &Path, &str); 6] = [
                 (
                     &lane_data,
                     &lane_index,
@@ -4925,6 +5040,11 @@ impl Kura {
                     "lane retirement certified lane block",
                 ),
                 (
+                    &merge_bundle_data,
+                    &merge_bundle_index,
+                    "lane retirement autonomous merge bundle",
+                ),
+                (
                     &receipt_data,
                     &receipt_index,
                     "lane retirement application receipt",
@@ -4934,7 +5054,9 @@ impl Kura {
                 self.decode_lane_merge_application_frontier(&entry, &merge_application_frontier)?
             {
                 if self
-                    .lane_merge_application_frontier_expected_receipt(&frontier)
+                    .lane_merge_application_frontier_expected_receipt_under_prune_and_canonical_guards(
+                        &frontier,
+                    )
                     .is_none()
                 {
                     return Err(self.geometry_error(
@@ -4947,14 +5069,20 @@ impl Kura {
                     dataspace_id: frontier.dataspace_id,
                     lane_incarnation: frontier.lane_incarnation,
                 };
-                if retiring.contains(&frontier_identity)
-                    && !self
-                        .compact_lane_histories_through_merge_frontier_locked(&entry, &frontier)?
-                {
-                    return Err(self.geometry_error(
-                        ErrorKind::WouldBlock,
-                        "lane retirement resumed terminal auxiliary cleanup; retry to continue",
-                    ));
+                if retiring.contains(&frontier_identity) {
+                    match self.compact_lane_histories_through_merge_frontier_locked(
+                        pending_canonical_bytes,
+                        &entry,
+                        &frontier,
+                    )? {
+                        LaneHistoryCompactionOutcome::Complete => {}
+                        LaneHistoryCompactionOutcome::CapacityBlocked => {
+                            iroha_logger::debug!(
+                                lane = %entry.lane_id.as_u32(),
+                                "lane retirement retained uncompacted history in its atomic archive because configured temporary capacity is unavailable"
+                            );
+                        }
+                    }
                 }
             }
             let lane_artifacts_guard = self.recover_geometry_progress_pairs_before_snapshot(
@@ -4992,15 +5120,6 @@ impl Kura {
                         path,
                     ));
                 }
-                if snapshot.kind != BoundProgressDirectoryEntryKind::File {
-                    return Err(Error::IO(
-                        std::io::Error::new(
-                            ErrorKind::InvalidData,
-                            "lane retirement scan encountered a non-regular artifact",
-                        ),
-                        path,
-                    ));
-                }
                 let name = raw_name.to_str().ok_or_else(|| {
                     Error::IO(
                         std::io::Error::new(
@@ -5010,6 +5129,27 @@ impl Kura {
                         path.clone(),
                     )
                 })?;
+                if name == HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1 {
+                    if snapshot.kind != BoundProgressDirectoryEntryKind::Directory {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "lane retirement historical recovery namespace is not a directory",
+                            ),
+                            path,
+                        ));
+                    }
+                    continue;
+                }
+                if snapshot.kind != BoundProgressDirectoryEntryKind::File {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "lane retirement scan encountered a non-regular artifact",
+                        ),
+                        path,
+                    ));
+                }
                 if name.ends_with(".tmp") {
                     let message = if name.starts_with("autonomous_") {
                         "lane retirement scan found an in-flight autonomous sidecar"
@@ -5030,6 +5170,103 @@ impl Kura {
                         path,
                     ));
                 }
+                if self.validate_autonomous_lifecycle_bootstrap_quarantine_for_active_entry(
+                    &entry,
+                    lifecycle_process_generation.as_ref(),
+                    &path,
+                    "lane retirement bootstrap quarantine",
+                )? {
+                    continue;
+                }
+                if Self::is_unresolved_autonomous_publication_temporary_name(
+                    name,
+                    AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX,
+                ) {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "lane retirement scan found an unresolved lifecycle-bootstrap temporary",
+                        ),
+                        path,
+                    ));
+                }
+                if Self::autonomous_lifecycle_bootstrap_coordinates(name).is_some() {
+                    let bytes = self
+                        .read_regular_sidecar_bytes(
+                            &path,
+                            &lane_artifacts,
+                            AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
+                        )?
+                        .ok_or_else(|| {
+                            Error::IO(
+                                std::io::Error::new(
+                                    ErrorKind::InvalidData,
+                                    "lane retirement lifecycle bootstrap disappeared during validation",
+                                ),
+                                path.clone(),
+                            )
+                        })?;
+                    let bootstrap = Self::decode_autonomous_lifecycle_bootstrap(&path, &bytes)?;
+                    let process_generation =
+                        lifecycle_process_generation.as_ref().ok_or_else(|| {
+                            Error::IO(
+                                std::io::Error::new(
+                                    ErrorKind::InvalidData,
+                                    "lane retirement lifecycle bootstrap lacks its Kura-root process generation",
+                                ),
+                                path.clone(),
+                            )
+                        })?;
+                    Self::validate_autonomous_lifecycle_bootstrap_process_generation(
+                        process_generation,
+                        &bootstrap,
+                    )
+                    .map_err(|message| {
+                        Error::IO(
+                            std::io::Error::new(ErrorKind::InvalidData, message),
+                            path.clone(),
+                        )
+                    })?;
+                    let descriptor = &bootstrap.body.executable_payload.origin_proposal.descriptor;
+                    let (active_incarnation, activation_height) =
+                        self.active_lane_incarnation_marker(&entry)?;
+                    if descriptor.lane_id != storage_lane_id
+                        || descriptor.dataspace_id != entry.dataspace_id
+                        || descriptor.lane_incarnation != active_incarnation
+                        || descriptor.proposal_height <= activation_height
+                    {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "lane retirement lifecycle bootstrap targets a stale route or incarnation",
+                            ),
+                            path,
+                        ));
+                    }
+                    if retiring.contains(&LaneRetirementIdentity {
+                        lane_id: descriptor.lane_id,
+                        dataspace_id: descriptor.dataspace_id,
+                        lane_incarnation: descriptor.lane_incarnation,
+                    }) {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::WouldBlock,
+                                "lane retirement is blocked by an unfinished lifecycle bootstrap",
+                            ),
+                            path,
+                        ));
+                    }
+                    continue;
+                }
+                if name.starts_with("autonomous_lifecycle_bootstrap") {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "lane retirement scan found a malformed or legacy lifecycle bootstrap",
+                        ),
+                        path,
+                    ));
+                }
                 if matches!(
                     name,
                     LANE_ARTIFACTS_DATA_FILE
@@ -5041,6 +5278,8 @@ impl Kura {
                         | LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE
                         | LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE
                         | LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE
+                        | AUTONOMOUS_LANE_MERGE_BUNDLES_DATA_FILE
+                        | AUTONOMOUS_LANE_MERGE_BUNDLES_INDEX_FILE
                         | LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE
                         | LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE
                         | NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE
@@ -5085,6 +5324,8 @@ impl Kura {
                     ));
                 }
                 if Self::autonomous_lane_block_attempt_coordinates(name).is_some()
+                    || Self::autonomous_lifecycle_cursor_coordinates(name).is_some()
+                    || Self::autonomous_lifecycle_terminal_outcome_coordinates(name).is_some()
                     || Self::autonomous_two_height_coordinates(
                         name,
                         AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
@@ -5117,6 +5358,83 @@ impl Kura {
             )?;
             let (active_incarnation, activation_height) =
                 self.active_lane_incarnation_marker(&entry)?;
+            let (remaining_historical_records, remaining_historical_bytes) =
+                remaining_lane_retirement_historical_recovery_budget(
+                    historical_recovery_records_seen,
+                    historical_recovery_bytes_seen,
+                    historical_recovery_byte_limit,
+                )
+                .ok_or_else(|| {
+                    self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "lane retirement historical recovery budget is already exhausted",
+                    )
+                })?;
+            let (route_historical_recoveries, historical_recovery_bytes) = self
+                .read_geometry_historical_autonomous_recovery_records(
+                    &lane_artifacts,
+                    &artifact_snapshot,
+                    storage_lane_id,
+                    Some(entry.dataspace_id),
+                    active_incarnation,
+                    activation_height,
+                    remaining_historical_records.min(MAX_LANE_RETIREMENT_WORK_ITEMS_PER_SIDECAR),
+                    remaining_historical_bytes,
+                    "lane retirement",
+                )?;
+            let expected_route_historical_recoveries = route_historical_recoveries.clone();
+            historical_recovery_bytes_seen = historical_recovery_bytes_seen
+                .checked_add(historical_recovery_bytes)
+                .ok_or_else(|| {
+                    self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "lane retirement historical recovery byte count overflows",
+                    )
+                })?;
+            if historical_recovery_bytes_seen > historical_recovery_byte_limit {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "lane retirement historical recovery bytes exceed their aggregate bound",
+                ));
+            }
+            historical_recovery_records_seen =
+                accumulate_lane_retirement_historical_recovery_records(
+                    historical_recovery_records_seen,
+                    route_historical_recoveries.len(),
+                )
+                .ok_or_else(|| {
+                    self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "lane retirement historical recovery records exceed their aggregate bound",
+                    )
+                })?;
+            artifact_files_seen = artifact_files_seen
+                .checked_add(route_historical_recoveries.len())
+                .ok_or_else(|| {
+                    self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "lane retirement historical recovery file count overflows",
+                    )
+                })?;
+            if artifact_files_seen > aggregate_artifact_file_limit {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "lane retirement historical recovery files exceed the route-derived bound",
+                ));
+            }
+            count_work_items(&mut work_items_seen, route_historical_recoveries.len())?;
+            for record in route_historical_recoveries {
+                let lane_block_height = record.payload.origin_proposal.descriptor.lane_block_height;
+                if historical_recoveries
+                    .insert((storage_lane_id, lane_block_height), record)
+                    .is_some()
+                {
+                    return Err(self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "lane retirement scan found duplicate historical recovery work",
+                    ));
+                }
+            }
             let autonomous_attempts = self.read_geometry_autonomous_attempt_namespace(
                 &lane_artifacts,
                 storage_lane_id,
@@ -5125,6 +5443,7 @@ impl Kura {
                 activation_height,
                 Some(&entry),
                 MAX_LANE_RETIREMENT_WORK_ITEMS_PER_SIDECAR,
+                storage_route_is_retiring,
             )?;
             count_work_items(&mut work_items_seen, autonomous_attempts.len())?;
             for (lane_block_height, (artifact, current, retired)) in autonomous_attempts {
@@ -5282,6 +5601,73 @@ impl Kura {
                 return Err(self.geometry_error(
                     ErrorKind::WouldBlock,
                     "lane retirement certified lane block durability attestation failed",
+                ));
+            }
+            let mut merge_bundle_bound =
+                self.open_geometry_bound_progress_sidecar(&merge_bundle_data, &merge_bundle_index)?;
+            self.ensure_geometry_progress_pair_uses_directory(
+                &merge_bundle_bound,
+                &lane_artifacts_guard,
+                &merge_bundle_data,
+                &merge_bundle_index,
+                "lane retirement autonomous merge bundle",
+            )?;
+            let merge_bundle_heights = merge_bundle_bound.sidecar_mut().map_or_else(
+                || Ok(BTreeSet::new()),
+                |bound| {
+                    self.validate_autonomous_lane_merge_bundle_pair_layout_locked(bound)
+                        .map(|(_, heights)| heights)
+                        .map_err(|message| {
+                            self.geometry_error_owned(
+                                ErrorKind::InvalidData,
+                                format!(
+                                    "lane retirement autonomous merge bundle pair is invalid: {message}"
+                                ),
+                            )
+                        })
+                },
+            )?;
+            count_work_items(&mut work_items_seen, merge_bundle_heights.len())?;
+            for lane_block_height in merge_bundle_heights {
+                let (bundle, _) = self
+                    .read_autonomous_lane_merge_bundle_from_bound_locked(
+                        storage_lane_id,
+                        lane_block_height,
+                        merge_bundle_bound.sidecar_mut().expect(
+                            "non-empty height set has a bound autonomous merge bundle sidecar",
+                        ),
+                    )
+                    .map_err(|message| {
+                        self.geometry_error_owned(
+                            ErrorKind::InvalidData,
+                            format!(
+                                "lane retirement autonomous merge bundle is invalid: {message}"
+                            ),
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        self.geometry_error(
+                            ErrorKind::InvalidData,
+                            "lane retirement autonomous merge bundle disappeared during validation",
+                        )
+                    })?;
+                self.require_active_lane_artifact(&entry, &bundle.certified.proposal.descriptor)?;
+                if merge_bundles
+                    .insert((storage_lane_id, lane_block_height), bundle)
+                    .is_some()
+                {
+                    return Err(self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "lane retirement scan found duplicate autonomous merge bundle identity",
+                    ));
+                }
+            }
+            if merge_bundle_bound.sidecar().is_some_and(|bound| {
+                !self.sync_bound_progress_sidecar(bound, AutonomousLaneMergeBundleV1::FORMAT_LABEL)
+            }) {
+                return Err(self.geometry_error(
+                    ErrorKind::WouldBlock,
+                    "lane retirement autonomous merge bundle durability attestation failed",
                 ));
             }
             let mut receipt_bound =
@@ -5494,10 +5880,35 @@ impl Kura {
                 &certified_index,
             )?;
             self.ensure_absent_geometry_progress_sidecar_remains_absent(
+                &merge_bundle_bound,
+                &merge_bundle_data,
+                &merge_bundle_index,
+            )?;
+            self.ensure_absent_geometry_progress_sidecar_remains_absent(
                 &receipt_bound,
                 &receipt_data,
                 &receipt_index,
             )?;
+            let (confirmed_route_historical_recoveries, confirmed_historical_recovery_bytes) = self
+                .read_geometry_historical_autonomous_recovery_records(
+                    &lane_artifacts,
+                    &artifact_snapshot,
+                    storage_lane_id,
+                    Some(entry.dataspace_id),
+                    active_incarnation,
+                    activation_height,
+                    expected_route_historical_recoveries.len(),
+                    historical_recovery_bytes,
+                    "lane retirement rescan",
+                )?;
+            if confirmed_route_historical_recoveries != expected_route_historical_recoveries
+                || confirmed_historical_recovery_bytes != historical_recovery_bytes
+            {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "lane retirement historical recovery namespace changed during validation",
+                ));
+            }
             let confirmed_snapshot = self.geometry_bound_progress_directory_snapshot(
                 &lane_artifacts_guard,
                 per_route_artifact_file_limit,
@@ -5539,13 +5950,32 @@ impl Kura {
                 }
                 continue;
             };
-            let (artifact, current, _) = autonomous.get(identity).ok_or_else(|| {
-                self.geometry_error(
-                    ErrorKind::InvalidData,
-                    "lane retirement execution input has no producer-authenticated payload",
-                )
-            })?;
-            let payload = &artifact.executable_payload;
+            let (payload, current) = if let Some((artifact, current, _)) = autonomous.get(identity)
+            {
+                (&artifact.executable_payload, current)
+            } else {
+                let bundle = merge_bundles.get(identity).ok_or_else(|| {
+                    self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "lane retirement execution input has no producer-authenticated payload or durable merge bundle",
+                    )
+                })?;
+                let applied = receipts.get(identity).is_some_and(|receipt| {
+                    receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution
+                        && receipt.merge_source_bundle_hash == bundle.bundle_hash().ok()
+                        && self
+                            .lane_block_application_receipt_matches_merge_log_under_prune_and_canonical_guards(
+                                receipt,
+                            )
+                });
+                if !applied {
+                    return Err(self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "lane retirement execution input lost its payload before canonical merge application",
+                    ));
+                }
+                (bundle.executable_payload(), &bundle.certified.proposal)
+            };
             if input.proposal != *current
                 || payload.chain_id_hash != chain_id_hash
                 || payload.epoch != epoch
@@ -5559,6 +5989,108 @@ impl Kura {
                 return Err(self.geometry_error(
                     ErrorKind::InvalidData,
                     "lane retirement execution input differs from its authenticated payload",
+                ));
+            }
+        }
+
+        for (identity, bundle) in &merge_bundles {
+            let certified_artifact = certified.get(identity).ok_or_else(|| {
+                self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "lane retirement autonomous merge bundle has no exact certified slot",
+                )
+            })?;
+            let input = inputs.get(identity).ok_or_else(|| {
+                self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "lane retirement autonomous merge bundle has no durable execution input",
+                )
+            })?;
+            let payload = bundle.executable_payload();
+            let expected_input = Self::autonomous_lane_block_execution_input_candidate(
+                payload,
+                payload.chain_id_hash,
+                payload.epoch,
+            )
+            .map_err(|availability| {
+                self.geometry_error_owned(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "lane retirement autonomous merge bundle input is invalid: {availability:?}"
+                    ),
+                )
+            })?;
+            let autonomous_matches =
+                autonomous
+                    .get(identity)
+                    .is_some_and(|(autonomous_artifact, _, retired)| {
+                        !*retired && &bundle.autonomous == autonomous_artifact
+                    });
+            let applied_bundle_is_self_contained = receipts.get(identity).is_some_and(|receipt| {
+                receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution
+                    && receipt.merge_source_bundle_hash == bundle.bundle_hash().ok()
+                    && self
+                        .lane_block_application_receipt_matches_merge_log_under_prune_and_canonical_guards(
+                            receipt,
+                        )
+            });
+            if (!autonomous_matches && !applied_bundle_is_self_contained)
+                || &bundle.certified != certified_artifact
+                || input != &expected_input
+            {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "lane retirement autonomous merge bundle differs from its exact durable components",
+                ));
+            }
+        }
+        for (identity, certified_artifact) in &certified {
+            if certified_artifact
+                .prepare_qc
+                .payload_availability_qc
+                .is_some()
+                && !merge_bundles.contains_key(identity)
+            {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "lane retirement certified autonomous work lacks its durable merge bundle",
+                ));
+            }
+        }
+
+        for (identity, record) in &historical_recoveries {
+            let (autonomous_artifact, _, retired) = autonomous.get(identity).ok_or_else(|| {
+                self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "lane retirement historical recovery has no durable autonomous payload",
+                )
+            })?;
+            let input = inputs.get(identity).ok_or_else(|| {
+                self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "lane retirement historical recovery has no durable execution input",
+                )
+            })?;
+            let expected_input = Self::autonomous_lane_block_execution_input_candidate(
+                &record.payload,
+                record.payload.chain_id_hash,
+                record.payload.epoch,
+            )
+            .map_err(|availability| {
+                self.geometry_error_owned(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "lane retirement historical recovery input is invalid: {availability:?}"
+                    ),
+                )
+            })?;
+            if *retired
+                || autonomous_artifact.executable_payload != record.payload
+                || input != &expected_input
+            {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "lane retirement historical recovery differs from its payload or execution input",
                 ));
             }
         }
@@ -5581,7 +6113,9 @@ impl Kura {
                         == Some(receipt)
                 }
                 LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
-                    self.lane_block_application_receipt_matches_merge_log(receipt)
+                    self.lane_block_application_receipt_matches_merge_log_under_prune_and_canonical_guards(
+                        receipt,
+                    )
                 }
             };
             if !valid {
@@ -5798,9 +6332,12 @@ impl Kura {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let _sidecar_guard = self.sidecar_lock.lock();
         self.ensure_lane_retirement_admissible_locked(
+            pending_canonical_bytes,
             &[LaneRetirementIdentity {
                 lane_id,
                 dataspace_id,
@@ -8281,6 +8818,10 @@ impl Kura {
             LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE,
             LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE,
         );
+        let (merge_bundle_data, merge_bundle_index) = paths(
+            AUTONOMOUS_LANE_MERGE_BUNDLES_DATA_FILE,
+            AUTONOMOUS_LANE_MERGE_BUNDLES_INDEX_FILE,
+        );
         let (receipt_data, receipt_index) = paths(
             LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE,
             LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE,
@@ -8306,7 +8847,9 @@ impl Kura {
                 ));
             }
             let expected = self
-                .lane_merge_application_frontier_expected_receipt(&frontier)
+                .lane_merge_application_frontier_expected_receipt_under_prune_and_canonical_guards(
+                    &frontier,
+                )
                 .ok_or_else(|| {
                     self.geometry_error(
                         ErrorKind::InvalidData,
@@ -8335,6 +8878,9 @@ impl Kura {
             }
         }
 
+        let lifecycle_process_generation = self
+            .read_autonomous_lifecycle_process_generation_record()?
+            .map(|(record, _)| record);
         for (raw_name, snapshot) in &artifact_snapshot {
             let path = lane_artifacts.join(raw_name);
             if snapshot.kind == BoundProgressDirectoryEntryKind::Symlink {
@@ -8342,15 +8888,6 @@ impl Kura {
                     std::io::Error::new(
                         ErrorKind::InvalidData,
                         "lane artifact archive contains a symlink",
-                    ),
-                    path,
-                ));
-            }
-            if snapshot.kind != BoundProgressDirectoryEntryKind::File {
-                return Err(Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        "lane artifact archive contains a non-regular entry",
                     ),
                     path,
                 ));
@@ -8364,6 +8901,43 @@ impl Kura {
                     path.clone(),
                 )
             })?;
+            if name == HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1 {
+                if snapshot.kind != BoundProgressDirectoryEntryKind::Directory {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "retired historical recovery namespace is not a directory",
+                        ),
+                        path,
+                    ));
+                }
+                continue;
+            }
+            if snapshot.kind != BoundProgressDirectoryEntryKind::File {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "lane artifact archive contains a non-regular entry",
+                    ),
+                    path,
+                ));
+            }
+            if let Some((_, raw)) = self.read_validated_autonomous_lifecycle_bootstrap_quarantine(
+                &path,
+                lifecycle_process_generation.as_ref(),
+                "retired bootstrap quarantine",
+            )? {
+                Self::validate_autonomous_lifecycle_bootstrap_quarantine_route(
+                    &raw,
+                    &path,
+                    binding.lane_id,
+                    None,
+                    binding.incarnation,
+                    binding.activation_height,
+                    "retired bootstrap quarantine",
+                )?;
+                continue;
+            }
             if name.ends_with(".tmp") {
                 return Err(Error::IO(
                     std::io::Error::new(
@@ -8390,6 +8964,8 @@ impl Kura {
                     | LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE
                     | LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE
                     | LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE
+                    | AUTONOMOUS_LANE_MERGE_BUNDLES_DATA_FILE
+                    | AUTONOMOUS_LANE_MERGE_BUNDLES_INDEX_FILE
                     | LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE
                     | LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE
                     | NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE
@@ -8401,6 +8977,8 @@ impl Kura {
                 continue;
             }
             if Self::autonomous_lane_block_attempt_coordinates(name).is_some()
+                || Self::autonomous_lifecycle_cursor_coordinates(name).is_some()
+                || Self::autonomous_lifecycle_terminal_outcome_coordinates(name).is_some()
                 || Self::autonomous_two_height_coordinates(
                     name,
                     AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
@@ -8423,6 +9001,37 @@ impl Kura {
                 path,
             ));
         }
+        let (historical_recoveries, historical_recovery_bytes) = self
+            .read_geometry_historical_autonomous_recovery_records(
+                &lane_artifacts,
+                &artifact_snapshot,
+                binding.lane_id,
+                None,
+                binding.incarnation,
+                binding.activation_height,
+                MAX_GEOMETRY_ARCHIVE_ENTRIES,
+                self.historical_autonomous_recovery_aggregate_byte_limit(),
+                "retired lane",
+            )?;
+        if artifact_snapshot
+            .len()
+            .checked_add(historical_recoveries.len())
+            .is_none_or(|count| count > MAX_GEOMETRY_ARCHIVE_ENTRIES)
+        {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "retired lane historical recovery files exceed the archive entry bound",
+            ));
+        }
+        let historical_recoveries = historical_recoveries
+            .into_iter()
+            .map(|record| {
+                (
+                    record.payload.origin_proposal.descriptor.lane_block_height,
+                    record,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
         let lane_bound = self.open_geometry_bound_progress_sidecar(&lane_data, &lane_index)?;
         self.ensure_geometry_progress_pair_uses_directory(
             &lane_bound,
@@ -8439,6 +9048,7 @@ impl Kura {
             binding.activation_height,
             None,
             MAX_GEOMETRY_ARCHIVE_ENTRIES,
+            true,
         )?;
 
         let mut certified_bound =
@@ -8458,6 +9068,28 @@ impl Kura {
                     "retired certified lane block",
                     MAX_GEOMETRY_ARCHIVE_ENTRIES,
                 )
+            },
+        )?;
+        let mut merge_bundle_bound =
+            self.open_geometry_bound_progress_sidecar(&merge_bundle_data, &merge_bundle_index)?;
+        self.ensure_geometry_progress_pair_uses_directory(
+            &merge_bundle_bound,
+            &lane_artifacts_guard,
+            &merge_bundle_data,
+            &merge_bundle_index,
+            "retired autonomous merge bundle",
+        )?;
+        let merge_bundle_heights = merge_bundle_bound.sidecar_mut().map_or_else(
+            || Ok(BTreeSet::new()),
+            |bound| {
+                self.validate_autonomous_lane_merge_bundle_pair_layout_locked(bound)
+                    .map(|(_, heights)| heights)
+                    .map_err(|message| {
+                        self.geometry_error_owned(
+                            ErrorKind::InvalidData,
+                            format!("retired autonomous merge bundle pair is invalid: {message}"),
+                        )
+                    })
             },
         )?;
         let mut receipt_bound =
@@ -8601,6 +9233,7 @@ impl Kura {
             None => {}
         }
         let mut work_heights = certified_heights.clone();
+        work_heights.extend(merge_bundle_heights.iter().copied());
         for (lane_block_height, (_, _, retired)) in &autonomous {
             if *retired {
                 if certified_heights.contains(lane_block_height) {
@@ -8613,6 +9246,7 @@ impl Kura {
                 work_heights.insert(*lane_block_height);
             }
         }
+        work_heights.extend(historical_recoveries.keys().copied());
         let mut input_bound =
             self.open_geometry_bound_progress_sidecar(&input_data, &input_index)?;
         self.ensure_geometry_progress_pair_uses_directory(
@@ -8673,6 +9307,134 @@ impl Kura {
                         "retired lane certified artifact is malformed or incomplete",
                     )
                 })?;
+            let merge_bundle = if merge_bundle_heights.contains(&lane_block_height) {
+                Some(
+                    self.read_autonomous_lane_merge_bundle_from_bound_locked(
+                        binding.lane_id,
+                        lane_block_height,
+                        merge_bundle_bound.sidecar_mut().ok_or_else(|| {
+                            self.geometry_error(
+                                ErrorKind::InvalidData,
+                                "retired autonomous merge bundle sidecar disappeared",
+                            )
+                        })?,
+                    )
+                    .map_err(|message| {
+                        self.geometry_error_owned(
+                            ErrorKind::InvalidData,
+                            format!("retired autonomous merge bundle is invalid: {message}"),
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        self.geometry_error(
+                            ErrorKind::InvalidData,
+                            "retired autonomous merge bundle slot disappeared",
+                        )
+                    })?
+                    .0,
+                )
+            } else {
+                None
+            };
+            let certified_is_autonomous = certified.prepare_qc.payload_availability_qc.is_some();
+            if certified_is_autonomous != merge_bundle.is_some() {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "retired certified autonomous work and its durable merge bundle are incomplete",
+                ));
+            }
+            if let Some(bundle) = merge_bundle.as_ref() {
+                let payload = bundle.executable_payload();
+                let expected_input = Self::autonomous_lane_block_execution_input_candidate(
+                    payload,
+                    payload.chain_id_hash,
+                    payload.epoch,
+                )
+                .map_err(|availability| {
+                    self.geometry_error_owned(
+                        ErrorKind::InvalidData,
+                        format!(
+                            "retired autonomous merge bundle input is invalid: {availability:?}"
+                        ),
+                    )
+                })?;
+                let actual_input = self
+                    .read_geometry_execution_input_from_bound(
+                        binding.lane_id,
+                        lane_block_height,
+                        input_bound.sidecar_mut().ok_or_else(|| {
+                            self.geometry_error(
+                                ErrorKind::InvalidData,
+                                "retired autonomous merge bundle has no execution-input sidecar",
+                            )
+                        })?,
+                    )
+                    .ok_or_else(|| {
+                        self.geometry_error(
+                            ErrorKind::InvalidData,
+                            "retired autonomous merge bundle execution input is unreadable",
+                        )
+                    })?;
+                if bundle.certified != certified
+                    || actual_input != expected_input
+                    || autonomous.get(&lane_block_height).is_some_and(
+                        |(autonomous_artifact, _, retired)| {
+                            *retired || &bundle.autonomous != autonomous_artifact
+                        },
+                    )
+                {
+                    return Err(self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "retired autonomous merge bundle differs from its exact durable evidence",
+                    ));
+                }
+            }
+            if let Some(record) = historical_recoveries.get(&lane_block_height) {
+                let (autonomous_artifact, _, retired) =
+                    autonomous.get(&lane_block_height).ok_or_else(|| {
+                        self.geometry_error(
+                            ErrorKind::InvalidData,
+                            "retired historical recovery has no autonomous payload",
+                        )
+                    })?;
+                let expected_input = Self::autonomous_lane_block_execution_input_candidate(
+                    &record.payload,
+                    record.payload.chain_id_hash,
+                    record.payload.epoch,
+                )
+                .map_err(|availability| {
+                    self.geometry_error_owned(
+                        ErrorKind::InvalidData,
+                        format!("retired historical recovery input is invalid: {availability:?}"),
+                    )
+                })?;
+                let actual_input = self
+                    .read_geometry_execution_input_from_bound(
+                        binding.lane_id,
+                        lane_block_height,
+                        input_bound.sidecar_mut().ok_or_else(|| {
+                            self.geometry_error(
+                                ErrorKind::InvalidData,
+                                "retired historical recovery has no execution-input sidecar",
+                            )
+                        })?,
+                    )
+                    .ok_or_else(|| {
+                        self.geometry_error(
+                            ErrorKind::InvalidData,
+                            "retired historical recovery execution input is unreadable",
+                        )
+                    })?;
+                if *retired
+                    || autonomous_artifact.executable_payload != record.payload
+                    || actual_input != expected_input
+                {
+                    return Err(self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "retired historical recovery differs from its payload or execution input",
+                    ));
+                }
+            }
             let descriptor = &certified.proposal.descriptor;
             if descriptor.lane_incarnation != binding.incarnation {
                 return Err(self.geometry_error(
@@ -8713,7 +9475,10 @@ impl Kura {
                 })?;
             if receipt.format != LaneBlockApplicationReceiptArtifactFormat::MergeExecution
                 || receipt.proposal != certified.proposal
-                || !self.lane_block_application_receipt_matches_merge_log(&receipt)
+                || !self
+                    .lane_block_application_receipt_matches_merge_log_under_prune_and_canonical_guards(
+                        &receipt,
+                    )
             {
                 return Err(self.geometry_error(
                     ErrorKind::InvalidData,
@@ -8735,6 +9500,15 @@ impl Kura {
                         "retired autonomous lane evidence differs from its certified merge execution",
                     ));
                 }
+            }
+            if merge_bundle
+                .as_ref()
+                .is_some_and(|bundle| bundle.bundle_hash().ok() != Some(release.source_bundle_hash))
+            {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "retired autonomous merge bundle hash differs from the snapshot release proof",
+                ));
             }
             let receipt_bytes = receipt.encode_framed()?;
             let receipt_hash =
@@ -8762,6 +9536,14 @@ impl Kura {
             return Err(self.geometry_error(
                 ErrorKind::WouldBlock,
                 "retired certified lane block durability attestation failed",
+            ));
+        }
+        if merge_bundle_bound.sidecar().is_some_and(|bound| {
+            !self.sync_bound_progress_sidecar(bound, AutonomousLaneMergeBundleV1::FORMAT_LABEL)
+        }) {
+            return Err(self.geometry_error(
+                ErrorKind::WouldBlock,
+                "retired autonomous merge bundle durability attestation failed",
             ));
         }
         if let Some(bound) = receipt_bound.sidecar() {
@@ -8811,10 +9593,44 @@ impl Kura {
             &certified_index,
         )?;
         self.ensure_absent_geometry_progress_sidecar_remains_absent(
+            &merge_bundle_bound,
+            &merge_bundle_data,
+            &merge_bundle_index,
+        )?;
+        self.ensure_absent_geometry_progress_sidecar_remains_absent(
             &receipt_bound,
             &receipt_data,
             &receipt_index,
         )?;
+        let (confirmed_historical_recoveries, confirmed_historical_recovery_bytes) = self
+            .read_geometry_historical_autonomous_recovery_records(
+                &lane_artifacts,
+                &artifact_snapshot,
+                binding.lane_id,
+                None,
+                binding.incarnation,
+                binding.activation_height,
+                historical_recoveries.len(),
+                historical_recovery_bytes,
+                "retired lane rescan",
+            )?;
+        let confirmed_historical_recoveries = confirmed_historical_recoveries
+            .into_iter()
+            .map(|record| {
+                (
+                    record.payload.origin_proposal.descriptor.lane_block_height,
+                    record,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        if confirmed_historical_recoveries != historical_recoveries
+            || confirmed_historical_recovery_bytes != historical_recovery_bytes
+        {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "retired historical recovery namespace changed during release validation",
+            ));
+        }
         let confirmed_snapshot = self.geometry_bound_progress_directory_snapshot(
             &lane_artifacts_guard,
             MAX_GEOMETRY_ARCHIVE_ENTRIES,
@@ -9183,8 +9999,12 @@ impl Kura {
         activation_height: u64,
         active_entry: Option<&LaneConfigEntry>,
         entry_limit: usize,
+        require_terminal_lifecycle: bool,
     ) -> Result<BTreeMap<u64, (AutonomousLaneBlockArtifact, LaneBlockProposalV1, bool)>> {
         let entry_limit = entry_limit.min(MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES);
+        let lifecycle_process_generation = self
+            .read_autonomous_lifecycle_process_generation_record()?
+            .map(|(record, _)| record);
         let mut attempts = BTreeMap::<
             u64,
             Vec<(
@@ -9198,6 +10018,11 @@ impl Kura {
         let mut view_identities = BTreeSet::new();
         let mut height_pointers = BTreeMap::new();
         let mut route_pointer = None;
+        let mut lifecycle_cursors = BTreeMap::<(u64, u64), AutonomousLifecycleCursorV2>::new();
+        let mut lifecycle_terminal_outcomes =
+            BTreeMap::<(u64, u64), (PathBuf, AutonomousLifecycleTerminalOutcomeV1)>::new();
+        let mut lifecycle_bootstraps =
+            BTreeMap::<(u64, u64), (PathBuf, AutonomousLifecycleBootstrapV1)>::new();
         let entries = match fs::read_dir(lane_artifacts) {
             Ok(entries) => entries,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(BTreeMap::new()),
@@ -9217,7 +10042,26 @@ impl Kura {
                     path.clone(),
                 )
             })?;
-            if !name.starts_with("autonomous_") {
+            let bootstrap_quarantine = Self::validate_autonomous_publication_quarantine(
+                &self.store_root,
+                &path,
+                AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
+                AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX,
+                "geometry bootstrap quarantine",
+            )?;
+            if Self::is_unresolved_autonomous_publication_temporary_name(
+                &name,
+                AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX,
+            ) {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "autonomous attempt namespace contains a bootstrap atomic temporary",
+                    ),
+                    path,
+                ));
+            }
+            if !name.starts_with("autonomous_") && !bootstrap_quarantine {
                 continue;
             }
             related_entries = related_entries.checked_add(1).ok_or_else(|| {
@@ -9261,6 +10105,9 @@ impl Kura {
             File::open(&path)
                 .and_then(|file| file.sync_all())
                 .map_err(|error| Error::IO(error, path.clone()))?;
+            if bootstrap_quarantine {
+                continue;
+            }
             if let Some((lane_block_height, proposal_height)) =
                 Self::autonomous_lane_block_attempt_coordinates(&name)
             {
@@ -9321,7 +10168,7 @@ impl Kura {
                 let view_state = self.read_autonomous_lane_block_view_state_locked(
                     &artifact.executable_payload,
                     &view_path,
-                    false,
+                    None,
                 )?;
                 let retired = view_state
                     .as_ref()
@@ -9349,6 +10196,166 @@ impl Kura {
                     return Err(self.geometry_error(
                         ErrorKind::InvalidData,
                         "autonomous proposal-height attempts exceed the configured sidecar retention bound",
+                    ));
+                }
+                continue;
+            }
+            if let Some((lane_block_height, proposal_height)) =
+                Self::autonomous_lifecycle_bootstrap_coordinates(&name)
+            {
+                let bytes = self
+                    .read_regular_sidecar_bytes(
+                        &path,
+                        lane_artifacts,
+                        AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
+                    )?
+                    .ok_or_else(|| {
+                        self.geometry_error(
+                            ErrorKind::InvalidData,
+                            "autonomous lifecycle bootstrap disappeared during geometry validation",
+                        )
+                    })?;
+                let bootstrap = Self::decode_autonomous_lifecycle_bootstrap(&path, &bytes)?;
+                let process_generation = lifecycle_process_generation.as_ref().ok_or_else(|| {
+                    Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "autonomous lifecycle bootstrap exists without a Kura-root process generation",
+                        ),
+                        path.clone(),
+                    )
+                })?;
+                Self::validate_autonomous_lifecycle_bootstrap_process_generation(
+                    process_generation,
+                    &bootstrap,
+                )
+                .map_err(|message| {
+                    Error::IO(
+                        std::io::Error::new(ErrorKind::InvalidData, message),
+                        path.clone(),
+                    )
+                })?;
+                let descriptor = &bootstrap.body.executable_payload.origin_proposal.descriptor;
+                if descriptor.lane_id != lane_id
+                    || descriptor.lane_incarnation != expected_incarnation
+                    || descriptor.proposal_height <= activation_height
+                    || descriptor.lane_block_height != lane_block_height
+                    || descriptor.proposal_height != proposal_height
+                    || expected_dataspace_id
+                        .is_some_and(|dataspace_id| descriptor.dataspace_id != dataspace_id)
+                {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "autonomous lifecycle bootstrap has a stale, duplicate, or namespace-conflicting identity",
+                        ),
+                        path,
+                    ));
+                }
+                if active_entry.is_none() {
+                    return Err(self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "autonomous lifecycle bootstrap must never be present in an archive",
+                    ));
+                }
+                if require_terminal_lifecycle {
+                    return Err(self.geometry_error(
+                        ErrorKind::WouldBlock,
+                        "lane retirement is blocked by an unfinished lifecycle bootstrap",
+                    ));
+                }
+                if lifecycle_bootstraps
+                    .insert(
+                        (lane_block_height, proposal_height),
+                        (path.clone(), bootstrap),
+                    )
+                    .is_some()
+                {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "autonomous lifecycle bootstrap has a duplicate identity",
+                        ),
+                        path,
+                    ));
+                }
+                continue;
+            }
+            if let Some((lane_block_height, proposal_height)) =
+                Self::autonomous_lifecycle_cursor_coordinates(&name)
+            {
+                let bytes = self
+                    .read_regular_sidecar_bytes(
+                        &path,
+                        lane_artifacts,
+                        AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES,
+                    )?
+                    .ok_or_else(|| {
+                        self.geometry_error(
+                            ErrorKind::InvalidData,
+                            "autonomous lifecycle cursor disappeared during geometry validation",
+                        )
+                    })?;
+                let cursor = Self::decode_autonomous_lifecycle_cursor(&path, &bytes)?;
+                let binding = cursor.binding();
+                if binding.lane_id != lane_id
+                    || binding.lane_incarnation != expected_incarnation
+                    || binding.proposal_height <= activation_height
+                    || binding.lane_block_height != lane_block_height
+                    || binding.proposal_height != proposal_height
+                    || expected_dataspace_id
+                        .is_some_and(|dataspace_id| binding.dataspace_id != dataspace_id)
+                    || lifecycle_cursors
+                        .insert((lane_block_height, proposal_height), cursor)
+                        .is_some()
+                {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "autonomous lifecycle cursor has a stale, duplicate, or namespace-conflicting identity",
+                        ),
+                        path,
+                    ));
+                }
+                continue;
+            }
+            if let Some((lane_block_height, proposal_height)) =
+                Self::autonomous_lifecycle_terminal_outcome_coordinates(&name)
+            {
+                let bytes = self
+                    .read_regular_sidecar_bytes(
+                        &path,
+                        lane_artifacts,
+                        AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES,
+                    )?
+                    .ok_or_else(|| {
+                        self.geometry_error(
+                            ErrorKind::InvalidData,
+                            "autonomous lifecycle terminal outcome disappeared during geometry validation",
+                        )
+                    })?;
+                let outcome = Self::decode_autonomous_lifecycle_terminal_outcome(&path, &bytes)?;
+                let binding = outcome.binding();
+                if binding.lane_id != lane_id
+                    || binding.lane_incarnation != expected_incarnation
+                    || binding.proposal_height <= activation_height
+                    || binding.lane_block_height != lane_block_height
+                    || binding.proposal_height != proposal_height
+                    || expected_dataspace_id
+                        .is_some_and(|dataspace_id| binding.dataspace_id != dataspace_id)
+                    || lifecycle_terminal_outcomes
+                        .insert(
+                            (lane_block_height, proposal_height),
+                            (path.clone(), outcome),
+                        )
+                        .is_some()
+                {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "autonomous lifecycle terminal outcome has a stale, duplicate, or namespace-conflicting identity",
+                        ),
+                        path,
                     ));
                 }
                 continue;
@@ -9438,8 +10445,244 @@ impl Kura {
                 "autonomous attempt namespace contains an orphan view state",
             ));
         }
+        let lifecycle_identities = lifecycle_cursors.keys().copied().collect::<BTreeSet<_>>();
+        if !lifecycle_identities.is_subset(&attempt_identities) {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "autonomous attempt namespace contains an orphan lifecycle cursor",
+            ));
+        }
+        let terminal_outcome_identities = lifecycle_terminal_outcomes
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        if !terminal_outcome_identities.is_subset(&attempt_identities)
+            || !terminal_outcome_identities.is_subset(&lifecycle_identities)
+        {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "autonomous attempt namespace contains an orphan lifecycle terminal outcome",
+            ));
+        }
+        let mut payload_only_bootstrap_identities = BTreeSet::new();
+        for (identity, (path, bootstrap)) in &lifecycle_bootstraps {
+            let process_generation = lifecycle_process_generation.as_ref().ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "autonomous lifecycle bootstrap exists without a Kura-root process generation",
+                    ),
+                    path.clone(),
+                )
+            })?;
+            Self::validate_autonomous_lifecycle_bootstrap_process_generation(
+                process_generation,
+                bootstrap,
+            )
+            .map_err(|message| {
+                Error::IO(
+                    std::io::Error::new(ErrorKind::InvalidData, message),
+                    path.clone(),
+                )
+            })?;
+            let active_entry = active_entry.expect(
+                "an autonomous lifecycle bootstrap was rejected above without an active entry",
+            );
+            let stage =
+                self.classify_autonomous_lifecycle_bootstrap_locked(active_entry, bootstrap)?;
+            let payload_present = attempts.get(&identity.0).is_some_and(|attempts_at_height| {
+                attempts_at_height.iter().any(|(pointer, artifact, _, _)| {
+                    pointer.proposal_height == identity.1
+                        && artifact.executable_payload == bootstrap.body.executable_payload
+                })
+            });
+            let cursor = lifecycle_cursors.get(identity);
+            let stage_matches = match stage {
+                AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly => {
+                    !payload_present && cursor.is_none()
+                }
+                AutonomousLifecycleBootstrapRecoveryStage::PayloadDurable => {
+                    payload_only_bootstrap_identities.insert(*identity);
+                    payload_present && cursor.is_none()
+                }
+                AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable => {
+                    payload_present && cursor == Some(&bootstrap.body.prepared_activate)
+                }
+                AutonomousLifecycleBootstrapRecoveryStage::LiveDurable => {
+                    payload_present && cursor == Some(&bootstrap.body.live_activate)
+                }
+            };
+            if !stage_matches {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "autonomous lifecycle bootstrap crash boundary conflicts with geometry inventory",
+                    ),
+                    path.clone(),
+                ));
+            }
+        }
+        if attempt_identities.iter().any(|identity| {
+            !lifecycle_cursors.contains_key(identity)
+                && !payload_only_bootstrap_identities.contains(identity)
+        }) {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "autonomous payload attempt lacks its exact lifecycle cursor or signed payload-durable bootstrap",
+            ));
+        }
+        // Every initial Prepared cursor requires its exact signed bootstrap authority.
+        for (lane_block_height, attempts_at_height) in &attempts {
+            for (pointer, artifact, _, _) in attempts_at_height {
+                let identity = (*lane_block_height, pointer.proposal_height);
+                let Some(cursor) = lifecycle_cursors.get(&identity) else {
+                    continue;
+                };
+                cursor
+                    .validate_for_payload(&artifact.executable_payload)
+                    .map_err(|message| {
+                        self.geometry_error_owned(
+                            ErrorKind::InvalidData,
+                            format!("autonomous lifecycle cursor is invalid: {message}"),
+                        )
+                    })?;
+                let process_generation =
+                    lifecycle_process_generation.as_ref().ok_or_else(|| {
+                        self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "autonomous lifecycle cursor exists without a Kura-root process generation",
+                    )
+                    })?;
+                Self::validate_autonomous_lifecycle_cursor_process_generation(
+                    process_generation,
+                    cursor,
+                )
+                .map_err(|message| {
+                    self.geometry_error_owned(
+                        ErrorKind::InvalidData,
+                        format!(
+                            "autonomous lifecycle cursor process generation is invalid: {message}"
+                        ),
+                    )
+                })?;
+                if cursor.sequence() == 1
+                    && cursor.phase_kind() == AutonomousLifecycleCursorPhaseKindV2::Prepared
+                    && !lifecycle_bootstraps.contains_key(&identity)
+                {
+                    return Err(self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "initial Prepared lifecycle cursor is orphaned from its signed bootstrap",
+                    ));
+                }
+                let outcome = lifecycle_terminal_outcomes.get(&identity);
+                if let Some((path, outcome)) = outcome {
+                    outcome
+                        .validate_for_payload(&artifact.executable_payload)
+                        .map_err(|message| {
+                            self.geometry_error_owned(
+                                ErrorKind::InvalidData,
+                                format!(
+                                    "autonomous lifecycle terminal outcome is invalid: {message}"
+                                ),
+                            )
+                        })?;
+                    if outcome.binding() != cursor.binding() {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "autonomous lifecycle terminal outcome differs from its signed cursor binding",
+                            ),
+                            path.clone(),
+                        ));
+                    }
+                    match outcome.source() {
+                        source @ AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier {
+                            ..
+                        } => {
+                            let receipt_data_path =
+                                lane_artifacts.join(LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE);
+                            let receipt_index_path =
+                                lane_artifacts.join(LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE);
+                            self.autonomous_lifecycle_terminal_source_matches_canonical_carrier_from_receipt_paths_locked(
+                                &artifact.executable_payload,
+                                source,
+                                &receipt_data_path,
+                                &receipt_index_path,
+                            )?;
+                        }
+                        source @ AutonomousLifecycleTerminalOutcomeSourceV1::RetiredRelease {
+                            retirement_hash,
+                        } => {
+                            let view_path = lane_artifacts.join(format!(
+                                "{AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX}_{lane_block_height:020}_{:020}.norito",
+                                pointer.proposal_height,
+                            ));
+                            let view_state = self
+                                .read_autonomous_lane_block_view_state_locked(
+                                    &artifact.executable_payload,
+                                    &view_path,
+                                    None,
+                                )?
+                                .ok_or_else(|| {
+                                    self.geometry_error(
+                                        ErrorKind::InvalidData,
+                                        "release terminal outcome has no durable view state",
+                                    )
+                                })?;
+                            let retirement = view_state.retirement.as_ref().ok_or_else(|| {
+                                self.geometry_error(
+                                    ErrorKind::InvalidData,
+                                    "release terminal outcome has no durable retirement",
+                                )
+                            })?;
+                            if !retirement.matches_payload(&artifact.executable_payload)
+                                || retirement.digest()? != retirement_hash
+                            {
+                                return Err(self.geometry_error(
+                                    ErrorKind::InvalidData,
+                                    "release terminal outcome differs from its exact retirement",
+                                ));
+                            }
+                            if let Some(active_entry) = active_entry {
+                                self.autonomous_lifecycle_terminal_source_matches_release_locked(
+                                    None,
+                                    active_entry,
+                                    &artifact.executable_payload,
+                                    Some(retirement),
+                                    source,
+                                )?;
+                            }
+                        }
+                    }
+                }
+                if require_terminal_lifecycle {
+                    let signed_terminal = matches!(
+                        cursor.phase(),
+                        AutonomousLifecycleCursorPhaseV2::Terminal { .. }
+                    );
+                    let complete_canonical = outcome.is_some_and(|(_, outcome)| {
+                        outcome.is_complete() && outcome.source().is_canonical_carrier()
+                    });
+                    if outcome.is_some_and(|(_, outcome)| !outcome.is_complete()) {
+                        return Err(self.geometry_error(
+                            ErrorKind::WouldBlock,
+                            "lane retirement is blocked by a Pending autonomous lifecycle terminal outcome",
+                        ));
+                    }
+                    if !signed_terminal && !complete_canonical {
+                        return Err(self.geometry_error(
+                            ErrorKind::WouldBlock,
+                            "lane retirement requires a signed terminal cursor or globally authenticated Complete canonical outcome",
+                        ));
+                    }
+                }
+            }
+        }
         if attempts.is_empty() {
-            if !height_pointers.is_empty() || route_pointer.is_some() {
+            if !height_pointers.is_empty()
+                || route_pointer.is_some()
+                || !lifecycle_cursors.is_empty()
+            {
                 return Err(self.geometry_error(
                     ErrorKind::InvalidData,
                     "autonomous pointer exists without an immutable payload attempt",
@@ -9890,13 +11133,14 @@ impl Kura {
             }
             false
         };
-        let before = Self::block_store_bytes(&blocks)?;
+        let historical_byte_limit = self.historical_autonomous_recovery_aggregate_byte_limit();
+        let before = Self::block_store_bytes_with_historical_limit(&blocks, historical_byte_limit)?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let mut store = BlockStore::new(&blocks);
         store.create_files_if_they_do_not_exist()?;
         create_dir_all_with_context(&Self::lane_artifact_dir(&blocks))?;
         self.sync_geometry_path_contents(&blocks, true)?;
-        let after = Self::block_store_bytes(&blocks)?;
+        let after = Self::block_store_bytes_with_historical_limit(&blocks, historical_byte_limit)?;
         self.update_disk_usage_delta(before, after);
         accounting_mutation.finish();
         if marker_exists {
@@ -11706,10551 +12950,20 @@ fn bootstrap_validate_existing_ancestors(store_root: &Path, path: &Path) -> Resu
     Ok(())
 }
 
-fn bootstrap_ensure_geometry_directory(store_root: &Path, directory: &Path) -> Result<()> {
-    let relative = directory.strip_prefix(store_root).map_err(|_| {
-        lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidInput,
-            "bootstrap geometry directory escapes the Kura store root",
-        )
-    })?;
-    validate_relative_path(relative)?;
-    let mut cursor = store_root.to_path_buf();
-    for component in relative.components() {
-        let parent = cursor.clone();
-        let parent_before =
-            fs::symlink_metadata(&parent).map_err(|error| Error::IO(error, parent.clone()))?;
-        if parent_before.file_type().is_symlink() || !parent_before.is_dir() {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "bootstrap geometry parent is not a non-symlink directory",
-                ),
-                parent,
-            ));
-        }
-        cursor.push(component.as_os_str());
-        match fs::create_dir(&cursor) {
-            Ok(()) => {}
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(Error::IO(error, cursor)),
-        }
-        if !bootstrap_validate_path_kind(store_root, &cursor, true)? {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::NotFound,
-                    "bootstrap geometry directory disappeared after creation",
-                ),
-                cursor,
-            ));
-        }
-        let parent_after =
-            fs::symlink_metadata(&parent).map_err(|error| Error::IO(error, parent.clone()))?;
-        if checked_geometry_file_identity(&parent_before, &parent)?
-            != checked_geometry_file_identity(&parent_after, &parent)?
-        {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "bootstrap geometry parent changed during child creation",
-                ),
-                parent,
-            ));
-        }
-        sync_dir(&parent).map_err(|error| Error::IO(error, parent))?;
-    }
-    Ok(())
-}
+include!("lane_geometry/bootstrap_path_safety.rs");
 
-fn bootstrap_sync_geometry_path(store_root: &Path, path: &Path, directory: bool) -> Result<()> {
-    let before =
-        fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
-    if !bootstrap_validate_path_kind(store_root, path, directory)? {
-        return Err(Error::IO(
-            std::io::Error::new(ErrorKind::NotFound, "bootstrap geometry source is missing"),
-            path.to_path_buf(),
-        ));
-    }
-    if directory {
-        sync_dir(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
-    } else {
-        let file = File::open(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let opened = file
-            .metadata()
-            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        if checked_geometry_file_identity(&before, path)?
-            != checked_geometry_file_identity(&opened, path)?
-        {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "bootstrap geometry file changed while opening",
-                ),
-                path.to_path_buf(),
-            ));
-        }
-        file.sync_all()
-            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-    }
-    let after = fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
-    if checked_geometry_file_identity(&before, path)?
-        != checked_geometry_file_identity(&after, path)?
-    {
-        return Err(Error::IO(
-            std::io::Error::new(
-                ErrorKind::InvalidData,
-                "bootstrap geometry path changed while synchronizing",
-            ),
-            path.to_path_buf(),
-        ));
-    }
-    Ok(())
-}
+include!("lane_geometry/bootstrap_relabel.rs");
 
-fn bootstrap_open_geometry_parent(store_root: &Path, parent: &Path) -> Result<File> {
-    if !bootstrap_validate_path_kind(store_root, parent, true)? {
-        return Err(Error::IO(
-            std::io::Error::new(ErrorKind::NotFound, "bootstrap geometry parent is missing"),
-            parent.to_path_buf(),
-        ));
-    }
-    let before =
-        fs::symlink_metadata(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-    let directory = File::open(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-    let opened = directory
-        .metadata()
-        .map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-    let after =
-        fs::symlink_metadata(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-    if before.file_type().is_symlink()
-        || !before.is_dir()
-        || checked_geometry_file_identity(&before, parent)?
-            != checked_geometry_file_identity(&opened, parent)?
-        || checked_geometry_file_identity(&before, parent)?
-            != checked_geometry_file_identity(&after, parent)?
-        || !bootstrap_validate_path_kind(store_root, parent, true)?
-    {
-        return Err(Error::IO(
-            std::io::Error::new(
-                ErrorKind::InvalidData,
-                "bootstrap geometry parent changed while being opened",
-            ),
-            parent.to_path_buf(),
-        ));
-    }
-    Ok(directory)
-}
+include!("lane_geometry/catalog_validation.rs");
 
-fn bootstrap_move_geometry_path(
-    store_root: &Path,
-    source: &Path,
-    target: &Path,
-    directory: bool,
-) -> Result<bool> {
-    if source == target {
-        if bootstrap_validate_path_kind(store_root, source, directory)? {
-            return Ok(false);
-        }
-        return Err(Error::IO(
-            std::io::Error::new(
-                ErrorKind::NotFound,
-                "unchanged primary relabel path is missing during bootstrap recovery",
-            ),
-            source.to_path_buf(),
-        ));
-    }
-    let source_exists = bootstrap_validate_path_kind(store_root, source, directory)?;
-    let target_exists = bootstrap_validate_path_kind(store_root, target, directory)?;
-    match (source_exists, target_exists) {
-        (false, false) | (false, true) => return Ok(false),
-        (true, true) => {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::AlreadyExists,
-                    "both primary relabel paths exist during bootstrap recovery",
-                ),
-                target.to_path_buf(),
-            ));
-        }
-        (true, false) => {}
-    }
-    bootstrap_sync_geometry_path(store_root, source, directory)?;
-    let identity = checked_geometry_file_identity(
-        &fs::symlink_metadata(source).map_err(|error| Error::IO(error, source.to_path_buf()))?,
-        source,
-    )?;
-    let source_parent = source.parent().ok_or_else(|| {
-        Error::IO(
-            std::io::Error::new(
-                ErrorKind::InvalidInput,
-                "primary relabel source has no parent",
-            ),
-            source.to_path_buf(),
-        )
-    })?;
-    let target_parent = target.parent().ok_or_else(|| {
-        Error::IO(
-            std::io::Error::new(
-                ErrorKind::InvalidInput,
-                "primary relabel target has no parent",
-            ),
-            target.to_path_buf(),
-        )
-    })?;
-    let source_name = source.file_name().ok_or_else(|| {
-        Error::IO(
-            std::io::Error::new(
-                ErrorKind::InvalidInput,
-                "primary relabel source has no name",
-            ),
-            source.to_path_buf(),
-        )
-    })?;
-    let target_name = target.file_name().ok_or_else(|| {
-        Error::IO(
-            std::io::Error::new(
-                ErrorKind::InvalidInput,
-                "primary relabel target has no name",
-            ),
-            target.to_path_buf(),
-        )
-    })?;
-    bootstrap_ensure_geometry_directory(store_root, target_parent)?;
-    sync_dir(target_parent).map_err(|error| Error::IO(error, target_parent.to_path_buf()))?;
-    let source_parent_handle = bootstrap_open_geometry_parent(store_root, source_parent)?;
-    let target_parent_handle = bootstrap_open_geometry_parent(store_root, target_parent)?;
-    inject_geometry_move_target_collision_for_test(target, directory)?;
-    if !bootstrap_validate_path_kind(store_root, source, directory)?
-        || checked_geometry_file_identity(
-            &fs::symlink_metadata(source)
-                .map_err(|error| Error::IO(error, source.to_path_buf()))?,
-            source,
-        )? != identity
-    {
-        return Err(Error::IO(
-            std::io::Error::new(
-                ErrorKind::InvalidData,
-                "primary relabel source identity changed before bootstrap rename",
-            ),
-            source.to_path_buf(),
-        ));
-    }
-    rename_geometry_path_noreplace_at(
-        &source_parent_handle,
-        source_name,
-        &target_parent_handle,
-        target_name,
-    )
-    .map_err(|error| Error::IO(error, source.to_path_buf()))?;
-    if !bootstrap_validate_path_kind(store_root, target, directory)?
-        || checked_geometry_file_identity(
-            &fs::symlink_metadata(target)
-                .map_err(|error| Error::IO(error, target.to_path_buf()))?,
-            target,
-        )? != identity
-    {
-        return Err(Error::IO(
-            std::io::Error::new(
-                ErrorKind::InvalidData,
-                "primary relabel target identity changed during bootstrap recovery",
-            ),
-            target.to_path_buf(),
-        ));
-    }
-    source_parent_handle
-        .sync_all()
-        .map_err(|error| Error::IO(error, source_parent.to_path_buf()))?;
-    if source.parent() != target.parent() {
-        target_parent_handle
-            .sync_all()
-            .map_err(|error| Error::IO(error, target_parent.to_path_buf()))?;
-    }
-    Ok(true)
-}
-
-fn bootstrap_preflight_geometry_path(
-    store_root: &Path,
-    source: &Path,
-    target: &Path,
-    directory: bool,
-) -> Result<()> {
-    if source == target {
-        return bootstrap_validate_path_kind(store_root, source, directory)?
-            .then_some(())
-            .ok_or_else(|| {
-                Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::NotFound,
-                        "unchanged primary relabel path is missing during bootstrap recovery",
-                    ),
-                    source.to_path_buf(),
-                )
-            });
-    }
-    let source_exists = bootstrap_validate_path_kind(store_root, source, directory)?;
-    let target_exists = bootstrap_validate_path_kind(store_root, target, directory)?;
-    match (source_exists, target_exists) {
-        (false, false) => {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::NotFound,
-                    "neither primary relabel path exists during bootstrap recovery",
-                ),
-                source.to_path_buf(),
-            ));
-        }
-        (true, true) => {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::AlreadyExists,
-                    "both primary relabel paths exist during bootstrap recovery",
-                ),
-                target.to_path_buf(),
-            ));
-        }
-        (true, false) | (false, true) => {}
-    }
-    bootstrap_validate_existing_ancestors(store_root, source)?;
-    bootstrap_validate_existing_ancestors(store_root, target)
-}
-
-fn bootstrap_move_geometry_binding(
-    store_root: &Path,
-    source: &LaneGeometryBinding,
-    target: &LaneGeometryBinding,
-) -> Result<()> {
-    let source_blocks = store_root.join(&source.blocks_path);
-    let target_blocks = store_root.join(&target.blocks_path);
-    let source_merge = store_root.join(&source.merge_path);
-    let target_merge = store_root.join(&target.merge_path);
-    bootstrap_preflight_geometry_path(store_root, &source_blocks, &target_blocks, true)?;
-    bootstrap_preflight_geometry_path(store_root, &source_merge, &target_merge, false)?;
-
-    let rollback = || -> Result<()> {
-        let merge_result =
-            bootstrap_move_geometry_path(store_root, &target_merge, &source_merge, false);
-        let blocks_result =
-            bootstrap_move_geometry_path(store_root, &target_blocks, &source_blocks, true);
-        match (merge_result, blocks_result) {
-            (Ok(_), Ok(_)) => Ok(()),
-            (merge, blocks) => Err(Error::IO(
-                std::io::Error::other(format!(
-                    "primary relabel rollback failed (merge: {merge:?}; blocks: {blocks:?})"
-                )),
-                source_blocks.clone(),
-            )),
-        }
-    };
-
-    if let Err(error) =
-        bootstrap_move_geometry_path(store_root, &source_blocks, &target_blocks, true)
-    {
-        return match rollback() {
-            Ok(()) => Err(error),
-            Err(rollback_error) => Err(Error::IO(
-                std::io::Error::other(format!(
-                    "primary relabel block move failed ({error}); rollback failed ({rollback_error})"
-                )),
-                source_blocks,
-            )),
-        };
-    }
-    match bootstrap_move_geometry_path(store_root, &source_merge, &target_merge, false) {
-        Ok(_) => Ok(()),
-        Err(error) => match rollback() {
-            Ok(()) => Err(error),
-            Err(rollback_error) => Err(Error::IO(
-                std::io::Error::other(format!(
-                    "primary relabel merge move failed ({error}); block-directory rollback failed ({rollback_error})"
-                )),
-                source_blocks,
-            )),
-        },
-    }
-}
-
-fn bootstrap_require_lane_marker(
-    store_root: &Path,
-    blocks: &Path,
-    binding: &LaneGeometryBinding,
-) -> Result<()> {
-    let path = blocks.join(MARKER_FILE_NAME);
-    let Some(bytes) = Kura::read_regular_sidecar_bytes_for(
-        store_root,
-        &path,
-        blocks,
-        usize::try_from(MAX_LANE_MARKER_BYTES)?,
-    )?
-    else {
-        return Err(Error::IO(
-            std::io::Error::new(
-                ErrorKind::NotFound,
-                "durable primary binding has no incarnation marker",
-            ),
-            path,
-        ));
-    };
-    let mut cursor = bytes.as_slice();
-    let marker = LaneIncarnationMarker::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
-    if marker.encode() != bytes
-        || marker.version != MARKER_VERSION
-        || marker.lane_id != binding.lane_id
-        || marker.incarnation != binding.incarnation
-        || marker.activation_height != binding.activation_height
-    {
-        return Err(Error::IO(
-            std::io::Error::new(
-                ErrorKind::InvalidData,
-                "durable primary binding marker does not match its journal identity",
-            ),
-            path,
-        ));
-    }
-    Ok(())
-}
-
-fn lane_geometry_journal_structure_error(
-    store_root: &Path,
-    kind: ErrorKind,
-    message: &'static str,
-) -> Error {
-    Error::IO(
-        std::io::Error::new(kind, message),
-        store_root.join(JOURNAL_FILE_NAME),
-    )
-}
-
-fn validate_lane_geometry_phase_frontier(
-    store_root: &Path,
-    journal: &LaneGeometryJournal,
-) -> Result<()> {
-    let mut saw_uncertain_boundary = false;
-    let mut saw_rolled_back = false;
-    for record in &journal.records {
-        match record.phase {
-            LaneGeometryPhase::CatalogPublished => {
-                if saw_uncertain_boundary || saw_rolled_back {
-                    return Err(lane_geometry_journal_structure_error(
-                        store_root,
-                        ErrorKind::InvalidData,
-                        "lane geometry journal phases do not form a durable applied frontier",
-                    ));
-                }
-            }
-            LaneGeometryPhase::Intent | LaneGeometryPhase::FilesApplied => {
-                if saw_uncertain_boundary || saw_rolled_back {
-                    return Err(lane_geometry_journal_structure_error(
-                        store_root,
-                        ErrorKind::InvalidData,
-                        "lane geometry journal has more than one uncertain transition boundary",
-                    ));
-                }
-                saw_uncertain_boundary = true;
-            }
-            LaneGeometryPhase::RolledBack => {
-                saw_rolled_back = true;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_lane_geometry_journal_structure(
-    store_root: &Path,
-    journal: &LaneGeometryJournal,
-) -> Result<()> {
-    if journal.version != JOURNAL_VERSION
-        || journal.records.len() > MAX_GEOMETRY_TRANSITIONS
-        || journal.pending_archive_gc.len() > MAX_GEOMETRY_TRANSITIONS
-    {
-        return Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "lane geometry journal has an unsupported version or too many transitions",
-        ));
-    }
-    if journal.configured_primary_binding.is_some() && journal.configured_catalog_hash.is_none() {
-        return Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "configured primary geometry binding has no configured-catalog baseline",
-        ));
-    }
-    if let Some(primary) = journal.configured_primary_binding.as_ref() {
-        if primary.lane_id != LaneId::SINGLE || primary.activation_height != 0 {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "configured primary geometry binding is not lane zero at activation zero",
-            ));
-        }
-        validate_geometry_binding_structure(store_root, primary)?;
-    }
-    if let Some(checkpoint) = journal.checkpoint.as_ref() {
-        validate_lane_geometry_checkpoint_structure(store_root, checkpoint)?;
-        if journal.records.first().is_some_and(|record| {
-            record.previous_catalog != checkpoint.catalog
-                || record.previous_lineage_root != checkpoint.lineage_root
-        }) {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "lane geometry journal retained history does not start at its checkpoint catalog",
-            ));
-        }
-        if let (Some(checkpoint), Some(first)) =
-            (journal.checkpoint.as_ref(), journal.records.first())
-            && (checkpoint
-                .transition_sequence
-                .is_some_and(|sequence| first.transition_sequence <= sequence)
-                || first.transition_height <= checkpoint.snapshot_height)
-        {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "retained lane geometry history does not advance beyond its checkpoint cursor",
-            ));
-        }
-    } else if !journal.pending_archive_gc.is_empty() {
-        return Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "lane geometry journal has pending archive GC without a durable checkpoint",
-        ));
-    }
-    validate_pending_lane_geometry_gc_structure(store_root, journal)?;
-    validate_lane_geometry_phase_frontier(store_root, journal)?;
-
-    let mut transition_ids = BTreeSet::new();
-    let mut retained_paths = BTreeSet::new();
-    if journal.records.windows(2).any(|pair| {
-        pair[0].transition_sequence >= pair[1].transition_sequence
-            || pair[0].transition_height > pair[1].transition_height
-    }) {
-        return Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "lane geometry journal transition cursor is not monotonic",
-        ));
-    }
-    for (record_index, record) in journal.records.iter().enumerate() {
-        if record.transition_id
-            != geometry_transition_id(
-                record.transition_sequence,
-                record.transition_height,
-                record.previous_catalog,
-                record.previous_lineage_root,
-                record.updated_catalog,
-                record.updated_lineage_root,
-            )
-            || record.previous_catalog == record.updated_catalog
-                && record.previous_lineage_root == record.updated_lineage_root
-            || lineage_root_is_zero(record.previous_lineage_root)
-            || lineage_root_is_zero(record.updated_lineage_root)
-            || !transition_ids.insert(record.transition_id)
-            || record.operations.len() > MAX_GEOMETRY_BINDINGS.saturating_mul(2)
-        {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "lane geometry journal contains an invalid or duplicate transition",
-            ));
-        }
-        for bindings in [&record.previous_bindings, &record.updated_bindings] {
-            validate_geometry_binding_set_structure(store_root, bindings)?;
-        }
-        if geometry_catalog_fingerprint(&record.previous_bindings) != record.previous_catalog
-            || geometry_catalog_fingerprint(&record.updated_bindings) != record.updated_catalog
-        {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "lane geometry journal catalog fingerprint does not match its bindings",
-            ));
-        }
-        if record_index > 0
-            && (journal.records[record_index - 1].updated_catalog != record.previous_catalog
-                || journal.records[record_index - 1].updated_lineage_root
-                    != record.previous_lineage_root)
-        {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "lane geometry journal transition chain is not contiguous",
-            ));
-        }
-
-        let transition_hex = hex::encode(record.transition_id.as_ref());
-        let previous_by_lane = record
-            .previous_bindings
-            .iter()
-            .map(|binding| (binding.lane_id, binding))
-            .collect::<BTreeMap<_, _>>();
-        let updated_by_lane = record
-            .updated_bindings
-            .iter()
-            .map(|binding| (binding.lane_id, binding))
-            .collect::<BTreeMap<_, _>>();
-        if record
-            .operations
-            .windows(2)
-            .any(|pair| pair[0].lane_id >= pair[1].lane_id)
-        {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "lane geometry journal operations are duplicated or unsorted",
-            ));
-        }
-
-        let mut lane_ids = BTreeSet::new();
-        for operation in &record.operations {
-            if !lane_ids.insert(operation.lane_id)
-                || operation
-                    .previous
-                    .as_ref()
-                    .is_some_and(|binding| binding.lane_id != operation.lane_id)
-                || operation
-                    .updated
-                    .as_ref()
-                    .is_some_and(|binding| binding.lane_id != operation.lane_id)
-            {
-                return Err(lane_geometry_journal_structure_error(
-                    store_root,
-                    ErrorKind::InvalidData,
-                    "lane geometry journal contains duplicate or mismatched lane operations",
-                ));
-            }
-            let expected_root = format!(
-                "retired/lane_geometry/{transition_hex}/lane_{:010}",
-                operation.lane_id.as_u32()
-            );
-            let expected_paths = [
-                format!("{expected_root}/previous_blocks"),
-                format!("{expected_root}/previous_merge.log"),
-                format!("{expected_root}/unpublished_blocks"),
-                format!("{expected_root}/unpublished_merge.log"),
-            ];
-            let actual_paths = [
-                &operation.archived_blocks_path,
-                &operation.archived_merge_path,
-                &operation.unpublished_blocks_path,
-                &operation.unpublished_merge_path,
-            ];
-            if actual_paths
-                .iter()
-                .zip(expected_paths.iter())
-                .any(|(actual, expected)| *actual != expected)
-                || actual_paths
-                    .iter()
-                    .any(|path| !retained_paths.insert((*path).clone()))
-            {
-                return Err(lane_geometry_journal_structure_error(
-                    store_root,
-                    ErrorKind::InvalidData,
-                    "lane geometry journal contains forged or colliding archive paths",
-                ));
-            }
-            for (path, directory) in actual_paths.iter().zip([true, false, true, false]) {
-                validate_geometry_journal_relative_path(store_root, path, directory)?;
-            }
-            for binding in operation.previous.iter().chain(operation.updated.iter()) {
-                validate_geometry_binding_structure(store_root, binding)?;
-            }
-            if operation.previous.as_ref() != previous_by_lane.get(&operation.lane_id).copied()
-                || operation.updated.as_ref() != updated_by_lane.get(&operation.lane_id).copied()
-            {
-                return Err(lane_geometry_journal_structure_error(
-                    store_root,
-                    ErrorKind::InvalidData,
-                    "lane geometry operation does not match its authenticated catalog bindings",
-                ));
-            }
-            let shape_is_valid = match operation.kind {
-                LaneGeometryOperationKind::Create => {
-                    operation.previous.is_none() && operation.updated.is_some()
-                }
-                LaneGeometryOperationKind::Retire => {
-                    operation.previous.is_some() && operation.updated.is_none()
-                }
-                LaneGeometryOperationKind::Replace => operation
-                    .previous
-                    .as_ref()
-                    .zip(operation.updated.as_ref())
-                    .is_some_and(|(previous, updated)| {
-                        previous.incarnation != updated.incarnation
-                            || previous.activation_height != updated.activation_height
-                    }),
-                LaneGeometryOperationKind::Relabel => operation
-                    .previous
-                    .as_ref()
-                    .zip(operation.updated.as_ref())
-                    .is_some_and(|(previous, updated)| {
-                        previous.incarnation == updated.incarnation
-                            && previous.activation_height == updated.activation_height
-                            && (previous.blocks_path != updated.blocks_path
-                                || previous.merge_path != updated.merge_path)
-                    }),
-            };
-            if !shape_is_valid {
-                return Err(lane_geometry_journal_structure_error(
-                    store_root,
-                    ErrorKind::InvalidData,
-                    "lane geometry journal contains an invalid operation shape",
-                ));
-            }
-        }
-
-        let expected_changed_lanes = previous_by_lane
-            .keys()
-            .chain(updated_by_lane.keys())
-            .copied()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .filter(|lane_id| {
-                previous_by_lane.get(lane_id).copied() != updated_by_lane.get(lane_id).copied()
-            })
-            .count();
-        if record.operations.len() != expected_changed_lanes {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "lane geometry journal omits or invents a catalog binding operation",
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn validate_lane_geometry_checkpoint_structure(
-    store_root: &Path,
-    checkpoint: &LaneGeometrySnapshotCheckpoint,
-) -> Result<()> {
-    validate_geometry_binding_set_structure(store_root, &checkpoint.bindings)?;
-    validate_geometry_merge_release_structure(
-        store_root,
-        &checkpoint.merge_releases,
-        checkpoint.snapshot_height,
-    )?;
-    if checkpoint.version != CHECKPOINT_VERSION
-        || checkpoint
-            .snapshot_state_hash
-            .as_ref()
-            .iter()
-            .all(|byte| *byte == 0)
-        || checkpoint.catalog != geometry_catalog_fingerprint(&checkpoint.bindings)
-        || lineage_root_is_zero(checkpoint.lineage_root)
-        || checkpoint.commitment != geometry_checkpoint_commitment(checkpoint)
-        || checkpoint.snapshot_height == 0
-        || checkpoint.snapshot_block_hash.is_none()
-        || checkpoint
-            .snapshot_block_hash
-            .is_some_and(|hash| hash.as_ref().iter().all(|byte| *byte == 0))
-        || checkpoint
-            .bindings
-            .iter()
-            .any(|binding| binding.activation_height > checkpoint.snapshot_height)
-        || checkpoint
-            .transition_height
-            .is_some_and(|height| height > checkpoint.snapshot_height)
-    {
-        return Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "lane geometry checkpoint commitment, catalog, height, block hash, or activation is invalid",
-        ));
-    }
-    match (
-        checkpoint.transition_sequence,
-        checkpoint.transition_height,
-        checkpoint.transition_previous_catalog,
-        checkpoint.transition_previous_lineage_root,
-        checkpoint.transition_id,
-    ) {
-        (None, None, None, None, None) => Ok(()),
-        (
-            Some(sequence),
-            Some(height),
-            Some(previous_catalog),
-            Some(previous_lineage_root),
-            Some(transition_id),
-        ) if !lineage_root_is_zero(previous_lineage_root)
-            && transition_id
-                == geometry_transition_id(
-                    sequence,
-                    height,
-                    previous_catalog,
-                    previous_lineage_root,
-                    checkpoint.catalog,
-                    checkpoint.lineage_root,
-                ) =>
-        {
-            Ok(())
-        }
-        _ => Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "lane geometry checkpoint transition binding is invalid",
-        )),
-    }
-}
-
-fn validate_geometry_merge_release_structure(
-    store_root: &Path,
-    releases: &[LaneGeometryMergeRelease],
-    snapshot_height: u64,
-) -> Result<()> {
-    if releases.len() > MAX_GEOMETRY_MERGE_RELEASES
-        || releases.windows(2).any(|pair| pair[0] >= pair[1])
-        || releases.iter().any(|release| {
-            release.lane_block_height == 0
-                || release.application_block_height == 0
-                || release.application_block_height > snapshot_height
-                || release
-                    .lane_incarnation
-                    .as_ref()
-                    .iter()
-                    .all(|byte| *byte == 0)
-        })
-    {
-        return Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "geometry checkpoint merge releases are invalid, duplicated, unsorted, or oversized",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_pending_lane_geometry_gc_structure(
-    store_root: &Path,
-    journal: &LaneGeometryJournal,
-) -> Result<()> {
-    if journal.pending_archive_gc.is_empty() {
-        if journal
-            .checkpoint
-            .as_ref()
-            .is_some_and(|checkpoint| checkpoint.pending_archive_gc_root.is_some())
-        {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "lane geometry checkpoint commits a missing pending archive GC set",
-            ));
-        }
-        return Ok(());
-    }
-    let checkpoint = journal.checkpoint.as_ref().ok_or_else(|| {
-        lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "pending lane geometry GC has no checkpoint",
-        )
-    })?;
-    let retained_ids = journal
-        .records
-        .iter()
-        .map(|record| record.transition_id)
-        .collect::<BTreeSet<_>>();
-    let mut pending_ids = BTreeSet::new();
-    for (index, pending) in journal.pending_archive_gc.iter().enumerate() {
-        let intent = &pending.intent;
-        let standalone = LaneGeometryJournal {
-            version: JOURNAL_VERSION,
-            configured_catalog_hash: None,
-            configured_primary_binding: None,
-            checkpoint: None,
-            pending_archive_gc: Vec::new(),
-            records: vec![intent.clone()],
-        };
-        validate_lane_geometry_journal_structure(store_root, &standalone)?;
-        if intent.phase != LaneGeometryPhase::CatalogPublished
-            || !pending_ids.insert(intent.transition_id)
-            || retained_ids.contains(&intent.transition_id)
-            || index > 0
-                && (journal.pending_archive_gc[index - 1].intent.updated_catalog
-                    != intent.previous_catalog
-                    || journal.pending_archive_gc[index - 1]
-                        .intent
-                        .updated_lineage_root
-                        != intent.previous_lineage_root
-                    || journal.pending_archive_gc[index - 1]
-                        .intent
-                        .transition_sequence
-                        >= intent.transition_sequence
-                    || journal.pending_archive_gc[index - 1]
-                        .intent
-                        .transition_height
-                        > intent.transition_height)
-        {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "lane geometry journal has forged or non-contiguous pending archive GC",
-            ));
-        }
-    }
-    if checkpoint.pending_archive_gc_root
-        != Some(geometry_pending_archive_gc_root(
-            &journal.pending_archive_gc,
-        ))
-    {
-        return Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "lane geometry checkpoint does not bind its exact pending archive GC set",
-        ));
-    }
-    let last = journal
-        .pending_archive_gc
-        .last()
-        .expect("non-empty pending archive GC");
-    if last.intent.updated_catalog != checkpoint.catalog
-        || last.intent.updated_lineage_root != checkpoint.lineage_root
-        || checkpoint.transition_sequence != Some(last.intent.transition_sequence)
-        || checkpoint.transition_height != Some(last.intent.transition_height)
-        || checkpoint.transition_previous_catalog != Some(last.intent.previous_catalog)
-        || checkpoint.transition_previous_lineage_root != Some(last.intent.previous_lineage_root)
-        || checkpoint.transition_id != Some(last.intent.transition_id)
-    {
-        return Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "lane geometry pending archive GC does not terminate at its checkpoint",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_geometry_binding_structure(
-    store_root: &Path,
-    binding: &LaneGeometryBinding,
-) -> Result<()> {
-    if binding.incarnation.as_ref().iter().all(|byte| *byte == 0) {
-        return Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "lane geometry journal contains a zero incarnation",
-        ));
-    }
-    validate_geometry_journal_relative_path(store_root, &binding.blocks_path, true)?;
-    validate_geometry_journal_relative_path(store_root, &binding.merge_path, false)
-}
-
-fn validate_geometry_binding_set_structure(
-    store_root: &Path,
-    bindings: &[LaneGeometryBinding],
-) -> Result<()> {
-    if bindings.is_empty()
-        || bindings.len() > MAX_GEOMETRY_BINDINGS
-        || bindings
-            .windows(2)
-            .any(|pair| pair[0].lane_id >= pair[1].lane_id)
-    {
-        return Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "lane geometry catalog bindings are empty, duplicated, or unsorted",
-        ));
-    }
-    let mut incarnations = BTreeSet::new();
-    let mut paths = BTreeSet::new();
-    for binding in bindings {
-        validate_geometry_binding_structure(store_root, binding)?;
-        if !incarnations.insert(binding.incarnation)
-            || !paths.insert(binding.blocks_path.clone())
-            || !paths.insert(binding.merge_path.clone())
-        {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "lane geometry catalog contains duplicate incarnations or storage paths",
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn validate_geometry_journal_relative_path(
-    store_root: &Path,
-    relative: &str,
-    directory: bool,
-) -> Result<()> {
-    let relative = Path::new(relative);
-    validate_relative_path(relative)?;
-    let root_metadata = fs::symlink_metadata(store_root)
-        .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
-    if root_metadata.file_type().is_symlink() || !root_metadata.file_type().is_dir() {
-        return Err(configured_catalog_preflight_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "Kura geometry store root must remain a non-symlink directory",
-        ));
-    }
-
-    let components = relative.components().collect::<Vec<_>>();
-    let mut cursor = store_root.to_path_buf();
-    for (index, component) in components.iter().enumerate() {
-        cursor.push(component.as_os_str());
-        let is_target = index + 1 == components.len();
-        match fs::symlink_metadata(&cursor) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                return Err(Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        "lane geometry journal path traverses or targets a symlink",
-                    ),
-                    cursor,
-                ));
-            }
-            Ok(metadata) if !is_target && !metadata.file_type().is_dir() => {
-                return Err(Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        "lane geometry journal path traverses a non-directory",
-                    ),
-                    cursor,
-                ));
-            }
-            Ok(metadata)
-                if is_target
-                    && ((directory && !metadata.file_type().is_dir())
-                        || (!directory && !metadata.file_type().is_file())) =>
-            {
-                return Err(Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        "lane geometry journal path target has the wrong file type",
-                    ),
-                    cursor,
-                ));
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == ErrorKind::NotFound => break,
-            Err(error) => return Err(Error::IO(error, cursor)),
-        }
-    }
-    Ok(())
-}
-
-fn native_amx_receipt_targets_retirement(
-    receipt: &iroha_data_model::block::consensus::NativeAmxReceipt,
-    retiring: &BTreeSet<LaneRetirementIdentity>,
-) -> std::result::Result<bool, &'static str> {
-    let mut targets_retirement = false;
-    for identity in retiring {
-        targets_retirement |=
-            crate::native_amx::native_amx_receipt_requires_separate_participant_application_for(
-                receipt,
-                identity.lane_id,
-                identity.dataspace_id,
-                identity.lane_incarnation,
-            )?;
-    }
-    Ok(targets_retirement)
-}
-
-fn lane_payload_targets_retirement(
-    payload: &crate::lane_consensus::LaneExecutablePayloadV1,
-    retiring: &BTreeSet<LaneRetirementIdentity>,
-) -> bool {
-    let descriptor = &payload.origin_proposal.descriptor;
-    if retiring.contains(&LaneRetirementIdentity {
-        lane_id: descriptor.lane_id,
-        dataspace_id: descriptor.dataspace_id,
-        lane_incarnation: descriptor.lane_incarnation,
-    }) {
-        return true;
-    }
-    if payload.routing_plans.len() != payload.native_amx_receipts.len() {
-        return true;
-    }
-    payload
-        .routing_plans
-        .iter()
-        .zip(&payload.native_amx_receipts)
-        .any(|(plan, receipt)| {
-            let (crate::queue::RoutingPlan::NativeAmx(plan), Some(receipt)) = (plan, receipt)
-            else {
-                return !matches!(
-                    (plan, receipt),
-                    (crate::queue::RoutingPlan::Single(_), None)
-                );
-            };
-            if receipt.plan_digest != plan.plan_digest
-                || receipt.legs.len() != plan.participants.len()
-                || receipt
-                    .legs
-                    .iter()
-                    .zip(&plan.participants)
-                    .any(|(leg, planned)| {
-                        leg.lane_id != planned.route.lane_id
-                            || leg.dataspace_id != planned.route.dataspace_id
-                    })
-            {
-                return true;
-            }
-            native_amx_receipt_targets_retirement(receipt, retiring).unwrap_or(true)
-        })
-}
-
-fn lane_proposal_coordinator_targets_retirement(
-    proposal: &LaneBlockProposalV1,
-    retiring: &BTreeSet<LaneRetirementIdentity>,
-) -> bool {
-    let descriptor = &proposal.descriptor;
-    retiring.contains(&LaneRetirementIdentity {
-        lane_id: descriptor.lane_id,
-        dataspace_id: descriptor.dataspace_id,
-        lane_incarnation: descriptor.lane_incarnation,
-    })
-}
-
-fn routing_plan_from_execution_context(
-    context: &ExternalExecutionContext,
-) -> Option<crate::queue::RoutingPlan> {
-    let coordinator = context.routing_plan_legs.first()?;
-    if coordinator.role != ExternalExecutionRouteRole::Coordinator
-        || coordinator.lane_id != context.lane_id
-        || coordinator.dataspace_id != context.dataspace_id
-    {
-        return None;
-    }
-    let coordinator =
-        crate::queue::RoutingDecision::new(coordinator.lane_id, coordinator.dataspace_id);
-    let plan = if context.routing_plan_legs.len() == 1 {
-        crate::queue::RoutingPlan::single(coordinator)
-    } else {
-        let participants = context
-            .routing_plan_legs
-            .iter()
-            .skip(1)
-            .map(|leg| {
-                (leg.role == ExternalExecutionRouteRole::Participant).then_some(
-                    crate::queue::RouteLeg::new(
-                        crate::queue::RoutingDecision::new(leg.lane_id, leg.dataspace_id),
-                        crate::queue::RouteLegRole::Participant,
-                    ),
-                )
-            })
-            .collect::<Option<Vec<_>>>()?;
-        crate::queue::RoutingPlan::native_amx(coordinator, participants)
-    };
-    (plan.digest() == context.routing_plan_digest
-        && crate::queue::execution_context_legs_for_routing_plan(&plan)
-            == context.routing_plan_legs)
-        .then_some(plan)
-}
-
-fn geometry_catalog_fingerprint(bindings: &[LaneGeometryBinding]) -> Hash {
-    let encoded = bindings.to_vec().encode();
-    Hash::new_from_chunks(&[CATALOG_DOMAIN, encoded.as_slice()])
-}
-
-#[cfg(test)]
-fn unscoped_lineage_root(bindings: &[LaneGeometryBinding]) -> Hash {
-    let catalog = geometry_catalog_fingerprint(bindings);
-    Hash::new_from_chunks(&[UNSCOPED_LINEAGE_DOMAIN, catalog.as_ref()])
-}
-
-fn lineage_root_is_zero(root: Hash) -> bool {
-    root.as_ref().iter().all(|byte| *byte == 0)
-}
-
-fn geometry_transition_id(
-    transition_sequence: u64,
-    transition_height: u64,
-    previous_catalog: Hash,
-    previous_lineage_root: Hash,
-    updated_catalog: Hash,
-    updated_lineage_root: Hash,
-) -> Hash {
-    Hash::new_from_chunks(&[
-        TRANSITION_DOMAIN,
-        &transition_sequence.to_le_bytes(),
-        &transition_height.to_le_bytes(),
-        previous_catalog.as_ref(),
-        previous_lineage_root.as_ref(),
-        updated_catalog.as_ref(),
-        updated_lineage_root.as_ref(),
-    ])
-}
-
-fn geometry_checkpoint_commitment(checkpoint: &LaneGeometrySnapshotCheckpoint) -> Hash {
-    let mut payload = Vec::new();
-    payload.push(checkpoint.version);
-    payload.extend_from_slice(&checkpoint.snapshot_height.to_le_bytes());
-    match checkpoint.snapshot_block_hash {
-        Some(hash) => {
-            payload.push(1);
-            payload.extend_from_slice(hash.as_ref());
-        }
-        None => payload.push(0),
-    }
-    payload.extend_from_slice(checkpoint.snapshot_state_hash.as_ref());
-    payload.extend_from_slice(checkpoint.catalog.as_ref());
-    payload.extend_from_slice(checkpoint.lineage_root.as_ref());
-    match checkpoint.transition_sequence {
-        Some(sequence) => {
-            payload.push(1);
-            payload.extend_from_slice(&sequence.to_le_bytes());
-        }
-        None => payload.push(0),
-    }
-    match checkpoint.transition_height {
-        Some(height) => {
-            payload.push(1);
-            payload.extend_from_slice(&height.to_le_bytes());
-        }
-        None => payload.push(0),
-    }
-    match checkpoint.transition_previous_catalog {
-        Some(hash) => {
-            payload.push(1);
-            payload.extend_from_slice(hash.as_ref());
-        }
-        None => payload.push(0),
-    }
-    match checkpoint.transition_previous_lineage_root {
-        Some(hash) => {
-            payload.push(1);
-            payload.extend_from_slice(hash.as_ref());
-        }
-        None => payload.push(0),
-    }
-    match checkpoint.transition_id {
-        Some(hash) => {
-            payload.push(1);
-            payload.extend_from_slice(hash.as_ref());
-        }
-        None => payload.push(0),
-    }
-    payload.extend_from_slice(&checkpoint.bindings.clone().encode());
-    payload.extend_from_slice(&checkpoint.merge_releases.clone().encode());
-    match checkpoint.pending_archive_gc_root {
-        Some(hash) => {
-            payload.push(1);
-            payload.extend_from_slice(hash.as_ref());
-        }
-        None => payload.push(0),
-    }
-    Hash::new_from_chunks(&[CHECKPOINT_DOMAIN, payload.as_slice()])
-}
-
-fn geometry_pending_archive_gc_root(pending: &[LaneGeometryPendingArchiveGc]) -> Hash {
-    Hash::new_from_chunks(&[PENDING_GC_DOMAIN, pending.to_vec().encode().as_slice()])
-}
-
-fn geometry_merge_marker_set_root(markers: &[(StatePath, Vec<u8>)]) -> Hash {
-    Hash::new_from_chunks(&[
-        MERGE_RELEASE_MARKERS_DOMAIN,
-        markers.to_vec().encode().as_slice(),
-    ])
-}
-
-fn lane_geometry_snapshot_checkpoint(
-    snapshot_height: u64,
-    snapshot_block_hash: Option<HashOf<BlockHeader>>,
-    snapshot_state_hash: Hash,
-    bindings: Vec<LaneGeometryBinding>,
-    lineage_root: Hash,
-    transition_sequence: Option<u64>,
-    transition_height: Option<u64>,
-    transition_previous_catalog: Option<Hash>,
-    transition_previous_lineage_root: Option<Hash>,
-    transition_id: Option<Hash>,
-    merge_releases: Vec<LaneGeometryMergeRelease>,
-    pending_archive_gc_root: Option<Hash>,
-) -> LaneGeometrySnapshotCheckpoint {
-    let mut checkpoint = LaneGeometrySnapshotCheckpoint {
-        version: CHECKPOINT_VERSION,
-        snapshot_height,
-        snapshot_block_hash,
-        snapshot_state_hash,
-        catalog: geometry_catalog_fingerprint(&bindings),
-        lineage_root,
-        transition_sequence,
-        transition_height,
-        transition_previous_catalog,
-        transition_previous_lineage_root,
-        transition_id,
-        bindings,
-        merge_releases,
-        pending_archive_gc_root,
-        commitment: Hash::prehashed([0; Hash::LENGTH]),
-    };
-    checkpoint.commitment = geometry_checkpoint_commitment(&checkpoint);
-    checkpoint
-}
-
-fn validate_relative_path(path: &Path) -> Result<()> {
-    if path.as_os_str().is_empty()
-        || path.is_absolute()
-        || path
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        return Err(Error::IO(
-            std::io::Error::new(
-                ErrorKind::InvalidInput,
-                "lane geometry journal contains an unsafe relative path",
-            ),
-            path.to_path_buf(),
-        ));
-    }
-    Ok(())
-}
-
-fn geometry_file_identity(metadata: &fs::Metadata) -> GeometryFileIdentity {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-
-        GeometryFileIdentity {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-        }
-    }
-    #[cfg(windows)]
-    {
-        use std::{os::windows::fs::MetadataExt, sync::atomic::Ordering};
-
-        let volume_serial_number = metadata.volume_serial_number();
-        let file_index = metadata.file_index();
-        let unsupported_nonce = if volume_serial_number.is_some() && file_index.is_some() {
-            0
-        } else {
-            // Some Windows filesystems do not expose stable volume/file IDs. A fresh nonce makes
-            // every subsequent comparison fail closed instead of treating all paths as equal.
-            UNSUPPORTED_GEOMETRY_IDENTITY_NONCE.fetch_add(1, Ordering::Relaxed)
-        };
-        GeometryFileIdentity {
-            volume_serial_number,
-            file_index,
-            unsupported_nonce,
-        }
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        use std::sync::atomic::Ordering;
-
-        let _ = metadata;
-        GeometryFileIdentity {
-            unsupported_nonce: UNSUPPORTED_GEOMETRY_IDENTITY_NONCE.fetch_add(1, Ordering::Relaxed),
-        }
-    }
-}
-
-fn checked_geometry_file_identity(
-    metadata: &fs::Metadata,
-    path: &Path,
-) -> Result<GeometryFileIdentity> {
-    let identity = geometry_file_identity(metadata);
-    #[cfg(windows)]
-    if identity.unsupported_nonce != 0 {
-        return Err(Error::IO(
-            std::io::Error::new(
-                ErrorKind::Unsupported,
-                "Windows filesystem did not expose a stable volume and file identity",
-            ),
-            path.to_path_buf(),
-        ));
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = identity;
-        return Err(Error::IO(
-            std::io::Error::new(
-                ErrorKind::Unsupported,
-                "lane geometry requires stable filesystem object identities",
-            ),
-            path.to_path_buf(),
-        ));
-    }
-    #[cfg(any(unix, windows))]
-    {
-        let _ = path;
-        Ok(identity)
-    }
-}
-
-fn decode_exact<T: Decode>(bytes: &[u8]) -> std::result::Result<T, norito::core::Error> {
-    let mut input = bytes;
-    let value = T::decode(&mut input)?;
-    if !input.is_empty() {
-        return Err(norito::core::Error::Message(
-            "trailing bytes in lane geometry sidecar".to_owned(),
-        ));
-    }
-    Ok(value)
-}
+include!("lane_geometry/retirement_bounds.rs");
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        borrow::Cow,
-        collections::BTreeMap,
-        fs,
-        num::NonZeroU32,
-        sync::{Arc, mpsc},
-        thread,
-        time::{Duration, Instant},
-    };
-
-    use iroha_config::{
-        base::WithOrigin,
-        kura::{FsyncMode, InitMode},
-        parameters::{
-            actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
-            defaults::kura::{
-                BLOCK_SYNC_ROSTER_RETENTION, BLOCKS_IN_MEMORY, EVICTION_REQUIRED_REPLICAS,
-                FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES, MERGE_LEDGER_CACHE_CAPACITY,
-                ROSTER_SIDECAR_RETENTION,
-            },
-        },
-    };
-    use iroha_crypto::{Algorithm, KeyPair, MerkleTree, Signature, bls_normal_pop_prove};
-    use iroha_data_model::{
-        ChainId, Level,
-        block::{
-            BlockExecutionContextBundle, CertifiedMergeLedgerReference, SignedBlock,
-            consensus::{
-                CertPhase, LaneBlockCommitment, LaneBlockDescriptorV1,
-                LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, NativeAmxAttestationBodyV2,
-                NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
-                SumeragiLanePayloadOwnership,
-            },
-            consensus_v2::{
-                BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-                ExecutionCommitment, GlobalPhase, HeightContext, HeightContextId,
-                NativeAmxApplicationManifestLeafV1, NativeAmxApplicationManifestMemberV1,
-                PROTOCOL_VERSION, PayloadEncoding, QuorumCertificate, ValidatorPower,
-                finality::V2FinalityArtifact,
-            },
-        },
-        consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        isi::Log,
-        merge::{
-            MergeExecutionBatch, MergeLaneBinding, MergeLaneExecution, MergeLaneSignerProof,
-            MergeLedgerEntry, MergeQuorumCertificate,
-        },
-        nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneLifecycleParameterV1},
-        peer::PeerId,
-        transaction::{TransactionBuilder, TransactionResult, signed::TransactionResultInner},
-        trigger::DataTriggerSequence,
-    };
-    use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-    use nonzero_ext::nonzero;
-    use tempfile::TempDir as RawTempDir;
-
-    use super::*;
-    use crate::{
-        block::BlockBuilder,
-        kura::{
-            CertifiedLaneBlockArtifact, CommitManifest,
-            NativeAmxParticipantApplicationManifestArtifactV1,
-            NativeAmxParticipantApplicationReceiptArtifact,
-        },
-        lane_consensus::{
-            CommittedLaneBlockSession, LaneBlockVoteV1, aggregate_lane_block_votes_to_qc,
-        },
-        tx::AcceptedTransaction,
-    };
-
-    // Keep the authenticated archive payload comfortably larger than the checkpoint sidecar.
-    // This makes the net disk-reclamation assertion independent of small encoding-size changes.
-    const GC_PAYLOAD_LEN: usize = 16 * 1024;
-
+    include!("lane_geometry_tests/00_support.rs");
     include!("lane_geometry/native_amx_retained_window_tests.rs");
-
-    #[test]
-    fn retirement_work_bound_scales_with_routes_and_configured_retention() {
-        for (routes, retention) in [(4_usize, 4_096_usize), (1_024, 512)] {
-            let diagnostic_suffix = routes
-                * retention
-                * (LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE
-                    + LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE);
-            assert!(
-                diagnostic_suffix > 65_536,
-                "fixture must exceed the retired fixed aggregate cap"
-            );
-            let limit = lane_retirement_aggregate_work_item_limit(
-                routes,
-                retention,
-                retention,
-                V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY.get(),
-            )
-            .expect("valid route/configuration bound");
-            let expected = routes
-                * (LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE
-                    * (retention + V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY.get())
-                    + LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE * retention);
-            assert_eq!(limit, expected);
-            assert!(
-                limit >= diagnostic_suffix,
-                "correctly compacted diagnostic suffix must fit the aggregate scan bound"
-            );
-        }
-        assert!(
-            lane_retirement_aggregate_work_item_limit(
-                usize::MAX,
-                usize::MAX,
-                usize::MAX,
-                usize::MAX,
-            )
-            .is_none(),
-            "hostile configuration arithmetic must fail closed on overflow"
-        );
-        assert_eq!(
-            MAX_LANE_RETIREMENT_WORK_ITEMS_PER_SIDECAR, 65_536,
-            "aggregate scaling must not weaken the per-sidecar corruption cap"
-        );
-    }
-
-    /// Temporary directory whose exposed path uses the same canonical spelling as Kura.
-    ///
-    /// macOS exposes its temporary hierarchy through `/var` while canonical paths use
-    /// `/private/var`.  Geometry tests pass paths back into a Kura instance after startup, so the
-    /// harness must retain the canonical spelling selected by `Kura::new_inner`; otherwise exact
-    /// containment and test-hook identity comparisons fail before exercising the intended gate.
-    struct TempDir {
-        _inner: RawTempDir,
-        canonical_path: PathBuf,
-    }
-
-    impl TempDir {
-        fn new() -> std::io::Result<Self> {
-            let inner = RawTempDir::new()?;
-            let canonical_path = fs::canonicalize(inner.path())?;
-            Ok(Self {
-                _inner: inner,
-                canonical_path,
-            })
-        }
-
-        fn path(&self) -> &Path {
-            &self.canonical_path
-        }
-    }
-
-    fn open_kura(root: &Path, lane_config: &RuntimeLaneConfig) -> Arc<Kura> {
-        let config = kura_config(root);
-        Kura::new(&config, lane_config).expect("open test Kura").0
-    }
-
-    fn wait_for_total_usage_scan_pause(kura: &Kura) {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !kura.total_disk_usage_scan_paused_for_tests() {
-            if Instant::now() >= deadline {
-                kura.resume_total_disk_usage_scan_for_tests();
-                panic!("disk-usage scan did not reach its deterministic publication barrier");
-            }
-            thread::yield_now();
-        }
-    }
-
-    fn kura_config(root: &Path) -> KuraConfig {
-        KuraConfig {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(root.to_path_buf()),
-            max_disk_usage_bytes: MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: FsyncMode::Always,
-            fsync_interval: FSYNC_INTERVAL,
-            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas: EVICTION_REQUIRED_REPLICAS,
-        }
-    }
-
-    fn configured_primary_catalog(alias: &str) -> LaneCatalog {
-        LaneCatalog::new(
-            nonzero!(1_u32),
-            vec![ModelLaneConfig {
-                alias: alias.to_owned(),
-                ..ModelLaneConfig::default()
-            }],
-        )
-        .expect("configured primary-lane catalog")
-    }
-
-    fn assert_lane_paths_absent(root: &Path, lane_config: &RuntimeLaneConfig) {
-        let primary = lane_config.primary();
-        assert!(
-            !primary.blocks_dir(root).exists(),
-            "rejected startup must not create its block-store path"
-        );
-        assert!(
-            !primary.merge_log_path(root).exists(),
-            "rejected startup must not create its merge-ledger path"
-        );
-    }
-
-    fn assert_kura_io_error(error: &Error, kind: std::io::ErrorKind, message: &str) {
-        let Error::IO(source, _) = error else {
-            panic!("expected Kura IO error containing {message:?}, got {error:?}");
-        };
-        assert_eq!(source.kind(), kind, "unexpected Kura IO error: {error:?}");
-        assert!(
-            source.to_string().contains(message),
-            "Kura IO source did not contain {message:?}: {error:?}"
-        );
-    }
-
-    fn initial_and_extended_configs() -> (RuntimeLaneConfig, RuntimeLaneConfig) {
-        let lane0 = ModelLaneConfig::default();
-        let lane1 = ModelLaneConfig {
-            id: LaneId::new(1),
-            alias: "elastic-one".to_owned(),
-            ..ModelLaneConfig::default()
-        };
-        let lane_count = NonZeroU32::new(2).expect("non-zero lane count");
-        let initial = LaneCatalog::new(lane_count, vec![lane0.clone()]).expect("initial catalog");
-        let extended = LaneCatalog::new(lane_count, vec![lane0, lane1]).expect("extended catalog");
-        (
-            RuntimeLaneConfig::from_catalog(&initial),
-            RuntimeLaneConfig::from_catalog(&extended),
-        )
-    }
-
-    fn initial_geometry() -> (BTreeMap<LaneId, Hash>, BTreeMap<LaneId, u64>) {
-        (
-            BTreeMap::from([(LaneId::SINGLE, Hash::prehashed([0x11; Hash::LENGTH]))]),
-            BTreeMap::from([(LaneId::SINGLE, 0)]),
-        )
-    }
-
-    fn extended_geometry() -> (BTreeMap<LaneId, Hash>, BTreeMap<LaneId, u64>) {
-        (
-            BTreeMap::from([
-                (LaneId::SINGLE, Hash::prehashed([0x11; Hash::LENGTH])),
-                (LaneId::new(1), Hash::prehashed([0x22; Hash::LENGTH])),
-            ]),
-            BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 9)]),
-        )
-    }
-
-    fn persist_create_intent(
-        kura: &Kura,
-        previous: &RuntimeLaneConfig,
-        updated: &RuntimeLaneConfig,
-        previous_incarnations: &BTreeMap<LaneId, Hash>,
-        updated_incarnations: &BTreeMap<LaneId, Hash>,
-        previous_activations: &BTreeMap<LaneId, u64>,
-        updated_activations: &BTreeMap<LaneId, u64>,
-    ) -> LaneGeometryOperation {
-        let previous_bindings = kura
-            .geometry_bindings(previous, previous_incarnations, previous_activations)
-            .expect("previous geometry bindings");
-        let updated_bindings = kura
-            .geometry_bindings(updated, updated_incarnations, updated_activations)
-            .expect("updated geometry bindings");
-        let previous_catalog = geometry_catalog_fingerprint(&previous_bindings);
-        let updated_catalog = geometry_catalog_fingerprint(&updated_bindings);
-        let previous_lineage_root = unscoped_lineage_root(&previous_bindings);
-        let updated_lineage_root = unscoped_lineage_root(&updated_bindings);
-        let transition_id = geometry_transition_id(
-            0,
-            0,
-            previous_catalog,
-            previous_lineage_root,
-            updated_catalog,
-            updated_lineage_root,
-        );
-        let operations = kura
-            .build_geometry_operations(
-                transition_id,
-                &previous_bindings,
-                &updated_bindings,
-                &BTreeSet::new(),
-            )
-            .expect("create operation");
-        assert_eq!(operations.len(), 1);
-        assert_eq!(operations[0].kind, LaneGeometryOperationKind::Create);
-        let operation = operations[0].clone();
-        let mut journal = LaneGeometryJournal::default();
-        journal.records.push(LaneGeometryIntent {
-            transition_id,
-            transition_sequence: 0,
-            transition_height: 0,
-            previous_catalog,
-            previous_lineage_root,
-            updated_catalog,
-            updated_lineage_root,
-            previous_bindings,
-            updated_bindings,
-            phase: LaneGeometryPhase::Intent,
-            operations,
-        });
-        kura.write_lane_geometry_journal(&journal)
-            .expect("persist create intent");
-        operation
-    }
-
-    #[test]
-    fn before_first_height_cursor_replays_same_height_transitions_in_sequence() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let lane_count = nonzero!(2_u32);
-        let primary = ModelLaneConfig::default();
-        let second = ModelLaneConfig {
-            id: LaneId::new(1),
-            alias: "same-height-a".to_owned(),
-            ..ModelLaneConfig::default()
-        };
-        let relabelled = ModelLaneConfig {
-            alias: "same-height-b".to_owned(),
-            ..second.clone()
-        };
-        let initial_catalog =
-            LaneCatalog::new(lane_count, vec![primary.clone()]).expect("initial catalog");
-        let added_catalog =
-            LaneCatalog::new(lane_count, vec![primary.clone(), second]).expect("added catalog");
-        let relabelled_catalog =
-            LaneCatalog::new(lane_count, vec![primary, relabelled]).expect("relabelled catalog");
-        let initial = RuntimeLaneConfig::from_catalog(&initial_catalog);
-        let added = RuntimeLaneConfig::from_catalog(&added_catalog);
-        let relabelled = RuntimeLaneConfig::from_catalog(&relabelled_catalog);
-        let initial_incarnations =
-            BTreeMap::from([(LaneId::SINGLE, Hash::prehashed([0x51; Hash::LENGTH]))]);
-        let added_incarnations = BTreeMap::from([
-            (LaneId::SINGLE, initial_incarnations[&LaneId::SINGLE]),
-            (LaneId::new(1), Hash::prehashed([0x52; Hash::LENGTH])),
-        ]);
-        let initial_activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
-        let added_activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 7)]);
-        let kura = open_kura(&root, &initial);
-
-        kura.apply_lane_geometry_transition_at_height(
-            &initial,
-            &added,
-            &initial_incarnations,
-            &added_incarnations,
-            &initial_activations,
-            &added_activations,
-            &BTreeSet::new(),
-            7,
-        )
-        .expect("apply first height-seven transition");
-        kura.mark_lane_geometry_catalog_published(
-            &added,
-            &added_incarnations,
-            &added_activations,
-            None,
-        )
-        .expect("publish first height-seven transition");
-        kura.apply_lane_geometry_transition_at_height(
-            &added,
-            &relabelled,
-            &added_incarnations,
-            &added_incarnations,
-            &added_activations,
-            &added_activations,
-            &BTreeSet::new(),
-            7,
-        )
-        .expect("apply second height-seven transition");
-        kura.mark_lane_geometry_catalog_published(
-            &relabelled,
-            &added_incarnations,
-            &added_activations,
-            None,
-        )
-        .expect("publish second height-seven transition");
-        let original = kura
-            .read_lane_geometry_journal()
-            .expect("published journal");
-        let cursors = original
-            .records
-            .iter()
-            .map(|record| (record.transition_id, record.transition_sequence))
-            .collect::<Vec<_>>();
-        assert_eq!(original.records.len(), 2);
-
-        kura.recover_lane_geometry_journal_before_first_transition_at_height(
-            &initial,
-            &initial_incarnations,
-            &initial_activations,
-            7,
-        )
-        .expect("restore cursor before every transition at height seven");
-        assert!(
-            kura.read_lane_geometry_journal()
-                .expect("rolled-back journal")
-                .records
-                .iter()
-                .all(|record| record.phase == LaneGeometryPhase::RolledBack)
-        );
-
-        kura.apply_lane_geometry_transition_at_height(
-            &initial,
-            &added,
-            &initial_incarnations,
-            &added_incarnations,
-            &initial_activations,
-            &added_activations,
-            &BTreeSet::new(),
-            7,
-        )
-        .expect("retry first transition in sequence");
-        kura.mark_lane_geometry_catalog_published(
-            &added,
-            &added_incarnations,
-            &added_activations,
-            None,
-        )
-        .expect("republish first transition");
-        kura.apply_lane_geometry_transition_at_height(
-            &added,
-            &relabelled,
-            &added_incarnations,
-            &added_incarnations,
-            &added_activations,
-            &added_activations,
-            &BTreeSet::new(),
-            7,
-        )
-        .expect("retry second transition in sequence");
-        kura.mark_lane_geometry_catalog_published(
-            &relabelled,
-            &added_incarnations,
-            &added_activations,
-            None,
-        )
-        .expect("republish second transition");
-
-        let replayed = kura.read_lane_geometry_journal().expect("replayed journal");
-        assert_eq!(
-            replayed
-                .records
-                .iter()
-                .map(|record| (record.transition_id, record.transition_sequence))
-                .collect::<Vec<_>>(),
-            cursors
-        );
-        assert!(
-            replayed
-                .records
-                .iter()
-                .all(|record| record.phase == LaneGeometryPhase::CatalogPublished)
-        );
-    }
-
-    fn open_configured_anchor_for_publication_test(
-        root: &Path,
-        lane_config: &RuntimeLaneConfig,
-        baseline: Hash,
-        primary_incarnation: Hash,
-    ) -> Arc<Kura> {
-        Kura::establish_or_verify_configured_lane_catalog_baseline(root, baseline)
-            .expect("establish configured baseline before opening lane storage");
-        let kura = open_kura(root, lane_config);
-        kura.establish_or_verify_configured_primary_geometry_anchor(
-            lane_config.primary(),
-            primary_incarnation,
-            baseline,
-        )
-        .expect("anchor configured primary before catalog publication");
-        kura
-    }
-
-    #[test]
-    fn post_write_publication_failure_restores_anchored_description_only_journal() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let mut lanes = LaneCatalog::default().lanes().to_vec();
-        lanes[0].description = Some("operator-only catalog description".to_owned());
-        let catalog =
-            LaneCatalog::new(nonzero!(1_u32), lanes).expect("description-only lane catalog");
-        let config = RuntimeLaneConfig::from_catalog(&catalog);
-        let baseline = iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&catalog);
-        let (incarnations, activation_heights) = initial_geometry();
-        let kura = open_configured_anchor_for_publication_test(
-            &root,
-            &config,
-            baseline,
-            incarnations[&LaneId::SINGLE],
-        );
-        let journal_path = kura.lane_geometry_journal_path();
-        let prior_bytes = fs::read(&journal_path).expect("anchored journal");
-        kura.apply_lane_geometry_transition(
-            &config,
-            &config,
-            &incarnations,
-            &incarnations,
-            &activation_heights,
-            &activation_heights,
-            &BTreeSet::new(),
-        )
-        .expect("description-only catalog has no physical geometry transition");
-        assert_eq!(
-            fs::read(&journal_path).expect("unchanged journal"),
-            prior_bytes
-        );
-        kura.fail_next_lane_geometry_publication_after_write_for_test();
-
-        let error = kura
-            .mark_lane_geometry_catalog_published(
-                &config,
-                &incarnations,
-                &activation_heights,
-                Some(baseline),
-            )
-            .expect_err("failure after target replacement must restore prior absence");
-        assert!(
-            !matches!(&error, Error::LaneGeometryPublicationRestoreFailed { .. }),
-            "exact restoration should preserve the original injected publication error: {error}"
-        );
-        assert_eq!(
-            fs::read(&journal_path).expect("restored anchored journal"),
-            prior_bytes
-        );
-        let (restored_baseline, phases, has_temp) = kura
-            .lane_geometry_journal_state_for_test()
-            .expect("read restored absent journal state");
-        assert_eq!(restored_baseline, Some(baseline));
-        assert!(phases.is_empty());
-        assert!(!has_temp, "rollback must not leave owned temp files");
-
-        kura.mark_lane_geometry_catalog_published(
-            &config,
-            &incarnations,
-            &activation_heights,
-            Some(baseline),
-        )
-        .expect("one-shot failure permits an exact corrected retry");
-        let (retried_baseline, phases, has_temp) = kura
-            .lane_geometry_journal_state_for_test()
-            .expect("read corrected publication");
-        assert_eq!(retried_baseline, Some(baseline));
-        assert!(phases.is_empty());
-        assert!(!has_temp);
-    }
-
-    #[test]
-    fn publication_temp_recovery_consumes_only_an_exact_preexisting_value() {
-        let catalog = LaneCatalog::default();
-        let config = RuntimeLaneConfig::from_catalog(&catalog);
-        let baseline = iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&catalog);
-        let (incarnations, activation_heights) = initial_geometry();
-
-        let unrelated_temp = TempDir::new().expect("temporary directory");
-        let unrelated_root = unrelated_temp.path().join("kura");
-        let unrelated_kura = open_configured_anchor_for_publication_test(
-            &unrelated_root,
-            &config,
-            baseline,
-            incarnations[&LaneId::SINGLE],
-        );
-        let publication_temp = unrelated_root.join(JOURNAL_TEMP_FILE_NAME);
-        fs::write(&publication_temp, b"operator-owned-temp").expect("seed unrelated temp");
-        let error = unrelated_kura
-            .mark_lane_geometry_catalog_published(
-                &config,
-                &incarnations,
-                &activation_heights,
-                Some(baseline),
-            )
-            .expect_err("an unrelated preexisting temp must fail closed");
-        assert!(
-            !matches!(&error, Error::LaneGeometryPublicationRestoreFailed { .. }),
-            "an untouched preexisting temp does not make prior-target restoration ambiguous: {error}"
-        );
-        assert_eq!(
-            fs::read(&publication_temp).expect("unrelated temp retained"),
-            b"operator-owned-temp"
-        );
-        assert!(
-            unrelated_kura.lane_geometry_journal_path().is_file(),
-            "a temp collision must retain the authenticated target"
-        );
-
-        let resumable_temp = TempDir::new().expect("temporary directory");
-        let resumable_root = resumable_temp.path().join("kura");
-        let resumable_kura = open_configured_anchor_for_publication_test(
-            &resumable_root,
-            &config,
-            baseline,
-            incarnations[&LaneId::SINGLE],
-        );
-        let expected_journal = resumable_kura
-            .read_lane_geometry_journal()
-            .expect("anchored resumable journal");
-        let publication_temp = resumable_root.join(JOURNAL_TEMP_FILE_NAME);
-        fs::write(&publication_temp, expected_journal.encode()).expect("seed exact resume temp");
-        resumable_kura.fail_next_lane_geometry_publication_after_write_for_test();
-
-        let error = resumable_kura
-            .mark_lane_geometry_catalog_published(
-                &config,
-                &incarnations,
-                &activation_heights,
-                Some(baseline),
-            )
-            .expect_err("inject failure after consuming exact resume temp");
-        assert!(!matches!(
-            &error,
-            Error::LaneGeometryPublicationRestoreFailed { .. }
-        ));
-        assert!(
-            !publication_temp.exists(),
-            "an exact resumable temp is consumed by target replacement"
-        );
-        assert!(
-            fs::read(resumable_kura.lane_geometry_journal_path())
-                .expect("post-write rollback restores the authenticated target")
-                == expected_journal.encode(),
-            "post-write rollback must restore the exact authenticated target"
-        );
-    }
-
-    #[test]
-    fn post_write_publication_failure_restores_exact_files_applied_journal() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, extended) = initial_and_extended_configs();
-        let (initial_incarnations, initial_activations) = initial_geometry();
-        let (extended_incarnations, extended_activations) = extended_geometry();
-        let baseline = Hash::new(b"configured-catalog-baseline");
-        let kura = open_configured_anchor_for_publication_test(
-            &root,
-            &initial,
-            baseline,
-            initial_incarnations[&LaneId::SINGLE],
-        );
-        kura.apply_lane_geometry_transition(
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-            &BTreeSet::new(),
-        )
-        .expect("prepare files-applied geometry intent");
-        let journal_path = kura.lane_geometry_journal_path();
-        let prior_bytes = fs::read(&journal_path).expect("capture exact files-applied journal");
-        let prior_journal = decode_exact::<LaneGeometryJournal>(&prior_bytes)
-            .expect("decode files-applied journal");
-        assert_eq!(prior_journal.configured_catalog_hash, Some(baseline));
-        assert_eq!(
-            prior_journal.records.last().map(|record| record.phase),
-            Some(LaneGeometryPhase::FilesApplied)
-        );
-        kura.fail_next_lane_geometry_publication_after_write_for_test();
-
-        let error = kura
-            .mark_lane_geometry_catalog_published(
-                &extended,
-                &extended_incarnations,
-                &extended_activations,
-                Some(baseline),
-            )
-            .expect_err("inject failure after replacing an existing journal");
-        assert!(!matches!(
-            &error,
-            Error::LaneGeometryPublicationRestoreFailed { .. }
-        ));
-        assert_eq!(
-            fs::read(&journal_path).expect("read restored journal"),
-            prior_bytes,
-            "rollback must restore the exact prior encoding, including FilesApplied phase"
-        );
-        let (restored_baseline, phases, has_temp) = kura
-            .lane_geometry_journal_state_for_test()
-            .expect("read exact restored journal state");
-        assert_eq!(restored_baseline, Some(baseline));
-        assert_eq!(phases, vec!["files_applied"]);
-        assert!(!has_temp);
-
-        kura.recover_lane_geometry_journal(&initial, &initial_incarnations, &initial_activations)
-            .expect("restored FilesApplied intent remains available for State geometry rollback");
-        assert_eq!(
-            kura.read_lane_geometry_journal()
-                .expect("journal after State-equivalent rollback")
-                .records
-                .last()
-                .map(|record| record.phase),
-            Some(LaneGeometryPhase::RolledBack)
-        );
-    }
-
-    #[test]
-    fn publication_restore_failure_is_distinct_and_leaves_published_journal_fail_closed() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, extended) = initial_and_extended_configs();
-        let (initial_incarnations, initial_activations) = initial_geometry();
-        let (extended_incarnations, extended_activations) = extended_geometry();
-        let baseline = Hash::new(b"configured-catalog-baseline");
-        let kura = open_configured_anchor_for_publication_test(
-            &root,
-            &initial,
-            baseline,
-            initial_incarnations[&LaneId::SINGLE],
-        );
-        kura.apply_lane_geometry_transition(
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-            &BTreeSet::new(),
-        )
-        .expect("prepare files-applied geometry intent");
-        let prior_bytes = fs::read(kura.lane_geometry_journal_path())
-            .expect("capture exact files-applied journal");
-        let restore_temp = root.join(JOURNAL_RESTORE_TEMP_FILE_NAME);
-        fs::write(&restore_temp, b"operator-owned-restore-temp")
-            .expect("seed restore-temp collision");
-        kura.fail_next_lane_geometry_publication_after_write_for_test();
-
-        let error = kura
-            .mark_lane_geometry_catalog_published(
-                &extended,
-                &extended_incarnations,
-                &extended_activations,
-                Some(baseline),
-            )
-            .expect_err("restore-temp collision must prevent claiming exact restoration");
-        assert!(matches!(
-            &error,
-            Error::LaneGeometryPublicationRestoreFailed { .. }
-        ));
-        assert_eq!(
-            fs::read(&restore_temp).expect("restore collision retained"),
-            b"operator-owned-restore-temp"
-        );
-        assert_ne!(
-            fs::read(kura.lane_geometry_journal_path()).expect("published journal remains"),
-            prior_bytes,
-            "restore failure must not be reported as if the prior journal were restored"
-        );
-        let journal = kura
-            .read_lane_geometry_journal()
-            .expect("published journal remains internally valid");
-        assert_eq!(journal.configured_catalog_hash, Some(baseline));
-        assert_eq!(
-            journal.records.last().map(|record| record.phase),
-            Some(LaneGeometryPhase::CatalogPublished),
-            "State must stop instead of rolling geometry back under a published journal"
-        );
-    }
-
-    fn retirement_test_configs() -> (RuntimeLaneConfig, RuntimeLaneConfig) {
-        let lane0 = ModelLaneConfig {
-            dataspace_id: DataSpaceId::new(7),
-            ..ModelLaneConfig::default()
-        };
-        let lane1 = ModelLaneConfig {
-            id: LaneId::new(1),
-            dataspace_id: DataSpaceId::new(8),
-            alias: "retirement-participant".to_owned(),
-            ..ModelLaneConfig::default()
-        };
-        let lane_count = NonZeroU32::new(2).expect("non-zero lane count");
-        let initial =
-            LaneCatalog::new(lane_count, vec![lane0.clone()]).expect("retirement initial catalog");
-        let extended =
-            LaneCatalog::new(lane_count, vec![lane0, lane1]).expect("retirement extended catalog");
-        (
-            RuntimeLaneConfig::from_catalog(&initial),
-            RuntimeLaneConfig::from_catalog(&extended),
-        )
-    }
-
-    fn retirement_test_geometry() -> (BTreeMap<LaneId, Hash>, BTreeMap<LaneId, u64>) {
-        (
-            BTreeMap::from([
-                (LaneId::SINGLE, Hash::prehashed([0x61; Hash::LENGTH])),
-                (LaneId::new(1), Hash::prehashed([0x62; Hash::LENGTH])),
-            ]),
-            BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 1)]),
-        )
-    }
-
-    fn install_retirement_test_lane_markers(
-        kura: &Kura,
-        config: &RuntimeLaneConfig,
-        incarnations: &BTreeMap<LaneId, Hash>,
-        activation_heights: &BTreeMap<LaneId, u64>,
-    ) {
-        for binding in kura
-            .geometry_bindings(config, incarnations, activation_heights)
-            .expect("retirement test geometry bindings")
-        {
-            kura.write_lane_marker(&binding)
-                .expect("install authoritative retirement-test lane marker");
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn open_published_retirement_kura(
-        root: &Path,
-        initial: &RuntimeLaneConfig,
-        extended: &RuntimeLaneConfig,
-        initial_incarnations: &BTreeMap<LaneId, Hash>,
-        extended_incarnations: &BTreeMap<LaneId, Hash>,
-        initial_activations: &BTreeMap<LaneId, u64>,
-        extended_activations: &BTreeMap<LaneId, u64>,
-    ) -> (Arc<Kura>, Vec<u8>, usize) {
-        let kura = open_kura(root, initial);
-        kura.apply_lane_geometry_transition(
-            initial,
-            extended,
-            initial_incarnations,
-            extended_incarnations,
-            initial_activations,
-            extended_activations,
-            &BTreeSet::new(),
-        )
-        .expect("journal dynamic retirement-test lane creation");
-        kura.mark_lane_geometry_catalog_published(
-            extended,
-            extended_incarnations,
-            extended_activations,
-            None,
-        )
-        .expect("publish dynamic retirement-test lane catalog");
-        let journal = kura
-            .read_lane_geometry_journal()
-            .expect("read published retirement-test journal");
-        let journal_bytes = fs::read(kura.lane_geometry_journal_path())
-            .expect("read exact published retirement-test journal bytes");
-        (kura, journal_bytes, journal.records.len())
-    }
-
-    fn assert_geometry_io_error(error: &Error, expected_kind: ErrorKind, expected_message: &str) {
-        let Error::IO(source, _) = error else {
-            panic!("unexpected lane geometry error: {error:?}");
-        };
-        assert_eq!(source.kind(), expected_kind);
-        assert_eq!(source.to_string(), expected_message);
-    }
-
-    struct RetiredGeometryFixture {
-        initial: RuntimeLaneConfig,
-        extended: RuntimeLaneConfig,
-        initial_incarnations: BTreeMap<LaneId, Hash>,
-        initial_activations: BTreeMap<LaneId, u64>,
-        extended_incarnations: BTreeMap<LaneId, Hash>,
-        extended_activations: BTreeMap<LaneId, u64>,
-        archive_root: PathBuf,
-    }
-
-    struct TombstonedAutonomousArchiveFixture {
-        geometry: RetiredGeometryFixture,
-        archived_blocks: PathBuf,
-        binding: LaneGeometryBinding,
-        autonomous_attempt: PathBuf,
-        view_state: PathBuf,
-        height_pointer: PathBuf,
-        route_pointer: PathBuf,
-    }
-
-    struct NativeAmxArchiveFixture {
-        geometry: RetiredGeometryFixture,
-        archived_blocks: PathBuf,
-        binding: LaneGeometryBinding,
-        manifest: PathBuf,
-        receipt: PathBuf,
-        latest_index: PathBuf,
-    }
-
-    fn prepare_retired_geometry_archive(kura: &Kura, root: &Path) -> RetiredGeometryFixture {
-        let (initial, extended) = initial_and_extended_configs();
-        let (initial_incarnations, initial_activations) = initial_geometry();
-        let (extended_incarnations, extended_activations) = extended_geometry();
-        kura.apply_lane_geometry_transition(
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-            &BTreeSet::new(),
-        )
-        .expect("create elastic lane");
-        kura.mark_lane_geometry_catalog_published(
-            &extended,
-            &extended_incarnations,
-            &extended_activations,
-            None,
-        )
-        .expect("publish elastic lane catalog");
-        let lane_one_blocks = extended
-            .entry(LaneId::new(1))
-            .expect("elastic lane")
-            .blocks_dir(root);
-        fs::write(
-            lane_one_blocks.join("gc-payload.norito"),
-            [0xA5; GC_PAYLOAD_LEN],
-        )
-        .expect("seed archived payload bytes");
-
-        kura.apply_lane_geometry_transition(
-            &extended,
-            &initial,
-            &extended_incarnations,
-            &initial_incarnations,
-            &extended_activations,
-            &initial_activations,
-            &BTreeSet::new(),
-        )
-        .expect("retire elastic lane");
-        kura.mark_lane_geometry_catalog_published(
-            &initial,
-            &initial_incarnations,
-            &initial_activations,
-            None,
-        )
-        .expect("publish retired catalog");
-        let journal = kura.read_lane_geometry_journal().expect("geometry journal");
-        let retired = journal.records.last().expect("retire transition");
-        let archive_root = root
-            .join("retired/lane_geometry")
-            .join(hex::encode(retired.transition_id.as_ref()));
-        assert!(archive_root.exists(), "retired lane archive exists");
-        RetiredGeometryFixture {
-            initial,
-            extended,
-            initial_incarnations,
-            initial_activations,
-            extended_incarnations,
-            extended_activations,
-            archive_root,
-        }
-    }
-
-    fn checkpoint_retired_geometry(
-        kura: &Kura,
-        fixture: &RetiredGeometryFixture,
-        height: u64,
-    ) -> Result<LaneGeometryGcSummary> {
-        let (block_hash, state_hash) = durable_geometry_snapshot_identity(kura, height);
-        let bindings = kura.geometry_bindings(
-            &fixture.initial,
-            &fixture.initial_incarnations,
-            &fixture.initial_activations,
-        )?;
-        let lineage_root = unscoped_lineage_root(&bindings);
-        kura.checkpoint_lane_geometry_with_proven_snapshot(
-            bindings,
-            lineage_root,
-            height,
-            Some(block_hash),
-            state_hash,
-            Vec::new(),
-        )
-    }
-
-    fn prepare_tombstoned_autonomous_archive(
-        root: &Path,
-    ) -> (Arc<Kura>, TombstonedAutonomousArchiveFixture) {
-        let (initial, extended) = retirement_test_configs();
-        let (extended_incarnations, extended_activations) = retirement_test_geometry();
-        let initial_incarnations =
-            BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-        let initial_activations =
-            BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-        let (kura, _, _) = open_published_retirement_kura(
-            root,
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-        );
-        let retiring_lane = LaneId::new(1);
-        let retiring_entry = extended.entry(retiring_lane).expect("retiring lane");
-        let retiring_incarnation = extended_incarnations[&retiring_lane];
-        let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let (chain_id_hash, epoch, payload) = autonomous_retirement_payload_for_routes(
-            retiring_lane,
-            retiring_entry.dataspace_id,
-            retiring_incarnation,
-            LaneId::new(9),
-            DataSpaceId::new(19),
-            Hash::new(b"tombstoned-autonomous-unrelated-participant"),
-            &producer,
-        );
-        let lane_block_height = payload.origin_proposal.descriptor.lane_block_height;
-        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
-            .expect("persist autonomous payload before terminal retirement");
-        let pending_error = kura
-            .first_release_lane_retirement_admissible_for_test(
-                retiring_lane,
-                retiring_entry.dataspace_id,
-                retiring_incarnation,
-            )
-            .expect_err("non-terminal autonomous work must block production retirement");
-        assert_geometry_io_error(
-            &pending_error,
-            ErrorKind::WouldBlock,
-            "pending autonomous payload targets a retiring lane incarnation",
-        );
-        let retirement = crate::kura::AutonomousLaneSlotRetirementV1::from_payload(&payload);
-        kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch)
-            .expect("persist exact autonomous slot retirement");
-        kura.first_release_lane_retirement_admissible_for_test(
-            retiring_lane,
-            retiring_entry.dataspace_id,
-            retiring_incarnation,
-        )
-        .expect("production retirement policy accepts exact tombstoned autonomous evidence");
-
-        kura.apply_lane_geometry_transition(
-            &extended,
-            &initial,
-            &extended_incarnations,
-            &initial_incarnations,
-            &extended_activations,
-            &initial_activations,
-            &BTreeSet::new(),
-        )
-        .expect("archive tombstoned autonomous lane");
-        kura.mark_lane_geometry_catalog_published(
-            &initial,
-            &initial_incarnations,
-            &initial_activations,
-            None,
-        )
-        .expect("publish tombstoned autonomous retirement");
-        let journal = kura
-            .read_lane_geometry_journal()
-            .expect("tombstoned autonomous geometry journal");
-        let retirement_transition = journal.records.last().expect("retirement transition");
-        let archive_root = root
-            .join("retired/lane_geometry")
-            .join(hex::encode(retirement_transition.transition_id.as_ref()));
-        let binding = retirement_transition
-            .operations
-            .iter()
-            .find_map(|operation| {
-                (operation.lane_id == retiring_lane)
-                    .then_some(operation.previous.as_ref())
-                    .flatten()
-            })
-            .expect("retired autonomous lane binding")
-            .clone();
-        let archived_blocks = archive_root.join("lane_0000000001/previous_blocks");
-        let lane_artifacts = archived_blocks.join(LANE_ARTIFACTS_DIR_NAME);
-        let fixture = TombstonedAutonomousArchiveFixture {
-            geometry: RetiredGeometryFixture {
-                initial,
-                extended,
-                initial_incarnations,
-                initial_activations,
-                extended_incarnations,
-                extended_activations,
-                archive_root,
-            },
-            archived_blocks,
-            binding,
-            autonomous_attempt: lane_artifacts.join(format!(
-                "{AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX}_{lane_block_height:020}_{:020}.norito",
-                payload.origin_proposal.descriptor.proposal_height,
-            )),
-            view_state: lane_artifacts.join(format!(
-                "{AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX}_{lane_block_height:020}_{:020}.norito",
-                payload.origin_proposal.descriptor.proposal_height,
-            )),
-            height_pointer: lane_artifacts.join(format!(
-                "{AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX}_{lane_block_height:020}.norito"
-            )),
-            route_pointer: lane_artifacts.join(AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE),
-        };
-        (kura, fixture)
-    }
-
-    fn native_amx_archive_finality(
-        block: &SignedBlock,
-        execution_commitment: ExecutionCommitment,
-    ) -> V2FinalityArtifact {
-        let mut keypairs = (0_u8..4)
-            .map(|index| {
-                KeyPair::try_from_seed(
-                    vec![0xD0_u8.saturating_add(index); 32],
-                    Algorithm::BlsNormal,
-                )
-                .expect("derive deterministic Native archive finality key")
-            })
-            .collect::<Vec<_>>();
-        keypairs.sort_by(|left, right| {
-            PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
-        });
-        let roster = keypairs
-            .iter()
-            .map(|keypair| ValidatorPower {
-                validator: PeerId::new(keypair.public_key().clone()),
-                power: 1,
-            })
-            .collect::<Vec<_>>();
-        let height = block.header().height().get();
-        assert_eq!(height, 1, "Native archive fixture uses one global block");
-        let context = HeightContext {
-            chain_id: ChainId::from("native-amx-lane-archive-test"),
-            protocol_version: PROTOCOL_VERSION,
-            height,
-            epoch: 0,
-            epoch_end_height: 100,
-            next_epoch_snapshot: None,
-            mode: ConsensusMode::Permissioned,
-            parent_commit_qc: None,
-            snapshot_bootstrap: None,
-            quorum: DualQuorum::from_roster(&roster).expect("valid Native archive quorum"),
-            roster,
-            nexus_amx_context_hash: Hash::new(b"Native archive AMX context"),
-            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
-            da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 1_024,
-                data_shards: 1,
-                parity_shards: 1,
-                max_payload_size_bytes: 4_096,
-                max_chunk_count: 8,
-            },
-            leader_seed: [0x6D; 32],
-        };
-        let subject = BlockSubject {
-            parent_block_hash: block.header().prev_block_hash(),
-            block_hash: block.hash(),
-            payload_hash: block
-                .canonical_proposal_wire_hash()
-                .expect("hash Native archive proposal wire"),
-        };
-        let round = ConsensusRound {
-            context_id: context.id(),
-            height,
-            view: block.header().view_change_index(),
-        };
-        let mut commit_qc = QuorumCertificate {
-            round,
-            proposal_round: round,
-            phase: GlobalPhase::Commit,
-            subject,
-            execution_commitment,
-            signers: vec![0, 1, 2],
-            aggregate_signature: vec![1],
-        };
-        let preimage = commit_qc
-            .signer_preimage(&context, 0)
-            .expect("construct Native archive finality signer preimage");
-        let signatures = commit_qc
-            .signers
-            .iter()
-            .map(|index| {
-                Signature::try_new(
-                    keypairs[usize::try_from(*index).expect("fixture signer index")].private_key(),
-                    &preimage,
-                )
-                .expect("sign Native archive finality vote")
-                .payload()
-                .to_vec()
-            })
-            .collect::<Vec<_>>();
-        let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        commit_qc.aggregate_signature =
-            iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
-                .expect("aggregate Native archive finality votes");
-        let validator_set_pops = keypairs
-            .iter()
-            .map(|keypair| {
-                bls_normal_pop_prove(keypair.private_key())
-                    .expect("derive Native archive finality PoP")
-            })
-            .collect();
-        let artifact = V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops);
-        artifact
-            .verify()
-            .expect("Native archive finality fixture is valid");
-        artifact
-    }
-
-    fn prepare_native_amx_archive(root: &Path) -> (Arc<Kura>, NativeAmxArchiveFixture) {
-        let (initial, extended) = retirement_test_configs();
-        let (extended_incarnations, mut extended_activations) = retirement_test_geometry();
-        extended_activations.insert(LaneId::new(1), 0);
-        let initial_incarnations =
-            BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-        let initial_activations =
-            BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-        let (kura, _, _) = open_published_retirement_kura(
-            root,
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-        );
-        let retiring_lane = LaneId::new(1);
-        let retiring_entry = extended
-            .entry(retiring_lane)
-            .expect("Native archive participant lane")
-            .clone();
-        let retiring_incarnation = extended_incarnations[&retiring_lane];
-
-        let mut proposal = certified_geometry_lane_block(
-            retiring_lane,
-            retiring_entry.dataspace_id,
-            retiring_incarnation,
-            1,
-        )
-        .proposal;
-        proposal.descriptor.proposal_height = 1;
-        proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
-        proposal.proposal_hash = proposal.computed_proposal_hash();
-        crate::lane_consensus::validate_lane_block_proposal(&proposal)
-            .expect("valid Native archive participant proposal");
-
-        let block: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
-            .chain(0, None)
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
-            .unpack(|_| {})
-            .into();
-        let block = Arc::new(block);
-        kura.store_block(Arc::clone(&block))
-            .expect("persist Native archive application block");
-
-        let source_id = [0xA7; Hash::LENGTH];
-        let result = TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::new()));
-        let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
-            proposal.descriptor.accepted_transaction_hashes[0],
-        );
-        let settlement = LaneBlockCommitment {
-            block_height: proposal.descriptor.lane_block_height,
-            lane_id: proposal.descriptor.lane_id,
-            lane_incarnation: proposal.descriptor.lane_incarnation,
-            dataspace_id: proposal.descriptor.dataspace_id,
-            tx_count: 1,
-            total_local_amount: "0".parse().expect("zero quantity"),
-            total_xor_due: "0".parse().expect("zero quantity"),
-            total_xor_after_haircut: "0".parse().expect("zero quantity"),
-            total_xor_variance: "0".parse().expect("zero quantity"),
-            swap_metadata: None,
-            receipts: vec![iroha_data_model::block::consensus::LaneSettlementReceipt {
-                source_id,
-                local_amount: "0".parse().expect("zero quantity"),
-                xor_due: "0".parse().expect("zero quantity"),
-                xor_after_haircut: "0".parse().expect("zero quantity"),
-                xor_variance: "0".parse().expect("zero quantity"),
-                timestamp_ms: 1,
-            }],
-            nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
-        };
-        let settlement_hash = iroha_data_model::nexus::compute_settlement_hash(&settlement)
-            .expect("hash Native archive settlement");
-        let executed_block_wire_hash = block
-            .executed_block_wire_hash()
-            .expect("hash Native archive executed block wire");
-        let leaf = NativeAmxApplicationManifestLeafV1 {
-            version: iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-            lane_id: proposal.descriptor.lane_id,
-            dataspace_id: proposal.descriptor.dataspace_id,
-            lane_incarnation: proposal.descriptor.lane_incarnation,
-            participant_height: proposal.descriptor.lane_block_height,
-            participant_view: proposal.descriptor.lane_block_view,
-            predecessor_height: proposal.descriptor.previous_lane_block_height,
-            predecessor_descriptor_hash: proposal.descriptor.previous_lane_block_descriptor_hash,
-            descriptor_hash: proposal.descriptor.descriptor_hash,
-            proposal_hash: proposal.proposal_hash,
-            settlement_hash,
-            members: vec![NativeAmxApplicationManifestMemberV1 {
-                entrypoint_index: proposal.descriptor.accepted_candidate_indices[0],
-                source_id,
-                entrypoint_hash,
-                result_hash: result.hash(),
-            }],
-            application_block_height: 1,
-            application_block_hash: block.hash(),
-            executed_block_wire_hash,
-        };
-        leaf.validate()
-            .expect("valid Native archive application manifest leaf");
-        let tree = [HashOf::new(&leaf)].into_iter().collect::<MerkleTree<_>>();
-        let manifest_root = tree
-            .root()
-            .map(Hash::from)
-            .expect("one-leaf Native archive manifest root");
-        let execution_commitment = ExecutionCommitment::new_with_native_amx_application_manifest(
-            Hash::new(b"Native archive parent state"),
-            Hash::new(b"Native archive post state"),
-            Hash::new(b"Native archive ordinary writes"),
-            None,
-            0,
-            iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-            manifest_root,
-            1,
-            executed_block_wire_hash,
-        )
-        .expect("valid Native archive execution commitment");
-        let finality = native_amx_archive_finality(block.as_ref(), execution_commitment);
-        let _ = kura
-            .store_v2_finality_artifact(&finality)
-            .expect("persist Native archive finality");
-        let checkpoint_hash = Hash::new(b"Native archive WSV checkpoint");
-        kura.store_wsv_checkpoint(1, block.hash(), checkpoint_hash)
-            .expect("persist Native archive WSV checkpoint");
-        kura.store_commit_manifest(
-            CommitManifest::new(1, block.hash(), None, None, checkpoint_hash, None)
-                .with_authenticated_v2_commit_authority(&finality),
-        )
-        .expect("persist Native archive commit manifest");
-
-        let finality_artifact_hash = HashOf::new(&finality);
-        let manifest = NativeAmxParticipantApplicationManifestArtifactV1 {
-            version: NativeAmxParticipantApplicationManifestArtifactV1::VERSION,
-            leaf,
-            leaf_index: 0,
-            proof: tree.get_proof(0).expect("one-leaf Native archive proof"),
-            manifest_root,
-            manifest_leaf_count: 1,
-            finality_artifact_hash,
-        };
-        Kura::validate_native_amx_participant_application_manifest_artifact(&manifest)
-            .expect("validate Native archive manifest artifact");
-        let receipt = NativeAmxParticipantApplicationReceiptArtifact {
-            version: NativeAmxParticipantApplicationReceiptArtifact::VERSION,
-            participant_proposal: proposal,
-            participant_settlement: settlement,
-            participant_settlement_hash: settlement_hash,
-            application_block_height: 1,
-            application_block_hash: block.hash(),
-            executed_block_wire_hash,
-            finality_artifact_hash,
-            manifest_artifact_hash: HashOf::new(&manifest),
-            source_ids: vec![source_id],
-            entrypoint_indices: vec![0],
-            entrypoint_hashes: vec![entrypoint_hash],
-            result_hashes: vec![result.hash()],
-            results: vec![result],
-        };
-        Kura::validate_native_amx_participant_application_receipt_artifact(&receipt)
-            .expect("validate Native archive receipt artifact");
-
-        let manifest_path =
-            Kura::native_amx_application_manifest_path_for_entry(&retiring_entry, root, 1);
-        fs::create_dir_all(
-            manifest_path
-                .parent()
-                .expect("Native manifest path has an artifact directory"),
-        )
-        .expect("create Native archive artifact directory");
-        assert!(
-            kura.write_atomic_synced_noclobber(
-                &manifest_path,
-                &manifest
-                    .encode_framed()
-                    .expect("encode Native archive manifest"),
-            )
-            .expect("persist Native archive manifest")
-        );
-        let receipt_path =
-            Kura::native_amx_participant_receipt_path_for_entry(&retiring_entry, root, 1);
-        assert!(
-            kura.write_atomic_synced_noclobber(
-                &receipt_path,
-                &receipt
-                    .encode_framed()
-                    .expect("encode Native archive receipt"),
-            )
-            .expect("persist Native archive receipt")
-        );
-        assert_eq!(
-            kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
-                .expect("publish Native archive latest index"),
-            1
-        );
-        assert!(
-            kura.native_amx_participant_application_drain_evidence(&receipt)
-                .is_some(),
-            "complete Native archive fixture must revalidate as drain evidence"
-        );
-
-        kura.apply_lane_geometry_transition(
-            &extended,
-            &initial,
-            &extended_incarnations,
-            &initial_incarnations,
-            &extended_activations,
-            &initial_activations,
-            &BTreeSet::new(),
-        )
-        .expect("archive durably applied Native participant evidence");
-        kura.mark_lane_geometry_catalog_published(
-            &initial,
-            &initial_incarnations,
-            &initial_activations,
-            None,
-        )
-        .expect("publish Native participant retirement");
-        let journal = kura
-            .read_lane_geometry_journal()
-            .expect("Native archive geometry journal");
-        let retirement_transition = journal.records.last().expect("retirement transition");
-        let archive_root = root
-            .join("retired/lane_geometry")
-            .join(hex::encode(retirement_transition.transition_id.as_ref()));
-        let binding = retirement_transition
-            .operations
-            .iter()
-            .find_map(|operation| {
-                (operation.lane_id == retiring_lane)
-                    .then_some(operation.previous.as_ref())
-                    .flatten()
-            })
-            .expect("retired Native participant binding")
-            .clone();
-        let archived_blocks = archive_root.join("lane_0000000001/previous_blocks");
-        let lane_artifacts = archived_blocks.join(LANE_ARTIFACTS_DIR_NAME);
-        (
-            kura,
-            NativeAmxArchiveFixture {
-                geometry: RetiredGeometryFixture {
-                    initial,
-                    extended,
-                    initial_incarnations,
-                    initial_activations,
-                    extended_incarnations,
-                    extended_activations,
-                    archive_root,
-                },
-                archived_blocks,
-                binding,
-                manifest: lane_artifacts.join(
-                    manifest_path
-                        .file_name()
-                        .expect("Native manifest path has a filename"),
-                ),
-                receipt: lane_artifacts.join(
-                    receipt_path
-                        .file_name()
-                        .expect("Native receipt path has a filename"),
-                ),
-                latest_index: lane_artifacts
-                    .join(NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE),
-            },
-        )
-    }
-
-    fn durable_geometry_snapshot_identity(kura: &Kura, height: u64) -> (HashOf<BlockHeader>, Hash) {
-        assert!(height > 0, "geometry GC test proof must be non-genesis");
-        let mut previous = NonZeroUsize::new(kura.exact_durable_blocks_count().unwrap())
-            .and_then(|height| kura.get_block(height));
-        while u64::try_from(kura.exact_durable_blocks_count().unwrap())
-            .expect("block count fits u64")
-            < height
-        {
-            let block: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
-                .chain(0, previous.as_deref())
-                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
-                .unpack(|_| {})
-                .into();
-            let block = Arc::new(block);
-            kura.store_block(Arc::clone(&block))
-                .expect("store durable geometry proof block");
-            previous = Some(block);
-        }
-        let height_usize = NonZeroUsize::new(usize::try_from(height).expect("height fits usize"))
-            .expect("non-zero height");
-        let block_hash = kura
-            .get_durable_block_hash(height_usize)
-            .expect("durable geometry proof block hash");
-        let state_hash = Hash::new([0xC0, u8::try_from(height).unwrap_or(u8::MAX)]);
-        kura.store_wsv_checkpoint(height, block_hash, state_hash)
-            .expect("store durable geometry proof WSV checkpoint");
-        (block_hash, state_hash)
-    }
-
-    fn certified_geometry_lane_block(
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-        incarnation: Hash,
-        lane_block_height: u64,
-    ) -> CertifiedLaneBlockArtifact {
-        let keypair = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let validator_set = vec![PeerId::new(keypair.public_key().clone())];
-        let mut descriptor = LaneBlockDescriptorV1 {
-            lane_id,
-            dataspace_id,
-            lane_incarnation: incarnation,
-            proposal_height: lane_block_height.saturating_add(1).max(2),
-            previous_lane_block_height: lane_block_height.saturating_sub(1),
-            previous_lane_block_descriptor_hash: lane_block_height
-                .checked_sub(1)
-                .filter(|height| *height > 0)
-                .map(|height| Hash::new(height.to_le_bytes())),
-            lane_block_height,
-            lane_block_view: 1,
-            subject_hash: Hash::new(b"geometry-gc-certified-subject"),
-            payload_ownership_hash: Hash::new(b"geometry-gc-certified-ownership"),
-            rbc_instance_hash: Hash::new(b"geometry-gc-certified-rbc"),
-            accepted_candidate_indices: vec![0],
-            accepted_transaction_hashes: vec![Hash::new(b"geometry-gc-certified-entrypoint")],
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set: validator_set.clone(),
-            validator_count: 1,
-            min_quorum: 1,
-            qc_mode_tag: "permissioned:geometry-gc".to_owned(),
-            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
-        };
-        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
-        let mut proposal = LaneBlockProposalV1 {
-            descriptor,
-            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
-            payload_block_hint: None,
-        };
-        proposal.proposal_hash = proposal.computed_proposal_hash();
-        certified_geometry_lane_block_for_proposal(proposal, &keypair)
-    }
-
-    fn certified_geometry_lane_block_for_proposal(
-        proposal: LaneBlockProposalV1,
-        keypair: &iroha_crypto::KeyPair,
-    ) -> CertifiedLaneBlockArtifact {
-        let signer_pop =
-            bls_normal_pop_prove(keypair.private_key()).expect("geometry GC signer PoP");
-        let validator_set = proposal.descriptor.validator_set.clone();
-        assert_eq!(
-            validator_set,
-            vec![PeerId::new(keypair.public_key().clone())],
-            "geometry certified fixture uses its signing peer as the only validator"
-        );
-        let vote = |phase| {
-            let body = proposal.vote_body(phase);
-            LaneBlockVoteV1 {
-                bls_signature: Signature::try_new(
-                    keypair.private_key(),
-                    &body.signature_preimage(),
-                )
-                .expect("geometry GC lane vote signature")
-                .payload()
-                .to_vec(),
-                body,
-                signer: PeerId::new(keypair.public_key().clone()),
-                payload_availability_vote: None,
-            }
-        };
-        let prepare_vote = vote(CertPhase::Prepare);
-        let prepare_qc = aggregate_lane_block_votes_to_qc(
-            prepare_vote.body.clone(),
-            validator_set.clone(),
-            std::slice::from_ref(&prepare_vote),
-        )
-        .expect("geometry GC prepare QC");
-        let commit_vote = vote(CertPhase::Commit);
-        let commit_qc = aggregate_lane_block_votes_to_qc(
-            commit_vote.body.clone(),
-            validator_set,
-            std::slice::from_ref(&commit_vote),
-        )
-        .expect("geometry GC commit QC");
-        CertifiedLaneBlockArtifact::new(
-            CommittedLaneBlockSession {
-                proposal,
-                prepare_qc,
-                commit_qc,
-            },
-            BTreeMap::from([(keypair.public_key().clone(), signer_pop)]),
-        )
-    }
-
-    struct MergeAppliedRetirementWork {
-        certified: CertifiedLaneBlockArtifact,
-        entry: MergeLedgerEntry,
-        carrier: Arc<SignedBlock>,
-        release: LaneGeometryMergeRelease,
-    }
-
-    fn install_merge_applied_retirement_work(
-        kura: &Kura,
-        lane_incarnation: Hash,
-    ) -> MergeAppliedRetirementWork {
-        let lane_id = LaneId::new(1);
-        let dataspace_id = DataSpaceId::new(8);
-        let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let transaction = TransactionBuilder::new(
-            ChainId::from("geometry-durability-merge"),
-            (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(
-            Level::INFO,
-            "geometry durability merge execution".to_owned(),
-        )])
-        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-        let entrypoint = TransactionEntrypoint::External(transaction);
-        let entrypoint_hash = entrypoint.hash();
-        let (proposal, _) = geometry_lane_proposal_and_ownership(
-            lane_id,
-            dataspace_id,
-            lane_incarnation,
-            2,
-            0,
-            1,
-            0,
-            Hash::from(entrypoint_hash),
-            &producer,
-        );
-        let certified = certified_geometry_lane_block_for_proposal(proposal.clone(), &producer);
-        kura.write_certified_lane_block_artifact(&certified)
-            .expect("persist merge-applied retirement certificate");
-
-        let genesis: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
-            .chain(0, None)
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
-            .unpack(|_| {})
-            .into();
-        let genesis = Arc::new(genesis);
-        kura.store_block(Arc::clone(&genesis))
-            .expect("store merge-applied retirement genesis");
-
-        let result =
-            TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::default()));
-        let settlement = LaneBlockCommitment {
-            block_height: 1,
-            lane_id,
-            lane_incarnation,
-            dataspace_id,
-            tx_count: 1,
-            total_local_amount: "0".parse().expect("zero local amount"),
-            total_xor_due: "0".parse().expect("zero XOR due"),
-            total_xor_after_haircut: "0".parse().expect("zero XOR after haircut"),
-            total_xor_variance: "0".parse().expect("zero XOR variance"),
-            swap_metadata: None,
-            receipts: Vec::new(),
-            nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
-        };
-        let settlement_hash = iroha_data_model::nexus::compute_settlement_hash(&settlement)
-            .expect("merge-applied retirement settlement hash");
-        let source_bundle = certified
-            .encode_framed()
-            .expect("encode merge-applied retirement source bundle");
-        let execution = MergeLaneExecution {
-            source_bundle_hash: Hash::new(&source_bundle),
-            source_bundle,
-            proposal: proposal.clone(),
-            origin_proposal: proposal,
-            prepare_qc: certified.prepare_qc.clone(),
-            commit_qc: certified.commit_qc.clone(),
-            signer_proofs: certified
-                .signer_pops
-                .iter()
-                .map(|(public_key, proof_of_possession)| MergeLaneSignerProof {
-                    public_key: public_key.clone(),
-                    proof_of_possession: proof_of_possession.clone(),
-                })
-                .collect(),
-            autonomous_chain_id_hash: Hash::new(b"geometry-durability-merge-chain"),
-            autonomous_epoch: 1,
-            autonomous_payload_hash: Hash::new(b"geometry-durability-merge-payload"),
-            entrypoint_hashes: vec![Hash::from(entrypoint_hash)],
-            entrypoints: vec![entrypoint],
-            reservation_keys: vec![vec![1]],
-            routing_plans: vec![vec![2]],
-            native_amx_receipts: vec![None],
-            result_hashes: vec![Hash::from(result.hash())],
-            results: vec![result],
-            settlement_commitment: settlement,
-            settlement_hash,
-        };
-        let lanes = vec![execution];
-        let base_state_hash =
-            HashOf::from_untyped_unchecked(Hash::new(b"geometry-durability-merge-base-state"));
-        let write_set_root = Hash::new(b"geometry-durability-merge-write-set");
-        let mut batch = MergeExecutionBatch {
-            version: 1,
-            base_state_height: 1,
-            base_state_hash,
-            application_block_header: BlockHeader::new(
-                nonzero!(2_u64),
-                Some(genesis.hash()),
-                None,
-                None,
-                1,
-                0,
-            ),
-            entrypoint_count: 1,
-            entrypoint_merkle_root: crate::merge::merge_execution_entrypoint_merkle_root(&lanes)
-                .expect("merge-applied retirement entrypoint root"),
-            result_merkle_root: crate::merge::merge_execution_result_merkle_root(&lanes)
-                .expect("merge-applied retirement result root"),
-            execution_root: crate::merge::merge_execution_root(&lanes),
-            lanes,
-            application_write_set_root: Hash::new(
-                b"geometry-durability-merge-application-write-set",
-            ),
-            write_set_root,
-            expected_post_state_hash: crate::merge::merge_expected_post_state_hash(
-                1,
-                base_state_hash,
-                write_set_root,
-            ),
-            batch_hash: Hash::prehashed([0; Hash::LENGTH]),
-        };
-        batch.batch_hash = crate::merge::merge_execution_batch_hash(&batch);
-        let validator_set = Vec::<PeerId>::new();
-        let active_lanes = vec![MergeLaneBinding {
-            lane_id,
-            dataspace_id,
-            lane_config_hash: Hash::new(b"geometry-durability-merge-lane-config"),
-            incarnation: lane_incarnation,
-            activation_height: 1,
-        }];
-        let entry = MergeLedgerEntry {
-            version: MergeLedgerEntry::VERSION,
-            epoch_id: 1,
-            lane_catalog_hash: Hash::new(b"geometry-durability-merge-catalog"),
-            active_lanes,
-            incarnation_root: Hash::new(b"geometry-durability-merge-incarnations"),
-            activation_root: Hash::new(b"geometry-durability-merge-activations"),
-            lane_snapshots: Vec::new(),
-            global_state_root: Hash::new(b"geometry-durability-merge-global-state"),
-            merge_qc: MergeQuorumCertificate::new(
-                0,
-                1,
-                2,
-                genesis.hash(),
-                Hash::new(b"geometry-durability-merge-chain"),
-                VALIDATOR_SET_HASH_VERSION_V1,
-                HashOf::new(&validator_set),
-                validator_set,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Hash::new(b"geometry-durability-merge-qc"),
-            ),
-            execution_batch: Some(batch),
-            lane_drain_certificates: Vec::new(),
-            queue_plan_admissions: Vec::new(),
-        };
-        let mut carrier: SignedBlock =
-            BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
-                .chain(0, Some(&genesis))
-                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
-                .unpack(|_| {})
-                .into();
-        carrier.set_execution_context(Some(
-            BlockExecutionContextBundle::new(Vec::new())
-                .with_merge_entry(CertifiedMergeLedgerReference::new(&entry)),
-        ));
-        carrier
-            .set_transaction_results(Vec::new(), &[], Vec::new())
-            .expect("attach empty deterministic merge carrier result");
-        let carrier = Arc::new(carrier);
-        assert_eq!(
-            entry.merge_qc.view,
-            carrier.header().view_change_index(),
-            "merge fixture QC and carrier use the same view"
-        );
-        kura.store_block_with_merge_entry(Arc::clone(&carrier), &entry)
-            .expect("store merge-applied retirement carrier");
-        kura.persist_merge_lane_block_application_receipts(
-            &entry,
-            carrier.header().height().get(),
-            carrier.hash(),
-        )
-        .expect("persist merge-applied retirement receipt");
-
-        let marker_set = crate::state::State::expected_merge_execution_marker_payloads(
-            &entry,
-            entry
-                .execution_batch
-                .as_ref()
-                .expect("merge-applied retirement batch"),
-        )
-        .expect("derive merge-applied retirement marker set");
-        let release = kura
-            .geometry_merge_release(
-                &entry,
-                entry
-                    .execution_batch
-                    .as_ref()
-                    .expect("merge-applied retirement batch"),
-                entry
-                    .execution_batch
-                    .as_ref()
-                    .and_then(|batch| batch.lanes.first())
-                    .expect("merge-applied retirement lane execution"),
-                LaneGeometryMergeCarrier {
-                    block_height: carrier.header().height().get(),
-                    block_hash: carrier.hash(),
-                    entry_hash: entry.canonical_hash(),
-                },
-                geometry_merge_marker_set_root(&marker_set),
-            )
-            .expect("derive merge-applied retirement release");
-        MergeAppliedRetirementWork {
-            certified,
-            entry,
-            carrier,
-            release,
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn geometry_lane_proposal_and_ownership(
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-        lane_incarnation: Hash,
-        proposal_height: u64,
-        proposal_view: u64,
-        lane_block_height: u64,
-        lane_block_view: u64,
-        entrypoint_hash: Hash,
-        keypair: &KeyPair,
-    ) -> (LaneBlockProposalV1, SumeragiLanePayloadOwnership) {
-        let validator_set = vec![PeerId::new(keypair.public_key().clone())];
-        let mut ownership = SumeragiLanePayloadOwnership {
-            proposal_height,
-            proposal_view,
-            lane_id,
-            dataspace_id,
-            lane_incarnation,
-            lane_block_height,
-            lane_block_view,
-            subject_hash: Hash::new(b"geometry-retirement-subject-placeholder"),
-            qc_mode_tag: "permissioned:geometry-retirement".to_owned(),
-            accepted_candidate_indices: vec![0],
-            accepted_transaction_hashes: vec![entrypoint_hash],
-            previous_lane_block_height: lane_block_height.saturating_sub(1),
-            previous_lane_block_descriptor_hash: lane_block_height
-                .checked_sub(1)
-                .filter(|height| *height > 0)
-                .map(|height| Hash::new(height.to_le_bytes())),
-            lane_block_descriptor_hash: Some(Hash::new(
-                b"geometry-retirement-descriptor-placeholder",
-            )),
-            lane_block_descriptor_validator_set: validator_set.clone(),
-            lane_block_descriptor_validator_count: 1,
-            lane_block_descriptor_min_quorum: 1,
-            payload_ownership_hash: Hash::new(b"geometry-retirement-payload-placeholder"),
-            rbc_instance_hash: Hash::new(b"geometry-retirement-rbc-placeholder"),
-        };
-        let replay = ownership
-            .compute_replay_hashes()
-            .expect("geometry retirement replay hashes");
-        ownership.subject_hash = replay.subject_hash;
-        ownership.payload_ownership_hash = replay.payload_ownership_hash;
-        ownership.rbc_instance_hash = replay.rbc_instance_hash;
-        ownership.lane_block_descriptor_hash = Some(replay.lane_block_descriptor_hash);
-        let descriptor = LaneBlockDescriptorV1 {
-            lane_id,
-            dataspace_id,
-            lane_incarnation,
-            proposal_height,
-            previous_lane_block_height: ownership.previous_lane_block_height,
-            previous_lane_block_descriptor_hash: ownership.previous_lane_block_descriptor_hash,
-            lane_block_height,
-            lane_block_view,
-            subject_hash: ownership.subject_hash,
-            payload_ownership_hash: ownership.payload_ownership_hash,
-            rbc_instance_hash: ownership.rbc_instance_hash,
-            accepted_candidate_indices: ownership.accepted_candidate_indices.clone(),
-            accepted_transaction_hashes: ownership.accepted_transaction_hashes.clone(),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set,
-            validator_count: 1,
-            min_quorum: 1,
-            qc_mode_tag: ownership.qc_mode_tag.clone(),
-            descriptor_hash: replay.lane_block_descriptor_hash,
-        };
-        let mut proposal = LaneBlockProposalV1 {
-            descriptor,
-            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
-            payload_block_hint: None,
-        };
-        proposal.proposal_hash = proposal.computed_proposal_hash();
-        (proposal, ownership)
-    }
-
-    fn geometry_native_amx_receipt(
-        chain_id_hash: Hash,
-        source_id: [u8; Hash::LENGTH],
-        entrypoint_hash: HashOf<TransactionEntrypoint>,
-        plan: &crate::queue::RoutingPlan,
-        coordinator_proposal: &LaneBlockProposalV1,
-        participant_lane_incarnation: Hash,
-        epoch: u64,
-        participant_keypair: &KeyPair,
-    ) -> NativeAmxReceipt {
-        let crate::queue::RoutingPlan::NativeAmx(native_plan) = plan else {
-            panic!("geometry retirement fixture requires a native AMX plan");
-        };
-        let participant = native_plan
-            .participants
-            .first()
-            .expect("geometry retirement fixture participant");
-        let participant_validator_set = vec![PeerId::new(participant_keypair.public_key().clone())];
-        let descriptor = &coordinator_proposal.descriptor;
-        let (participant_proposal, _) = geometry_lane_proposal_and_ownership(
-            participant.route.lane_id,
-            participant.route.dataspace_id,
-            participant_lane_incarnation,
-            descriptor.proposal_height,
-            descriptor.lane_block_view,
-            1,
-            0,
-            Hash::from(entrypoint_hash),
-            participant_keypair,
-        );
-        let participant_descriptor = &participant_proposal.descriptor;
-        let mut prepare_body = NativeAmxAttestationBodyV2 {
-            round: ConsensusRound {
-                context_id: HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
-                    Hash::new(b"geometry-native-amx-v2-context"),
-                )),
-                height: descriptor.proposal_height,
-                view: descriptor.lane_block_view,
-            },
-            epoch,
-            chain_id_hash,
-            source_id,
-            tx_entrypoint_hash: entrypoint_hash,
-            plan_digest: plan.digest(),
-            phase: NativeAmxPhase::Prepare,
-            coordinator_lane_id: descriptor.lane_id,
-            coordinator_dataspace_id: descriptor.dataspace_id,
-            coordinator_lane_incarnation: descriptor.lane_incarnation,
-            participant_lane_id: participant.route.lane_id,
-            participant_dataspace_id: participant.route.dataspace_id,
-            participant_lane_incarnation,
-            participant_previous_block_height: participant_descriptor.previous_lane_block_height,
-            participant_previous_block_descriptor_hash: participant_descriptor
-                .previous_lane_block_descriptor_hash,
-            participant_lane_block_height: participant_descriptor.lane_block_height,
-            participant_lane_block_view: participant_descriptor.lane_block_view,
-            participant_proposal_hash: participant_proposal.proposal_hash,
-            participant_settlement_commitment: Hash::prehashed([0; Hash::LENGTH]),
-            participant_validator_set_hash: HashOf::new(&participant_validator_set),
-            participant_validator_count: 1,
-            participant_min_quorum: 1,
-            authority_context_height: descriptor.proposal_height,
-            planned_coordinator_block_height: descriptor.lane_block_height,
-            coordinator_lane_block_view: descriptor.lane_block_view,
-            coordinator_proposal_hash: coordinator_proposal.proposal_hash,
-        };
-        prepare_body.participant_settlement_commitment = prepare_body
-            .computed_grouped_participant_settlement_commitment(&[prepare_body.source_id])
-            .expect("single-source test fixture settlement is valid");
-        let participant_settlement = prepare_body
-            .computed_grouped_participant_settlement(&[prepare_body.source_id])
-            .expect("single-source test fixture settlement is valid");
-        let participant_settlement_hash =
-            iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
-                .expect("geometry participant settlement hashes");
-        let participant_pop = bls_normal_pop_prove(participant_keypair.private_key())
-            .expect("geometry retirement participant PoP");
-        let qc = |body| {
-            NativeAmxAttestationQcV2::try_new(
-                body,
-                VALIDATOR_SET_HASH_VERSION_V1,
-                HashOf::new(&participant_validator_set),
-                participant_validator_set.clone(),
-                vec![participant_pop.clone()],
-                vec![1],
-                vec![0_u8; crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES],
-            )
-            .expect("geometry fixture validator set and proofs must align")
-        };
-        let prepare_qc = qc(prepare_body);
-        let mut commit_body = prepare_body;
-        commit_body.phase = NativeAmxPhase::Commit;
-        let commit_qc = qc(commit_body);
-        NativeAmxReceipt {
-            version: 2,
-            source_id,
-            chain_id_hash,
-            plan_digest: plan.digest(),
-            lane_id: descriptor.lane_id,
-            dataspace_id: descriptor.dataspace_id,
-            lane_incarnation: descriptor.lane_incarnation,
-            authority_context_height: descriptor.proposal_height,
-            lane_block_height: descriptor.lane_block_height,
-            lane_block_view: descriptor.lane_block_view,
-            coordinator_proposal_hash: coordinator_proposal.proposal_hash,
-            legs: vec![NativeAmxLegRecordV2 {
-                lane_id: participant.route.lane_id,
-                dataspace_id: participant.route.dataspace_id,
-                participant_proposal,
-                participant_settlement,
-                participant_settlement_hash,
-                prepare_qc,
-                commit_qc,
-            }],
-        }
-    }
-
-    fn autonomous_retirement_payload(
-        coordinator_incarnation: Hash,
-        participant_lane_id: LaneId,
-        participant_dataspace_id: DataSpaceId,
-        participant_incarnation: Hash,
-        producer: &KeyPair,
-    ) -> (Hash, u64, crate::lane_consensus::LaneExecutablePayloadV1) {
-        autonomous_retirement_payload_for_routes(
-            LaneId::SINGLE,
-            DataSpaceId::new(7),
-            coordinator_incarnation,
-            participant_lane_id,
-            participant_dataspace_id,
-            participant_incarnation,
-            producer,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn autonomous_retirement_payload_for_routes(
-        coordinator_lane_id: LaneId,
-        coordinator_dataspace_id: DataSpaceId,
-        coordinator_incarnation: Hash,
-        participant_lane_id: LaneId,
-        participant_dataspace_id: DataSpaceId,
-        participant_incarnation: Hash,
-        producer: &KeyPair,
-    ) -> (Hash, u64, crate::lane_consensus::LaneExecutablePayloadV1) {
-        let chain: ChainId = "geometry-retirement-autonomous"
-            .parse()
-            .expect("geometry retirement chain id");
-        let transaction = TransactionBuilder::new(
-            chain.clone(),
-            (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(
-            Level::INFO,
-            "geometry retirement payload".to_owned(),
-        )])
-        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-        let source_hash = transaction.hash();
-        let mut source_id = [0_u8; Hash::LENGTH];
-        source_id.copy_from_slice(source_hash.as_ref());
-        let entrypoint = TransactionEntrypoint::External(transaction);
-        let entrypoint_hash = entrypoint.hash();
-        let coordinator =
-            crate::queue::RoutingDecision::new(coordinator_lane_id, coordinator_dataspace_id);
-        let participant = crate::queue::RouteLeg::new(
-            crate::queue::RoutingDecision::new(participant_lane_id, participant_dataspace_id),
-            crate::queue::RouteLegRole::Participant,
-        );
-        let plan = crate::queue::RoutingPlan::native_amx(coordinator, vec![participant]);
-        let (proposal, _) = geometry_lane_proposal_and_ownership(
-            coordinator_lane_id,
-            coordinator_dataspace_id,
-            coordinator_incarnation,
-            42,
-            0,
-            1,
-            0,
-            Hash::from(entrypoint_hash),
-            producer,
-        );
-        let chain_id_hash = Hash::new(chain.into_inner().as_bytes());
-        let epoch = 9;
-        let receipt = geometry_native_amx_receipt(
-            chain_id_hash,
-            source_id,
-            entrypoint_hash,
-            &plan,
-            &proposal,
-            participant_incarnation,
-            epoch,
-            producer,
-        );
-        let reservation = crate::queue::LaneQueueReservationKeyV2 {
-            version: crate::queue::LaneQueueReservationKeyV2::VERSION,
-            signed_transaction_hash: source_hash,
-            entrypoint_hash,
-            queue_plan_admission_binding_hash: Hash::new(
-                b"geometry-retirement-queue-plan-admission-binding",
-            ),
-            routing_plan_digest: plan.digest(),
-            coordinator_leg: plan.coordinator_leg(),
-            lane_id: proposal.descriptor.lane_id,
-            dataspace_id: proposal.descriptor.dataspace_id,
-            lane_incarnation: proposal.descriptor.lane_incarnation,
-            proposal_height: proposal.descriptor.proposal_height,
-            lane_block_height: proposal.descriptor.lane_block_height,
-            lane_block_view: proposal.descriptor.lane_block_view,
-            reservation_owner_hash: Hash::new(b"geometry-retirement-reservation-owner"),
-            proposal_identity_hash: Hash::new(b"geometry-retirement-proposal-identity"),
-        };
-        let payload = crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
-            chain_id_hash,
-            epoch,
-            proposal,
-            vec![entrypoint],
-            vec![reservation],
-            vec![plan],
-            vec![Some(receipt)],
-            PeerId::new(producer.public_key().clone()),
-            producer.private_key(),
-        )
-        .expect("geometry autonomous retirement payload");
-        (chain_id_hash, epoch, payload)
-    }
-
-    #[test]
-    fn native_amx_retirement_targets_exact_participant_incarnation_and_fails_closed() {
-        let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let coordinator_incarnation = Hash::new(b"retirement-classifier-coordinator");
-        let participant_lane_id = LaneId::new(7);
-        let participant_dataspace_id = DataSpaceId::new(9);
-        let participant_incarnation = Hash::new(b"retirement-classifier-participant-a");
-        let recreated_incarnation = Hash::new(b"retirement-classifier-participant-b");
-        let (_, _, payload) = autonomous_retirement_payload(
-            coordinator_incarnation,
-            participant_lane_id,
-            participant_dataspace_id,
-            participant_incarnation,
-            &producer,
-        );
-        let receipt = payload.native_amx_receipts[0]
-            .as_ref()
-            .expect("native AMX retirement receipt");
-        let exact = BTreeSet::from([LaneRetirementIdentity {
-            lane_id: participant_lane_id,
-            dataspace_id: participant_dataspace_id,
-            lane_incarnation: participant_incarnation,
-        }]);
-        let recreated = BTreeSet::from([LaneRetirementIdentity {
-            lane_id: participant_lane_id,
-            dataspace_id: participant_dataspace_id,
-            lane_incarnation: recreated_incarnation,
-        }]);
-        assert_eq!(
-            native_amx_receipt_targets_retirement(receipt, &exact),
-            Ok(true)
-        );
-        assert_eq!(
-            native_amx_receipt_targets_retirement(receipt, &recreated),
-            Ok(false),
-            "incarnation-A evidence must not ABA-block incarnation B"
-        );
-        assert!(lane_payload_targets_retirement(&payload, &exact));
-        assert!(!lane_payload_targets_retirement(&payload, &recreated));
-
-        let mut malformed = payload.clone();
-        malformed.native_amx_receipts[0]
-            .as_mut()
-            .expect("native AMX retirement receipt")
-            .legs[0]
-            .prepare_qc
-            .body
-            .participant_lane_incarnation = Hash::new(b"malformed retirement participant");
-        assert!(
-            lane_payload_targets_retirement(&malformed, &recreated),
-            "internally inconsistent participant evidence must fail closed"
-        );
-
-        let mut misaligned = payload;
-        misaligned.native_amx_receipts.clear();
-        assert!(
-            lane_payload_targets_retirement(&misaligned, &recreated),
-            "routing/receipt vector misalignment must fail closed"
-        );
-    }
-
-    #[test]
-    fn unjournaled_nonzero_activation_without_marker_fails_closed_before_intent() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, extended) = retirement_test_configs();
-        let (extended_incarnations, extended_activations) = retirement_test_geometry();
-        let initial_incarnations =
-            BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-        let initial_activations =
-            BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-        let kura = open_kura(&root, &extended);
-
-        let error = kura
-            .apply_lane_geometry_transition(
-                &extended,
-                &initial,
-                &extended_incarnations,
-                &initial_incarnations,
-                &extended_activations,
-                &initial_activations,
-                &BTreeSet::new(),
-            )
-            .expect_err("unjournaled dynamic storage must not be adopted without its marker");
-        assert_geometry_io_error(
-            &error,
-            ErrorKind::InvalidData,
-            "active dynamic lane storage has no incarnation marker",
-        );
-        assert!(
-            kura.read_lane_geometry_journal()
-                .expect("default geometry journal")
-                .records
-                .is_empty(),
-            "missing-marker rejection must precede retirement intent publication"
-        );
-        let participant_blocks = extended
-            .entry(LaneId::new(1))
-            .expect("dynamic participant lane")
-            .blocks_dir(&root);
-        assert!(participant_blocks.is_dir());
-        assert!(
-            !participant_blocks.join(MARKER_FILE_NAME).exists(),
-            "rejection must not synthesize authority for the unjournaled dynamic lane"
-        );
-    }
-
-    #[test]
-    fn scale_in_conservatively_rejects_pending_native_amx_participant_route() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, extended) = retirement_test_configs();
-        let (extended_incarnations, extended_activations) = retirement_test_geometry();
-        let initial_incarnations =
-            BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-        let initial_activations =
-            BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-        let (kura, journal_before, _) = open_published_retirement_kura(
-            &root,
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-        );
-        let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let (chain_id_hash, epoch, payload) = autonomous_retirement_payload(
-            extended_incarnations[&LaneId::SINGLE],
-            LaneId::new(1),
-            DataSpaceId::new(8),
-            extended_incarnations[&LaneId::new(1)],
-            &producer,
-        );
-        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
-            .expect("persist coordinator-owned participant work");
-
-        let error = kura
-            .apply_lane_geometry_transition(
-                &extended,
-                &initial,
-                &extended_incarnations,
-                &initial_incarnations,
-                &extended_activations,
-                &initial_activations,
-                &BTreeSet::new(),
-            )
-            .expect_err("pending participant route must conservatively pin retirement");
-        assert_geometry_io_error(
-            &error,
-            ErrorKind::WouldBlock,
-            "pending autonomous payload targets a retiring lane incarnation",
-        );
-        assert!(
-            extended
-                .entry(LaneId::new(1))
-                .expect("participant lane")
-                .blocks_dir(&root)
-                .exists(),
-            "retirement admission fails before moving lane files"
-        );
-        assert_eq!(
-            fs::read(kura.lane_geometry_journal_path()).expect("unchanged geometry journal"),
-            journal_before,
-            "rejected retirement must not alter the published geometry journal"
-        );
-
-        let certified_retirement = BTreeSet::from([(
-            LaneId::new(1),
-            DataSpaceId::new(8),
-            extended_incarnations[&LaneId::new(1)],
-        )]);
-        let error = kura
-            .apply_lane_geometry_transition_with_certified_retirements(
-                &extended,
-                &initial,
-                &extended_incarnations,
-                &initial_incarnations,
-                &extended_activations,
-                &initial_activations,
-                &BTreeSet::new(),
-                &certified_retirement,
-            )
-            .expect_err(
-                "a drain certificate must not discard participant work coordinated elsewhere",
-            );
-        assert!(
-            format!("{error:?}")
-                .contains("pending autonomous payload targets a retiring lane incarnation"),
-            "unexpected certified-retirement participant error: {error:?}"
-        );
-    }
-
-    #[test]
-    fn certified_drain_frontier_admission_rejects_stale_route_and_missing_native_evidence() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("drain-frontier-admission");
-        let (_, extended) = retirement_test_configs();
-        let (extended_incarnations, _) = retirement_test_geometry();
-        let kura = open_kura(&root, &extended);
-        let lane_id = LaneId::new(1);
-        let dataspace_id = DataSpaceId::new(8);
-        let lane_incarnation = extended_incarnations[&lane_id];
-        let mut frontier = LaneDrainFrontierV1::ordinary(
-            lane_id,
-            dataspace_id,
-            lane_incarnation,
-            1,
-            Some(Hash::new(b"retirement drain frontier")),
-        );
-
-        let mut stale = frontier;
-        stale.lane_incarnation = Hash::new(b"stale retirement incarnation");
-        let error = kura
-            .validate_certified_lane_drain_frontier(lane_id, dataspace_id, lane_incarnation, &stale)
-            .expect_err("stale drain frontier route must fail Kura admission");
-        assert_geometry_io_error(
-            &error,
-            ErrorKind::InvalidInput,
-            "certified lane drain frontier is malformed or targets another incarnation",
-        );
-
-        frontier.native_application =
-            Some(iroha_data_model::merge::LaneDrainNativeFrontierEvidenceV1 {
-                version: 1,
-                participant_view: 0,
-                predecessor_height: 0,
-                predecessor_descriptor_hash: None,
-                participant_proposal_hash: Hash::new(b"retirement Native proposal"),
-                participant_settlement_hash: HashOf::from_untyped_unchecked(Hash::new(
-                    b"retirement Native settlement",
-                )),
-                source_count: 1,
-                application_block_height: 7,
-                application_block_hash: HashOf::from_untyped_unchecked(Hash::new(
-                    b"retirement Native application block",
-                )),
-                executed_block_wire_hash: Hash::new(b"retirement Native executed wire"),
-                finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
-                    b"retirement Native finality",
-                )),
-                application_manifest_root: Hash::new(b"retirement Native manifest root"),
-                application_manifest_leaf_count: 1,
-                application_manifest_leaf_index: 0,
-                manifest_artifact_hash: Hash::new(b"retirement Native manifest"),
-                receipt_artifact_hash: Hash::new(b"retirement Native receipt"),
-                latest_index_artifact_hash: Hash::new(b"retirement Native latest index"),
-            });
-        let error = kura
-            .validate_certified_lane_drain_frontier(
-                lane_id,
-                dataspace_id,
-                lane_incarnation,
-                &frontier,
-            )
-            .expect_err("missing Native drain sidecars must fail Kura admission");
-        assert_geometry_io_error(
-            &error,
-            ErrorKind::InvalidData,
-            "certified Native-derived drain frontier lacks its exact durable receipt",
-        );
-    }
-
-    #[test]
-    fn scale_in_allows_unrelated_participant_work() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("unrelated-lane");
-        let (initial, extended) = retirement_test_configs();
-        let (extended_incarnations, extended_activations) = retirement_test_geometry();
-        let initial_incarnations =
-            BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-        let initial_activations =
-            BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-        let (kura, _, _) = open_published_retirement_kura(
-            &root,
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-        );
-        let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let (chain_id_hash, epoch, payload) = autonomous_retirement_payload(
-            extended_incarnations[&LaneId::SINGLE],
-            LaneId::new(9),
-            DataSpaceId::new(19),
-            Hash::new(b"unrelated participant incarnation"),
-            &producer,
-        );
-        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
-            .expect("persist non-target participant work");
-
-        kura.apply_lane_geometry_transition(
-            &extended,
-            &initial,
-            &extended_incarnations,
-            &initial_incarnations,
-            &extended_activations,
-            &initial_activations,
-            &BTreeSet::new(),
-        )
-        .unwrap_or_else(|error| panic!("unrelated lane should not pin old retirement: {error}"));
-    }
-
-    #[test]
-    fn certified_scale_in_archives_pending_work_owned_by_exact_retiring_incarnation() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, extended) = retirement_test_configs();
-        let (extended_incarnations, extended_activations) = retirement_test_geometry();
-        let initial_incarnations =
-            BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-        let initial_activations =
-            BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-        let kura = open_kura(&root, &extended);
-        install_retirement_test_lane_markers(
-            &kura,
-            &extended,
-            &extended_incarnations,
-            &extended_activations,
-        );
-        let retiring_lane = LaneId::new(1);
-        let retiring_dataspace = DataSpaceId::new(8);
-        let retiring_incarnation = extended_incarnations[&retiring_lane];
-        let artifact = certified_geometry_lane_block(
-            retiring_lane,
-            retiring_dataspace,
-            retiring_incarnation,
-            1,
-        );
-        kura.write_certified_lane_block_artifact(&artifact)
-            .expect("persist late local certified work");
-
-        let error = kura
-            .apply_lane_geometry_transition(
-                &extended,
-                &initial,
-                &extended_incarnations,
-                &initial_incarnations,
-                &extended_activations,
-                &initial_activations,
-                &BTreeSet::new(),
-            )
-            .expect_err("ordinary retirement must remain blocked by pending certified work");
-        assert!(
-            format!("{error:?}")
-                .contains("pending certified work belongs to a retiring lane incarnation"),
-            "unexpected ordinary-retirement error: {error:?}"
-        );
-
-        kura.apply_lane_geometry_transition_with_certified_retirements(
-            &extended,
-            &initial,
-            &extended_incarnations,
-            &initial_incarnations,
-            &extended_activations,
-            &initial_activations,
-            &BTreeSet::new(),
-            &BTreeSet::from([(retiring_lane, retiring_dataspace, retiring_incarnation)]),
-        )
-        .expect("globally certified exact-incarnation retirement archives local stragglers");
-        assert!(
-            !extended
-                .entry(retiring_lane)
-                .expect("retiring lane entry")
-                .blocks_dir(&root)
-                .exists(),
-            "certified retirement must move the old lane directory into the journal archive"
-        );
-    }
-
-    #[test]
-    fn certified_scale_in_rejects_wrong_retirement_identity() {
-        for (label, dataspace, incarnation) in [
-            (
-                "wrong-dataspace",
-                DataSpaceId::new(9),
-                Hash::prehashed([0x62; Hash::LENGTH]),
-            ),
-            (
-                "wrong-incarnation",
-                DataSpaceId::new(8),
-                Hash::prehashed([0x63; Hash::LENGTH]),
-            ),
-        ] {
-            let temp = TempDir::new().expect("temporary directory");
-            let root = temp.path().join(label);
-            let (initial, extended) = retirement_test_configs();
-            let (extended_incarnations, extended_activations) = retirement_test_geometry();
-            let initial_incarnations =
-                BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-            let initial_activations =
-                BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-            let kura = open_kura(&root, &extended);
-            install_retirement_test_lane_markers(
-                &kura,
-                &extended,
-                &extended_incarnations,
-                &extended_activations,
-            );
-
-            let error = kura
-                .apply_lane_geometry_transition_with_certified_retirements(
-                    &extended,
-                    &initial,
-                    &extended_incarnations,
-                    &initial_incarnations,
-                    &extended_activations,
-                    &initial_activations,
-                    &BTreeSet::new(),
-                    &BTreeSet::from([(LaneId::new(1), dataspace, incarnation)]),
-                )
-                .expect_err("mismatched certified identity must not bypass retirement admission");
-            assert!(
-                format!("{error:?}").contains(
-                    "certified retirement identity does not exactly match the retiring geometry"
-                ),
-                "unexpected {label} identity error: {error:?}"
-            );
-            assert!(
-                kura.read_lane_geometry_journal()
-                    .expect("geometry journal")
-                    .records
-                    .is_empty(),
-                "{label} must fail before publishing a retirement intent"
-            );
-        }
-    }
-
-    #[test]
-    fn scale_in_allows_recreated_incarnation_and_unrelated_participant_work() {
-        for (label, participant_lane, participant_dataspace, participant_incarnation) in [
-            (
-                "recreated-incarnation",
-                LaneId::new(1),
-                DataSpaceId::new(8),
-                Hash::prehashed([0x63; Hash::LENGTH]),
-            ),
-            (
-                "unrelated-lane",
-                LaneId::new(9),
-                DataSpaceId::new(19),
-                Hash::prehashed([0x69; Hash::LENGTH]),
-            ),
-        ] {
-            let temp = TempDir::new().expect("temporary directory");
-            let root = temp.path().join(label);
-            let (initial, extended) = retirement_test_configs();
-            let (extended_incarnations, extended_activations) = retirement_test_geometry();
-            let initial_incarnations =
-                BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-            let initial_activations =
-                BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-            let kura = open_kura(&root, &extended);
-            install_retirement_test_lane_markers(
-                &kura,
-                &extended,
-                &extended_incarnations,
-                &extended_activations,
-            );
-            let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let (chain_id_hash, epoch, payload) = autonomous_retirement_payload(
-                extended_incarnations[&LaneId::SINGLE],
-                participant_lane,
-                participant_dataspace,
-                participant_incarnation,
-                &producer,
-            );
-            kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
-                .expect("persist non-target participant work");
-
-            kura.apply_lane_geometry_transition(
-                &extended,
-                &initial,
-                &extended_incarnations,
-                &initial_incarnations,
-                &extended_activations,
-                &initial_activations,
-                &BTreeSet::new(),
-            )
-            .unwrap_or_else(|error| panic!("{label} should not pin old retirement: {error}"));
-        }
-    }
-
-    #[test]
-    fn scale_in_rejects_unknown_and_malformed_artifact_files_before_intent() {
-        for (label, file_name, bytes, expected_kind, expected_message) in [
-            (
-                "unknown",
-                "operator-junk.bin",
-                b"junk".as_slice(),
-                ErrorKind::InvalidData,
-                "lane retirement scan encountered an unknown artifact filename",
-            ),
-            (
-                "stale-temp",
-                "autonomous_blocks.norito.tmp",
-                b"partial".as_slice(),
-                ErrorKind::WouldBlock,
-                "lane retirement scan found an in-flight autonomous sidecar",
-            ),
-            (
-                "malformed-view",
-                "autonomous_view_1.norito",
-                b"not-a-view-state".as_slice(),
-                ErrorKind::InvalidData,
-                "lane retirement scan encountered a non-canonical view-state filename",
-            ),
-            (
-                "orphan-view",
-                "autonomous_view_00000000000000000001.norito",
-                b"not-a-view-state".as_slice(),
-                ErrorKind::InvalidData,
-                "lane retirement scan found an orphan autonomous view state",
-            ),
-        ] {
-            let temp = TempDir::new().expect("temporary directory");
-            let root = temp.path().join(label);
-            let (initial, extended) = retirement_test_configs();
-            let (extended_incarnations, extended_activations) = retirement_test_geometry();
-            let initial_incarnations =
-                BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-            let initial_activations =
-                BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-            let (kura, journal_before, _) = open_published_retirement_kura(
-                &root,
-                &initial,
-                &extended,
-                &initial_incarnations,
-                &extended_incarnations,
-                &initial_activations,
-                &extended_activations,
-            );
-            let artifact_dir = Kura::lane_artifact_dir(
-                &extended
-                    .entry(LaneId::SINGLE)
-                    .expect("coordinator lane")
-                    .blocks_dir(&root),
-            );
-            fs::create_dir_all(&artifact_dir).expect("artifact directory");
-            fs::write(artifact_dir.join(file_name), bytes).expect("hostile artifact");
-
-            let error = kura
-                .apply_lane_geometry_transition(
-                    &extended,
-                    &initial,
-                    &extended_incarnations,
-                    &initial_incarnations,
-                    &extended_activations,
-                    &initial_activations,
-                    &BTreeSet::new(),
-                )
-                .expect_err("hostile retirement artifact must fail before intent publication");
-            assert_geometry_io_error(&error, expected_kind, expected_message);
-            assert_eq!(
-                fs::read(kura.lane_geometry_journal_path()).expect("unchanged geometry journal"),
-                journal_before,
-                "{label} artifact must fail before an intent is published"
-            );
-        }
-    }
-
-    #[test]
-    fn first_release_retirement_policy_rejects_every_stale_autonomous_sidecar_class() {
-        for (label, file_name, expected_kind, expected_message) in [
-            (
-                "data-only",
-                OBSOLETE_AUTONOMOUS_LANE_BLOCKS_DATA_FILE,
-                ErrorKind::InvalidData,
-                "lane retirement scan encountered an unknown artifact filename",
-            ),
-            (
-                "index-only",
-                OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE,
-                ErrorKind::InvalidData,
-                "lane retirement scan encountered an unknown artifact filename",
-            ),
-            (
-                "view-state",
-                "autonomous_view_00000000000000000001.norito",
-                ErrorKind::InvalidData,
-                "lane retirement scan encountered an unknown artifact filename",
-            ),
-            (
-                "legacy-native-manifest",
-                "native_amx_application_manifests.norito",
-                ErrorKind::InvalidData,
-                "unexpected or legacy Native AMX evidence artifact",
-            ),
-            (
-                "legacy-native-receipt-index",
-                "native_amx_participant_receipts.index",
-                ErrorKind::InvalidData,
-                "unexpected or legacy Native AMX evidence artifact",
-            ),
-        ] {
-            let temp = TempDir::new().expect("temporary directory");
-            let root = temp.path().join(label);
-            let (initial, extended) = retirement_test_configs();
-            let (extended_incarnations, extended_activations) = retirement_test_geometry();
-            let initial_incarnations =
-                BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-            let initial_activations =
-                BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-            let (kura, _, _) = open_published_retirement_kura(
-                &root,
-                &initial,
-                &extended,
-                &initial_incarnations,
-                &extended_incarnations,
-                &initial_activations,
-                &extended_activations,
-            );
-            let retiring_lane = LaneId::new(1);
-            let retiring = [LaneRetirementIdentity {
-                lane_id: retiring_lane,
-                dataspace_id: extended
-                    .entry(retiring_lane)
-                    .expect("retiring lane")
-                    .dataspace_id,
-                lane_incarnation: extended_incarnations[&retiring_lane],
-            }];
-            let artifact_dir = Kura::lane_artifact_dir(
-                &extended
-                    .entry(retiring_lane)
-                    .expect("retiring lane")
-                    .blocks_dir(&root),
-            );
-            fs::create_dir_all(&artifact_dir).expect("artifact directory");
-            fs::write(artifact_dir.join(file_name), b"stale autonomous bytes")
-                .expect("stale autonomous artifact");
-
-            let _prune_guard = kura.prune_lock.lock();
-            let _canonical_chain_guard = kura.canonical_chain_lock.lock();
-            let _geometry_guard = kura.lane_geometry_lock.lock();
-            let _sidecar_guard = kura.sidecar_lock.lock();
-            let error = kura
-                .ensure_first_release_lane_retirement_admissible_locked(&retiring)
-                .expect_err(
-                    "the production first-release policy must reject stale autonomous state",
-                );
-            assert_geometry_io_error(&error, expected_kind, expected_message);
-        }
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    #[test]
-    fn first_release_retirement_discards_unpublished_temp_for_every_fixed_pair() {
-        for (label, data_file) in [
-            ("ownership", LANE_ARTIFACTS_DATA_FILE),
-            ("execution-input", LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE),
-            (
-                "execution-preflight",
-                LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE,
-            ),
-            ("certified", CERTIFIED_LANE_BLOCKS_DATA_FILE),
-            (
-                "application-receipt",
-                LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE,
-            ),
-        ] {
-            let temp = TempDir::new().expect("temporary directory");
-            let root = temp.path().join(label);
-            let (initial, extended) = retirement_test_configs();
-            let (extended_incarnations, extended_activations) = retirement_test_geometry();
-            let initial_incarnations =
-                BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-            let initial_activations =
-                BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-            let (kura, _, _) = open_published_retirement_kura(
-                &root,
-                &initial,
-                &extended,
-                &initial_incarnations,
-                &extended_incarnations,
-                &initial_activations,
-                &extended_activations,
-            );
-            let retiring_lane = LaneId::new(1);
-            let retiring_entry = extended.entry(retiring_lane).expect("retiring lane entry");
-            let artifact_dir = Kura::lane_artifact_dir(&retiring_entry.blocks_dir(&root));
-            fs::create_dir_all(&artifact_dir).expect("artifact directory");
-            let temp_path = artifact_dir.join(data_file).with_extension("norito.tmp");
-            fs::write(&temp_path, b"unpublished progress rewrite")
-                .expect("stage unpublished progress data temp");
-
-            kura.first_release_lane_retirement_admissible_for_test(
-                retiring_lane,
-                retiring_entry.dataspace_id,
-                extended_incarnations[&retiring_lane],
-            )
-            .unwrap_or_else(|error| {
-                panic!("{label} unpublished temp should be recoverable: {error:?}")
-            });
-            assert!(
-                !temp_path.exists(),
-                "{label} unpublished temp must be removed before the immutable scan"
-            );
-        }
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    #[test]
-    fn first_release_retirement_rejects_directory_substitution_at_pair_refresh() {
-        for (label, data_file, kind) in [
-            (
-                "ownership",
-                LANE_ARTIFACTS_DATA_FILE,
-                "lane retirement lane-block artifact",
-            ),
-            (
-                "execution-input",
-                LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE,
-                "lane retirement execution input",
-            ),
-            (
-                "execution-preflight",
-                LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE,
-                "lane retirement execution preflight",
-            ),
-            (
-                "certified",
-                CERTIFIED_LANE_BLOCKS_DATA_FILE,
-                "lane retirement certified lane block",
-            ),
-            (
-                "application-receipt",
-                LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE,
-                "lane retirement application receipt",
-            ),
-        ] {
-            let temp = TempDir::new().expect("temporary directory");
-            let root = temp.path().join(label);
-            let (initial, extended) = retirement_test_configs();
-            let (extended_incarnations, extended_activations) = retirement_test_geometry();
-            let initial_incarnations =
-                BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-            let initial_activations =
-                BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-            let (kura, _, _) = open_published_retirement_kura(
-                &root,
-                &initial,
-                &extended,
-                &initial_incarnations,
-                &extended_incarnations,
-                &initial_activations,
-                &extended_activations,
-            );
-            let retiring_lane = LaneId::new(1);
-            let retiring_entry = extended.entry(retiring_lane).expect("retiring lane entry");
-            let artifact_dir = Kura::lane_artifact_dir(&retiring_entry.blocks_dir(&root));
-            fs::create_dir_all(&artifact_dir).expect("artifact directory");
-            let temp_data_path = artifact_dir.join(data_file).with_extension("norito.tmp");
-            fs::write(&temp_data_path, b"unpublished progress rewrite")
-                .expect("stage recoverable progress temp");
-            let sentinel_name = "refresh-identity-sentinel";
-            let sentinel: &[u8] = b"bound directory object must remain authoritative";
-            fs::write(artifact_dir.join(sentinel_name), sentinel)
-                .expect("write bound-directory identity sentinel");
-            let displaced = root.join("displaced-lane-artifacts");
-            substitute_progress_directory_after_recovery_for_test(
-                kind,
-                &artifact_dir,
-                displaced.clone(),
-            );
-
-            let error = kura
-                .first_release_lane_retirement_admissible_for_test(
-                    retiring_lane,
-                    retiring_entry.dataspace_id,
-                    extended_incarnations[&retiring_lane],
-                )
-                .expect_err("directory substitution must fail at the pair-refresh boundary");
-            assert_geometry_io_error(
-                &error,
-                ErrorKind::InvalidData,
-                &format!("{kind} artifact directory changed during progress recovery"),
-            );
-            assert!(
-                artifact_dir.is_dir(),
-                "replacement directory remains visible"
-            );
-            assert_eq!(
-                fs::read(displaced.join(sentinel_name)).expect("read displaced identity sentinel"),
-                sentinel,
-            );
-            assert!(
-                !displaced
-                    .join(data_file)
-                    .with_extension("norito.tmp")
-                    .exists(),
-                "{label} cleanup must finish before the refresh substitution"
-            );
-        }
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    #[test]
-    fn first_release_retirement_classifies_recovery_sync_failure_as_retryable() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("retryable-pair-recovery");
-        let (initial, extended) = retirement_test_configs();
-        let (extended_incarnations, extended_activations) = retirement_test_geometry();
-        let initial_incarnations =
-            BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-        let initial_activations =
-            BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-        let (kura, _, _) = open_published_retirement_kura(
-            &root,
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-        );
-        let retiring_lane = LaneId::new(1);
-        let retiring_entry = extended.entry(retiring_lane).expect("retiring lane entry");
-        let artifact_dir = Kura::lane_artifact_dir(&retiring_entry.blocks_dir(&root));
-        fs::create_dir_all(&artifact_dir).expect("artifact directory");
-        let data_path = artifact_dir.join(LANE_ARTIFACTS_DATA_FILE);
-        let index_path = artifact_dir.join(LANE_ARTIFACTS_INDEX_FILE);
-        let temp_data_path = data_path.with_extension("norito.tmp");
-        let temp_index_path = index_path.with_extension("index.tmp");
-        let payload: &[u8] = b"retryable ownership rewrite";
-        fs::write(&temp_data_path, payload).expect("stage retryable ownership payload");
-        fs::write(
-            &temp_index_path,
-            SidecarIndexEntry {
-                offset: 0,
-                len: u64::try_from(payload.len()).expect("test payload length"),
-            }
-            .to_bytes(),
-        )
-        .expect("stage retryable ownership index");
-        ProgressSidecarDurabilityFault::Data.inject();
-
-        let error = kura
-            .first_release_lane_retirement_admissible_for_test(
-                retiring_lane,
-                retiring_entry.dataspace_id,
-                extended_incarnations[&retiring_lane],
-            )
-            .expect_err("an interrupted recovery sync must remain retryable");
-        assert_geometry_io_error(
-            &error,
-            ErrorKind::WouldBlock,
-            "lane retirement lane-block artifact recovery did not reach a durable fixed point",
-        );
-        assert!(temp_data_path.is_file());
-        assert!(temp_index_path.is_file());
-
-        kura.first_release_lane_retirement_admissible_for_test(
-            retiring_lane,
-            retiring_entry.dataspace_id,
-            extended_incarnations[&retiring_lane],
-        )
-        .expect("retry must recover the same complete rewrite exactly once");
-        assert!(data_path.is_file());
-        assert!(index_path.is_file());
-        assert!(!temp_data_path.exists());
-        assert!(!temp_index_path.exists());
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    #[test]
-    fn first_release_retirement_recovers_complete_certified_rewrite_before_snapshot() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("complete-certified-rewrite");
-        let (initial, extended) = retirement_test_configs();
-        let (extended_incarnations, extended_activations) = retirement_test_geometry();
-        let initial_incarnations =
-            BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-        let initial_activations =
-            BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-        let (kura, _, _) = open_published_retirement_kura(
-            &root,
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-        );
-        let retiring_lane = LaneId::new(1);
-        let retiring_entry = extended.entry(retiring_lane).expect("retiring lane entry");
-        let retiring_incarnation = extended_incarnations[&retiring_lane];
-        let _work = install_merge_applied_retirement_work(&kura, retiring_incarnation);
-        let (data_path, index_path) =
-            Kura::certified_lane_block_paths_for_entry(retiring_entry, &root);
-        let data_before = fs::read(&data_path).expect("certified data before crash window");
-        let index_before = fs::read(&index_path).expect("certified index before crash window");
-        let temp_data_path = data_path.with_extension("norito.tmp");
-        let temp_index_path = index_path.with_extension("index.tmp");
-        fs::rename(&data_path, &temp_data_path).expect("stage complete certified data temp");
-        fs::rename(&index_path, &temp_index_path).expect("stage complete certified index temp");
-
-        kura.first_release_lane_retirement_admissible_for_test(
-            retiring_lane,
-            retiring_entry.dataspace_id,
-            retiring_incarnation,
-        )
-        .expect("complete certified rewrite must recover before retirement admission");
-        assert_eq!(
-            fs::read(&data_path).expect("recovered certified data"),
-            data_before
-        );
-        assert_eq!(
-            fs::read(&index_path).expect("recovered certified index"),
-            index_before
-        );
-        assert!(!temp_data_path.exists());
-        assert!(!temp_index_path.exists());
-    }
-
-    #[test]
-    fn first_release_retirement_repairs_frontier_only_certified_work_before_snapshot() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("frontier-only-certified-work");
-        let (initial, extended) = retirement_test_configs();
-        let (extended_incarnations, extended_activations) = retirement_test_geometry();
-        let initial_incarnations =
-            BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-        let initial_activations =
-            BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-        let (kura, _, _) = open_published_retirement_kura(
-            &root,
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-        );
-        let retiring_lane = LaneId::new(1);
-        let retiring_entry = extended.entry(retiring_lane).expect("retiring lane entry");
-        let retiring_incarnation = extended_incarnations[&retiring_lane];
-        let work = install_merge_applied_retirement_work(&kura, retiring_incarnation);
-        let (data_path, index_path) =
-            Kura::certified_lane_block_paths_for_entry(retiring_entry, &root);
-        let (frontier_path, _) =
-            Kura::latest_certified_lane_block_frontier_paths_for_entry(retiring_entry, &root);
-        assert!(
-            frontier_path.is_file(),
-            "durable frontier must precede the pair"
-        );
-        fs::remove_file(&data_path).expect("simulate lost certified data after frontier publish");
-        fs::remove_file(&index_path).expect("simulate lost certified index after frontier publish");
-
-        kura.first_release_lane_retirement_admissible_for_test(
-            retiring_lane,
-            retiring_entry.dataspace_id,
-            retiring_incarnation,
-        )
-        .expect("retirement scan must repair the exact frontier certificate before its snapshot");
-
-        assert!(data_path.is_file(), "frontier recovery must recreate data");
-        assert!(
-            index_path.is_file(),
-            "frontier recovery must recreate index"
-        );
-        assert_eq!(
-            kura.read_certified_lane_block_artifact(
-                retiring_lane,
-                work.certified.proposal.descriptor.lane_block_height,
-            )
-            .as_ref(),
-            Some(&work.certified),
-            "retirement recovery must restore the frontier certificate exactly"
-        );
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    #[test]
-    fn first_release_retirement_rejects_obsolete_autonomous_rewrite_without_promotion() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("complete-autonomous-rewrite");
-        let (initial, extended) = retirement_test_configs();
-        let (extended_incarnations, extended_activations) = retirement_test_geometry();
-        let initial_incarnations =
-            BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-        let initial_activations =
-            BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-        let (kura, _, _) = open_published_retirement_kura(
-            &root,
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-        );
-        let retiring_lane = LaneId::new(1);
-        let retiring_entry = extended.entry(retiring_lane).expect("retiring lane entry");
-        let artifact_dir = Kura::lane_artifact_dir(&retiring_entry.blocks_dir(&root));
-        fs::create_dir_all(&artifact_dir).expect("artifact directory");
-        let data_path = artifact_dir.join(OBSOLETE_AUTONOMOUS_LANE_BLOCKS_DATA_FILE);
-        let index_path = artifact_dir.join(OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE);
-        let temp_data_path = data_path.with_extension("norito.tmp");
-        let temp_index_path = index_path.with_extension("index.tmp");
-        let data: &[u8] = b"complete stale autonomous payload";
-        fs::write(&temp_data_path, data).expect("stage complete autonomous data temp");
-        fs::write(
-            &temp_index_path,
-            SidecarIndexEntry {
-                offset: 0,
-                len: u64::try_from(data.len()).expect("autonomous test payload length"),
-            }
-            .to_bytes(),
-        )
-        .expect("stage complete autonomous index temp");
-
-        let error = kura
-            .first_release_lane_retirement_admissible_for_test(
-                retiring_lane,
-                retiring_entry.dataspace_id,
-                extended_incarnations[&retiring_lane],
-            )
-            .expect_err("obsolete autonomous rewrite staging must fail closed");
-        assert_geometry_io_error(
-            &error,
-            ErrorKind::WouldBlock,
-            "lane retirement scan found an in-flight autonomous sidecar",
-        );
-        assert!(!data_path.exists());
-        assert!(!index_path.exists());
-        assert!(temp_data_path.exists());
-        assert!(temp_index_path.exists());
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    #[test]
-    fn first_release_retirement_recovery_rejects_temp_symlink_without_external_writes() {
-        use std::os::unix::fs::symlink;
-
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("recovery-temp-symlink");
-        let (initial, extended) = retirement_test_configs();
-        let (extended_incarnations, extended_activations) = retirement_test_geometry();
-        let initial_incarnations =
-            BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-        let initial_activations =
-            BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-        let (kura, _, _) = open_published_retirement_kura(
-            &root,
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-        );
-        let retiring_lane = LaneId::new(1);
-        let retiring_entry = extended.entry(retiring_lane).expect("retiring lane entry");
-        let artifact_dir = Kura::lane_artifact_dir(&retiring_entry.blocks_dir(&root));
-        fs::create_dir_all(&artifact_dir).expect("artifact directory");
-        let temp_data_path = artifact_dir
-            .join(CERTIFIED_LANE_BLOCKS_DATA_FILE)
-            .with_extension("norito.tmp");
-        let external = root.join("external-progress-sentinel");
-        let sentinel: &[u8] = b"must remain outside retirement recovery";
-        fs::write(&external, sentinel).expect("write external recovery sentinel");
-        symlink(&external, &temp_data_path).expect("install recovery temp symlink");
-
-        let error = kura
-            .first_release_lane_retirement_admissible_for_test(
-                retiring_lane,
-                retiring_entry.dataspace_id,
-                extended_incarnations[&retiring_lane],
-            )
-            .expect_err("a recovery temp symlink must fail closed");
-        assert_geometry_io_error(
-            &error,
-            ErrorKind::InvalidData,
-            "lane retirement certified lane block recovery did not reach a durable fixed point",
-        );
-        let external_after = fs::read(&external).expect("read external recovery sentinel");
-        assert_eq!(external_after.as_slice(), sentinel);
-        assert!(
-            fs::symlink_metadata(&temp_data_path)
-                .expect("recovery temp symlink retained")
-                .file_type()
-                .is_symlink()
-        );
-    }
-
-    #[test]
-    fn first_release_retirement_requires_bound_progress_sidecar_durability() {
-        for (label, fault, expected_message) in [
-            (
-                "data",
-                ProgressSidecarDurabilityFault::Data,
-                "lane retirement certified lane block durability attestation failed",
-            ),
-            (
-                "index",
-                ProgressSidecarDurabilityFault::Index,
-                "lane retirement certified lane block durability attestation failed",
-            ),
-            (
-                "immediate-directory",
-                ProgressSidecarDurabilityFault::ImmediateDirectory,
-                "absent progress sidecar durability attestation failed",
-            ),
-            (
-                "ancestor",
-                ProgressSidecarDurabilityFault::Ancestor(0),
-                "absent progress sidecar durability attestation failed",
-            ),
-        ] {
-            let temp = TempDir::new().expect("temporary directory");
-            let root = temp.path().join(label);
-            let (initial, extended) = retirement_test_configs();
-            let (extended_incarnations, extended_activations) = retirement_test_geometry();
-            let initial_incarnations =
-                BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-            let initial_activations =
-                BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-            let (kura, journal_before, _) = open_published_retirement_kura(
-                &root,
-                &initial,
-                &extended,
-                &initial_incarnations,
-                &extended_incarnations,
-                &initial_activations,
-                &extended_activations,
-            );
-            let retiring_lane = LaneId::new(1);
-            let retiring_entry = extended.entry(retiring_lane).expect("retiring lane entry");
-            let retiring_blocks = retiring_entry.blocks_dir(&root);
-            let retiring_incarnation = extended_incarnations[&retiring_lane];
-            let work = install_merge_applied_retirement_work(&kura, retiring_incarnation);
-            assert_eq!(work.certified.proposal.descriptor.lane_id, retiring_lane);
-            assert_eq!(work.entry.epoch_id, 1);
-            assert_eq!(work.carrier.header().height().get(), 2);
-
-            fault.inject();
-            let error = kura
-                .first_release_lane_retirement_admissible_for_test(
-                    retiring_lane,
-                    retiring_entry.dataspace_id,
-                    retiring_incarnation,
-                )
-                .expect_err("a failed durability barrier must block production retirement");
-            assert_geometry_io_error(&error, ErrorKind::WouldBlock, expected_message);
-            assert!(
-                retiring_blocks.is_dir(),
-                "{label} barrier failure must retain the live retiring lane"
-            );
-            assert_eq!(
-                fs::read(kura.lane_geometry_journal_path()).expect("unchanged retirement journal"),
-                journal_before,
-                "{label} barrier failure must not publish a retirement intent"
-            );
-
-            kura.first_release_lane_retirement_admissible_for_test(
-                retiring_lane,
-                retiring_entry.dataspace_id,
-                retiring_incarnation,
-            )
-            .unwrap_or_else(|error| {
-                panic!("{label} durability recovery must make retirement admissible: {error:?}")
-            });
-            kura.apply_lane_geometry_transition(
-                &extended,
-                &initial,
-                &extended_incarnations,
-                &initial_incarnations,
-                &extended_activations,
-                &initial_activations,
-                &BTreeSet::new(),
-            )
-            .unwrap_or_else(|error| {
-                panic!("{label} durability recovery must permit retirement: {error:?}")
-            });
-            assert!(
-                !retiring_blocks.exists(),
-                "{label} recovery must allow the authenticated lane move"
-            );
-        }
-    }
-
-    #[test]
-    fn fake_stale_and_forked_payload_hints_cannot_bypass_scale_in_admission() {
-        for label in ["fork-hash", "stale-height", "stale-view"] {
-            let temp = TempDir::new().expect("temporary directory");
-            let root = temp.path().join(label);
-            let (initial, extended) = retirement_test_configs();
-            let (extended_incarnations, extended_activations) = retirement_test_geometry();
-            let initial_incarnations =
-                BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-            let initial_activations =
-                BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-            let (kura, journal_before, _) = open_published_retirement_kura(
-                &root,
-                &initial,
-                &extended,
-                &initial_incarnations,
-                &extended_incarnations,
-                &initial_activations,
-                &extended_activations,
-            );
-            let mut certified = certified_geometry_lane_block(
-                LaneId::SINGLE,
-                DataSpaceId::new(7),
-                extended_incarnations[&LaneId::SINGLE],
-                1,
-            );
-            let canonical_height = certified.proposal.descriptor.proposal_height;
-            let canonical_height_index = NonZeroUsize::new(
-                usize::try_from(canonical_height).expect("canonical height fits usize"),
-            )
-            .expect("canonical height is non-zero");
-            let stale_height = canonical_height
-                .checked_sub(1)
-                .filter(|height| *height > 0)
-                .expect("fixture proposal height has a stale predecessor");
-            let (canonical_hash, _) = durable_geometry_snapshot_identity(&kura, canonical_height);
-            let canonical_view = kura
-                .get_block(canonical_height_index)
-                .expect("canonical block")
-                .header()
-                .view_change_index();
-            let hint = match label {
-                "fork-hash" => LaneBlockProposalPayloadHintV1 {
-                    proposal_height: canonical_height,
-                    proposal_view: canonical_view,
-                    proposal_block_hash: HashOf::from_untyped_unchecked(Hash::new(
-                        b"geometry-retirement-fork",
-                    )),
-                },
-                "stale-height" => LaneBlockProposalPayloadHintV1 {
-                    proposal_height: stale_height,
-                    proposal_view: canonical_view,
-                    proposal_block_hash: canonical_hash,
-                },
-                "stale-view" => LaneBlockProposalPayloadHintV1 {
-                    proposal_height: canonical_height,
-                    proposal_view: canonical_view.saturating_add(1),
-                    proposal_block_hash: canonical_hash,
-                },
-                _ => unreachable!(),
-            };
-            certified.proposal.payload_block_hint = Some(hint);
-            kura.write_certified_lane_block_artifact(&certified)
-                .expect("persist adversarial hinted certificate");
-
-            let error = kura
-                .apply_lane_geometry_transition(
-                    &extended,
-                    &initial,
-                    &extended_incarnations,
-                    &initial_incarnations,
-                    &extended_activations,
-                    &initial_activations,
-                    &BTreeSet::new(),
-                )
-                .expect_err("an unproven hint cannot mark certified work as applied");
-            let expected_message = match label {
-                "fork-hash" => {
-                    "lane retirement payload hint does not identify the canonical durable block"
-                }
-                "stale-height" => {
-                    "lane retirement payload hint height differs from the certified descriptor"
-                }
-                "stale-view" => {
-                    "lane retirement payload hint differs from its canonical block header"
-                }
-                _ => unreachable!(),
-            };
-            assert_geometry_io_error(&error, ErrorKind::InvalidData, expected_message);
-            assert_eq!(
-                fs::read(kura.lane_geometry_journal_path()).expect("unchanged geometry journal"),
-                journal_before,
-                "{label} hint must fail before retirement intent"
-            );
-        }
-    }
-
-    #[test]
-    fn canonical_block_and_current_receipt_release_applied_participant_work() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, extended) = retirement_test_configs();
-        let (extended_incarnations, extended_activations) = retirement_test_geometry();
-        let initial_incarnations =
-            BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-        let initial_activations =
-            BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-        let (kura, _, baseline_records) = open_published_retirement_kura(
-            &root,
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-        );
-        let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let chain: ChainId = "geometry-retirement-committed"
-            .parse()
-            .expect("geometry retirement committed chain");
-        let transaction = TransactionBuilder::new(
-            chain.clone(),
-            (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(
-            Level::INFO,
-            "geometry retirement committed participant work".to_owned(),
-        )])
-        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-        let source_hash = transaction.hash();
-        let mut source_id = [0_u8; Hash::LENGTH];
-        source_id.copy_from_slice(source_hash.as_ref());
-        let parent: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
-            .chain(0, None)
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
-            .unpack(|_| {})
-            .into();
-        kura.store_block(Arc::new(parent.clone()))
-            .expect("store pre-activation parent block");
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
-        let mut block: SignedBlock = BlockBuilder::new(vec![accepted])
-            .chain(0, Some(&parent))
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
-            .unpack(|_| {})
-            .into();
-        let entrypoint = block
-            .external_entrypoints_cloned()
-            .next()
-            .expect("committed external entrypoint");
-        let entrypoint_hash = entrypoint.hash();
-        let (mut proposal, ownership) = geometry_lane_proposal_and_ownership(
-            LaneId::SINGLE,
-            DataSpaceId::new(7),
-            extended_incarnations[&LaneId::SINGLE],
-            block.header().height().get(),
-            block.header().view_change_index(),
-            1,
-            0,
-            Hash::from(entrypoint_hash),
-            &producer,
-        );
-        let plan = crate::queue::RoutingPlan::native_amx(
-            crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::new(7)),
-            vec![crate::queue::RouteLeg::new(
-                crate::queue::RoutingDecision::new(LaneId::new(1), DataSpaceId::new(8)),
-                crate::queue::RouteLegRole::Participant,
-            )],
-        );
-        let receipt = geometry_native_amx_receipt(
-            Hash::new(chain.into_inner().as_bytes()),
-            source_id,
-            entrypoint_hash,
-            &plan,
-            &proposal,
-            extended_incarnations[&LaneId::new(1)],
-            0,
-            &producer,
-        );
-        let context = crate::queue::execution_context_for_routing_plan(entrypoint_hash, &plan)
-            .with_native_amx_receipt(receipt);
-        block.set_execution_context(Some(
-            BlockExecutionContextBundle::new(vec![context])
-                .with_lane_payload_ownerships(vec![ownership]),
-        ));
-        let entrypoint_hashes = block
-            .external_entrypoints_cloned()
-            .map(|entrypoint| entrypoint.hash())
-            .collect::<Vec<_>>();
-        block
-            .set_transaction_results(
-                Vec::new(),
-                &entrypoint_hashes,
-                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-            )
-            .expect("attach committed result");
-        let block = Arc::new(block);
-        proposal.payload_block_hint = Some(LaneBlockProposalPayloadHintV1 {
-            proposal_height: block.header().height().get(),
-            proposal_view: block.header().view_change_index(),
-            proposal_block_hash: block.hash(),
-        });
-        kura.store_block(Arc::clone(&block))
-            .expect("store canonical global block");
-        let certified = certified_geometry_lane_block_for_proposal(proposal.clone(), &producer);
-        kura.write_certified_lane_block_artifact(&certified)
-            .expect("persist globally backed lane certificate");
-        kura.persist_lane_block_application_receipt(&proposal)
-            .expect("persist canonical current application receipt");
-
-        kura.apply_lane_geometry_transition(
-            &extended,
-            &initial,
-            &extended_incarnations,
-            &initial_incarnations,
-            &extended_activations,
-            &initial_activations,
-            &BTreeSet::new(),
-        )
-        .expect("canonically applied participant work no longer pins scale-in");
-        assert_eq!(
-            kura.read_lane_geometry_journal()
-                .expect("geometry journal")
-                .records
-                .len(),
-            baseline_records + 1
-        );
-    }
-
-    #[test]
-    fn consecutive_published_retirements_do_not_resurrect_intermediate_lanes() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let catalog = |active: u32| {
-            let lanes = (0..active)
-                .map(|raw| ModelLaneConfig {
-                    id: LaneId::new(raw),
-                    alias: if raw == 0 {
-                        "default".to_owned()
-                    } else {
-                        format!("elastic-{raw}")
-                    },
-                    ..ModelLaneConfig::default()
-                })
-                .collect::<Vec<_>>();
-            let catalog = LaneCatalog::new(
-                NonZeroU32::new(4).expect("fixed geometry bound is non-zero"),
-                lanes,
-            )
-            .expect("consecutive retirement catalog");
-            RuntimeLaneConfig::from_catalog(&catalog)
-        };
-        let configs = [catalog(4), catalog(3), catalog(2), catalog(1)];
-        let all_incarnations = (0_u32..4)
-            .map(|raw| {
-                (
-                    LaneId::new(raw),
-                    Hash::new(format!("consecutive-retirement-incarnation-{raw}")),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        let all_activations = (0_u32..4)
-            .map(|raw| (LaneId::new(raw), u64::from(raw)))
-            .collect::<BTreeMap<_, _>>();
-        let geometry_for = |active: u32| {
-            let incarnations = all_incarnations
-                .iter()
-                .filter(|(lane, _)| lane.as_u32() < active)
-                .map(|(lane, incarnation)| (*lane, *incarnation))
-                .collect::<BTreeMap<_, _>>();
-            let activations = all_activations
-                .iter()
-                .filter(|(lane, _)| lane.as_u32() < active)
-                .map(|(lane, activation)| (*lane, *activation))
-                .collect::<BTreeMap<_, _>>();
-            (incarnations, activations)
-        };
-        let geometries = [
-            geometry_for(4),
-            geometry_for(3),
-            geometry_for(2),
-            geometry_for(1),
-        ];
-        let kura = open_kura(&root, &configs[0]);
-        install_retirement_test_lane_markers(
-            &kura,
-            &configs[0],
-            &geometries[0].0,
-            &geometries[0].1,
-        );
-
-        for index in 0..3 {
-            kura.apply_lane_geometry_transition(
-                &configs[index],
-                &configs[index + 1],
-                &geometries[index].0,
-                &geometries[index + 1].0,
-                &geometries[index].1,
-                &geometries[index + 1].1,
-                &BTreeSet::new(),
-            )
-            .unwrap_or_else(|error| {
-                panic!("consecutive retirement {} failed: {error:?}", index + 1)
-            });
-            kura.mark_lane_geometry_catalog_published(
-                &configs[index + 1],
-                &geometries[index + 1].0,
-                &geometries[index + 1].1,
-                None,
-            )
-            .expect("publish consecutive retirement catalog");
-
-            for retired in (4 - u32::try_from(index).expect("index fits u32") - 1)..4 {
-                assert!(
-                    !configs[0]
-                        .entry(LaneId::new(retired))
-                        .expect("retired lane entry")
-                        .blocks_dir(&root)
-                        .exists(),
-                    "published transition resurrected retired lane {retired}"
-                );
-            }
-        }
-        assert_eq!(
-            kura.read_lane_geometry_journal()
-                .expect("geometry journal")
-                .records
-                .len(),
-            3,
-            "every consecutive retirement remains recoverable until checkpoint GC"
-        );
-    }
-
-    #[test]
-    fn zero_file_create_intent_rolls_back_to_a_sealed_image_and_replays() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, extended) = initial_and_extended_configs();
-        let (initial_incarnations, initial_activations) = initial_geometry();
-        let (extended_incarnations, extended_activations) = extended_geometry();
-        let kura = open_kura(&root, &initial);
-        let operation = persist_create_intent(
-            &kura,
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-        );
-        let updated = operation.updated.as_ref().expect("created binding");
-        let live_blocks = kura.binding_blocks_path(updated);
-        let live_merge = kura.binding_merge_path(updated);
-        let unpublished_blocks = kura
-            .resolve_relative_path(&operation.unpublished_blocks_path)
-            .expect("unpublished blocks");
-        let unpublished_merge = kura
-            .resolve_relative_path(&operation.unpublished_merge_path)
-            .expect("unpublished merge");
-        assert!(!live_blocks.exists());
-        assert!(!live_merge.exists());
-        assert!(!unpublished_blocks.exists());
-        assert!(!unpublished_merge.exists());
-
-        for _ in 0..2 {
-            kura.recover_lane_geometry_journal(
-                &initial,
-                &initial_incarnations,
-                &initial_activations,
-            )
-            .expect("zero-file Intent rollback is idempotent");
-            assert!(!live_blocks.exists());
-            assert!(!live_merge.exists());
-            kura.require_sealed_geometry_pair_at(
-                updated,
-                &unpublished_blocks,
-                &unpublished_merge,
-                &unpublished_blocks,
-                &unpublished_merge,
-            )
-            .expect("rollback persists an authenticated empty image");
-            assert_eq!(
-                kura.read_lane_geometry_journal().expect("journal").records[0].phase,
-                LaneGeometryPhase::RolledBack
-            );
-        }
-
-        // A same-authority retry must resume when replay durably retargeted the retained pair to
-        // live but crashed before the first rename. The terminal phase is deliberately left at
-        // `RolledBack` across that filesystem window.
-        kura.seal_geometry_pair_move(
-            updated,
-            &unpublished_blocks,
-            &unpublished_merge,
-            &live_blocks,
-            &live_merge,
-        )
-        .expect("inject same-authority replay crash before first rename");
-        kura.recover_lane_geometry_journal(
-            &extended,
-            &extended_incarnations,
-            &extended_activations,
-        )
-        .expect("same-authority replay resumes its pre-rename seal");
-        kura.require_complete_geometry_binding_at(updated, &live_blocks, &live_merge)
-            .expect("created lane is live after same-authority replay");
-        let live_lane_artifacts = live_blocks.join(LANE_ARTIFACTS_DIR_NAME);
-        let lane_artifacts_metadata = fs::symlink_metadata(&live_lane_artifacts)
-            .expect("created lane artifact directory metadata");
-        assert!(
-            lane_artifacts_metadata.is_dir() && !lane_artifacts_metadata.file_type().is_symlink(),
-            "lane creation must publish a direct lane-artifact directory before activation"
-        );
-        assert!(
-            fs::read_dir(&live_lane_artifacts)
-                .expect("read created lane artifact directory")
-                .next()
-                .is_none(),
-            "a newly activated lane must start with an empty artifact namespace"
-        );
-        let unexpected_artifact = live_lane_artifacts.join("unexpected.norito");
-        fs::write(&unexpected_artifact, b"foreign").expect("inject foreign lane artifact");
-        let error = preflight_empty_block_store_without_marker(&live_blocks, Some(updated), true)
-            .expect_err("unexpected lane-artifact contents must fail empty-image preflight");
-        assert_geometry_io_error(
-            &error,
-            ErrorKind::InvalidData,
-            "journal-owned empty block store has a non-empty lane-artifact directory",
-        );
-        fs::remove_file(unexpected_artifact).expect("restore empty lane artifact directory");
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::symlink;
-
-            let displaced = root.join("displaced-direct-lane-artifacts");
-            let outside = root.join("outside-lane-artifacts");
-            fs::create_dir(&outside).expect("create outside lane artifact directory");
-            fs::rename(&live_lane_artifacts, &displaced)
-                .expect("displace direct lane artifact directory");
-            symlink(&outside, &live_lane_artifacts).expect("inject lane artifact symlink");
-            let error =
-                preflight_empty_block_store_without_marker(&live_blocks, Some(updated), true)
-                    .expect_err(
-                        "symlinked lane-artifact namespace must fail empty-image preflight",
-                    );
-            assert_geometry_io_error(
-                &error,
-                ErrorKind::InvalidData,
-                "journal-owned empty block store has an invalid lane-artifact directory",
-            );
-            fs::remove_file(&live_lane_artifacts).expect("remove lane artifact symlink");
-            fs::rename(displaced, &live_lane_artifacts)
-                .expect("restore direct lane artifact directory");
-            fs::remove_dir(outside).expect("remove outside lane artifact directory");
-        }
-        assert_eq!(
-            kura.read_lane_geometry_journal().expect("journal").records[0].phase,
-            LaneGeometryPhase::CatalogPublished
-        );
-        kura.recover_lane_geometry_journal(&initial, &initial_incarnations, &initial_activations)
-            .expect("return replayed create to its retained rollback image");
-        kura.require_sealed_geometry_pair_at(
-            updated,
-            &unpublished_blocks,
-            &unpublished_merge,
-            &unpublished_blocks,
-            &unpublished_merge,
-        )
-        .expect("same-authority lifecycle restores an immutable rollback image");
-
-        // Replay persisted its live-target seal but died before either rename. Remaining on the
-        // old catalog must recognize that exact opposite-path seal and normalize it back to the
-        // retained rollback image.
-        kura.seal_geometry_pair_move(
-            updated,
-            &unpublished_blocks,
-            &unpublished_merge,
-            &live_blocks,
-            &live_merge,
-        )
-        .expect("inject RolledBack replay crash before first rename");
-        kura.recover_lane_geometry_journal(&initial, &initial_incarnations, &initial_activations)
-            .expect("old-catalog recovery reverses the pre-rename replay seal");
-        kura.require_sealed_geometry_pair_at(
-            updated,
-            &unpublished_blocks,
-            &unpublished_merge,
-            &unpublished_blocks,
-            &unpublished_merge,
-        )
-        .expect("rollback image is sealed back to itself");
-
-        for _ in 0..2 {
-            kura.recover_lane_geometry_journal(
-                &extended,
-                &extended_incarnations,
-                &extended_activations,
-            )
-            .expect("sealed rollback image replays exactly");
-            kura.require_complete_geometry_binding_at(updated, &live_blocks, &live_merge)
-                .expect("created lane is live after replay");
-            assert!(!unpublished_blocks.exists());
-            assert!(!unpublished_merge.exists());
-            assert_eq!(
-                kura.read_lane_geometry_journal().expect("journal").records[0].phase,
-                LaneGeometryPhase::CatalogPublished
-            );
-        }
-    }
-
-    #[test]
-    fn create_intent_repairs_authenticated_blocks_before_merge_for_rollback_and_replay() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, extended) = initial_and_extended_configs();
-        let (initial_incarnations, initial_activations) = initial_geometry();
-        let (extended_incarnations, extended_activations) = extended_geometry();
-        let kura = open_kura(&root, &initial);
-        let operation = persist_create_intent(
-            &kura,
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-        );
-        let updated = operation.updated.as_ref().expect("created binding");
-        let staged = LaneGeometryBinding {
-            blocks_path: operation.unpublished_blocks_path.clone(),
-            merge_path: operation.unpublished_merge_path.clone(),
-            ..updated.clone()
-        };
-        let staged_blocks = kura.binding_blocks_path(&staged);
-        let staged_merge = kura.binding_merge_path(&staged);
-        kura.provision_geometry_binding(&staged)
-            .expect("provision journal-owned staging");
-        fs::remove_file(&staged_merge).expect("inject crash before merge creation");
-        assert!(staged_blocks.join(MARKER_FILE_NAME).is_file());
-        assert!(!staged_merge.exists());
-
-        kura.recover_lane_geometry_journal(&initial, &initial_incarnations, &initial_activations)
-            .expect("rollback repairs authenticated partial provisioning");
-        kura.require_sealed_geometry_pair_at(
-            updated,
-            &staged_blocks,
-            &staged_merge,
-            &staged_blocks,
-            &staged_merge,
-        )
-        .expect("repaired rollback image is sealed");
-
-        kura.recover_lane_geometry_journal(
-            &extended,
-            &extended_incarnations,
-            &extended_activations,
-        )
-        .expect("replay consumes the repaired image");
-        kura.require_complete_geometry_binding_at(
-            updated,
-            &kura.binding_blocks_path(updated),
-            &kura.binding_merge_path(updated),
-        )
-        .expect("created binding is complete after replay");
-    }
-
-    #[test]
-    fn create_intent_rejects_merge_only_staging_without_adopting_it() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, extended) = initial_and_extended_configs();
-        let (initial_incarnations, initial_activations) = initial_geometry();
-        let (extended_incarnations, extended_activations) = extended_geometry();
-        let kura = open_kura(&root, &initial);
-        let operation = persist_create_intent(
-            &kura,
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-        );
-        let staged_blocks = kura
-            .resolve_relative_path(&operation.unpublished_blocks_path)
-            .expect("staged blocks");
-        let staged_merge = kura
-            .resolve_relative_path(&operation.unpublished_merge_path)
-            .expect("staged merge");
-        create_dir_all_with_context(staged_merge.parent().expect("merge parent"))
-            .expect("create merge parent");
-        fs::write(&staged_merge, b"").expect("inject merge-only staging");
-
-        let error = kura
-            .recover_lane_geometry_journal(&extended, &extended_incarnations, &extended_activations)
-            .expect_err("merge-only staging must fail closed");
-        assert_geometry_io_error(
-            &error,
-            ErrorKind::InvalidData,
-            "replacement provisioning has an orphan block or merge-log path",
-        );
-        assert!(!staged_blocks.exists());
-        assert!(staged_merge.is_file());
-        assert_eq!(
-            kura.read_lane_geometry_journal().expect("journal").records[0].phase,
-            LaneGeometryPhase::Intent
-        );
-    }
-
-    #[test]
-    fn create_intent_rejects_complete_unsealed_foreign_pairs() {
-        for location in ["staging", "live"] {
-            let temp = TempDir::new().expect("temporary directory");
-            let root = temp.path().join(format!("kura-{location}"));
-            let (initial, extended) = initial_and_extended_configs();
-            let (initial_incarnations, initial_activations) = initial_geometry();
-            let (extended_incarnations, extended_activations) = extended_geometry();
-            let kura = open_kura(&root, &initial);
-            let operation = persist_create_intent(
-                &kura,
-                &initial,
-                &extended,
-                &initial_incarnations,
-                &extended_incarnations,
-                &initial_activations,
-                &extended_activations,
-            );
-            let updated = operation.updated.as_ref().expect("created binding");
-            let injected = if location == "staging" {
-                LaneGeometryBinding {
-                    blocks_path: operation.unpublished_blocks_path.clone(),
-                    merge_path: operation.unpublished_merge_path.clone(),
-                    ..updated.clone()
-                }
-            } else {
-                updated.clone()
-            };
-            kura.provision_geometry_binding(&injected)
-                .expect("provision valid-looking unsealed pair");
-            let injected_blocks = kura.binding_blocks_path(&injected);
-            let injected_merge = kura.binding_merge_path(&injected);
-            let sentinel = injected_blocks.join("foreign-intent-payload");
-            fs::write(&sentinel, b"must-not-be-adopted").expect("inject foreign block payload");
-
-            let error = kura
-                .recover_lane_geometry_journal(
-                    &extended,
-                    &extended_incarnations,
-                    &extended_activations,
-                )
-                .expect_err("an unsealed nonempty pair must not gain authority from Intent");
-            assert_geometry_io_error(
-                &error,
-                ErrorKind::InvalidData,
-                "unbound configured primary block store contains an unexpected entry",
-            );
-            assert_eq!(
-                fs::read(&sentinel).expect("foreign payload retained for diagnosis"),
-                b"must-not-be-adopted"
-            );
-            assert!(injected_merge.is_file());
-            assert_eq!(
-                kura.read_lane_geometry_journal().expect("journal").records[0].phase,
-                LaneGeometryPhase::Intent
-            );
-        }
-    }
-
-    #[test]
-    fn terminal_geometry_replay_never_reauthorizes_empty_provisioning() {
-        // A failed rollback of a published transition must retain `CatalogPublished`; otherwise a
-        // restart could reinterpret it as a first-application Intent and manufacture empty state.
-        {
-            let temp = TempDir::new().expect("temporary directory");
-            let root = temp.path().join("kura");
-            let (initial, extended) = initial_and_extended_configs();
-            let (initial_incarnations, initial_activations) = initial_geometry();
-            let (extended_incarnations, extended_activations) = extended_geometry();
-            let kura = open_kura(&root, &initial);
-            kura.apply_lane_geometry_transition(
-                &initial,
-                &extended,
-                &initial_incarnations,
-                &extended_incarnations,
-                &initial_activations,
-                &extended_activations,
-                &BTreeSet::new(),
-            )
-            .expect("apply create transition");
-            kura.mark_lane_geometry_catalog_published(
-                &extended,
-                &extended_incarnations,
-                &extended_activations,
-                None,
-            )
-            .expect("publish create transition");
-            let operation = kura
-                .read_lane_geometry_journal()
-                .expect("published journal")
-                .records[0]
-                .operations[0]
-                .clone();
-            let updated = operation.updated.as_ref().expect("created binding");
-            fs::remove_dir_all(kura.binding_blocks_path(updated))
-                .expect("simulate loss of published blocks");
-            fs::remove_file(kura.binding_merge_path(updated))
-                .expect("simulate loss of published merge log");
-
-            for _ in 0..2 {
-                let error = kura
-                    .recover_lane_geometry_journal(
-                        &initial,
-                        &initial_incarnations,
-                        &initial_activations,
-                    )
-                    .expect_err("missing published evidence must fail on every retry");
-                assert_geometry_io_error(
-                    &error,
-                    ErrorKind::NotFound,
-                    "durable lane geometry evidence is missing; refusing to provision an empty replacement",
-                );
-                assert_eq!(
-                    kura.read_lane_geometry_journal().expect("journal").records[0].phase,
-                    LaneGeometryPhase::CatalogPublished
-                );
-                assert!(
-                    !kura
-                        .resolve_relative_path(&operation.unpublished_blocks_path)
-                        .expect("unpublished blocks")
-                        .exists()
-                );
-                assert!(
-                    !kura
-                        .resolve_relative_path(&operation.unpublished_merge_path)
-                        .expect("unpublished merge")
-                        .exists()
-                );
-            }
-        }
-
-        // The inverse direction must likewise retain `RolledBack` when its authenticated retained
-        // image disappears; replay is not authority to create a replacement from nothing.
-        {
-            let temp = TempDir::new().expect("temporary directory");
-            let root = temp.path().join("kura");
-            let (initial, extended) = initial_and_extended_configs();
-            let (initial_incarnations, initial_activations) = initial_geometry();
-            let (extended_incarnations, extended_activations) = extended_geometry();
-            let kura = open_kura(&root, &initial);
-            kura.apply_lane_geometry_transition(
-                &initial,
-                &extended,
-                &initial_incarnations,
-                &extended_incarnations,
-                &initial_activations,
-                &extended_activations,
-                &BTreeSet::new(),
-            )
-            .expect("apply create transition");
-            kura.recover_lane_geometry_journal(
-                &initial,
-                &initial_incarnations,
-                &initial_activations,
-            )
-            .expect("roll transition back to its retained image");
-            let operation = kura
-                .read_lane_geometry_journal()
-                .expect("rolled-back journal")
-                .records[0]
-                .operations[0]
-                .clone();
-            let unpublished_blocks = kura
-                .resolve_relative_path(&operation.unpublished_blocks_path)
-                .expect("unpublished blocks");
-            let unpublished_merge = kura
-                .resolve_relative_path(&operation.unpublished_merge_path)
-                .expect("unpublished merge");
-            fs::remove_dir_all(&unpublished_blocks).expect("simulate loss of retained block image");
-            fs::remove_file(&unpublished_merge).expect("simulate loss of retained merge image");
-
-            for _ in 0..2 {
-                let error = kura
-                    .recover_lane_geometry_journal(
-                        &extended,
-                        &extended_incarnations,
-                        &extended_activations,
-                    )
-                    .expect_err("missing retained evidence must fail on every retry");
-                assert_geometry_io_error(
-                    &error,
-                    ErrorKind::NotFound,
-                    "durable lane geometry evidence is missing; refusing to provision an empty replacement",
-                );
-                assert_eq!(
-                    kura.read_lane_geometry_journal().expect("journal").records[0].phase,
-                    LaneGeometryPhase::RolledBack
-                );
-                assert!(!unpublished_blocks.exists());
-                assert!(!unpublished_merge.exists());
-            }
-        }
-    }
-
-    #[test]
-    fn recovery_rolls_back_partial_unpublished_create_and_replays_it_idempotently() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, extended) = initial_and_extended_configs();
-        let (initial_incarnations, initial_activations) = initial_geometry();
-        let (extended_incarnations, extended_activations) = extended_geometry();
-        let kura = open_kura(&root, &initial);
-
-        kura.apply_lane_geometry_transition(
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-            &BTreeSet::new(),
-        )
-        .expect("prepare journaled create");
-        let lane1 = extended.entry(LaneId::new(1)).expect("lane one");
-        assert!(lane1.blocks_dir(&root).exists());
-
-        kura.apply_lane_geometry_transition(
-            &initial,
-            &initial,
-            &initial_incarnations,
-            &initial_incarnations,
-            &initial_activations,
-            &initial_activations,
-            &BTreeSet::new(),
-        )
-        .expect("same-catalog startup rolls back unpublished create");
-        assert!(!lane1.blocks_dir(&root).exists());
-
-        // Model a process dying after restoring only the block directory from
-        // the unpublished archive. Recovery of the old catalog must complete
-        // the inverse operation without duplicating or dropping either path.
-        let mut journal = kura.read_lane_geometry_journal().expect("read journal");
-        journal.records[0].phase = LaneGeometryPhase::Intent;
-        kura.write_lane_geometry_journal(&journal)
-            .expect("persist in-progress roll-forward phase");
-        let operation = journal.records[0].operations[0].clone();
-        let updated = operation.updated.as_ref().expect("created binding");
-        let unpublished_blocks = kura
-            .resolve_relative_path(&operation.unpublished_blocks_path)
-            .expect("unpublished blocks path");
-        let unpublished_merge = kura
-            .resolve_relative_path(&operation.unpublished_merge_path)
-            .expect("unpublished merge path");
-        let live_blocks = lane1.blocks_dir(&root);
-        let live_merge = lane1.merge_log_path(&root);
-        kura.seal_geometry_pair_move(
-            updated,
-            &unpublished_blocks,
-            &unpublished_merge,
-            &live_blocks,
-            &live_merge,
-        )
-        .expect("seal partial roll-forward exactly as production does");
-        kura.move_geometry_path(&unpublished_blocks, &live_blocks, true)
-            .expect("inject partial roll-forward");
-        assert!(lane1.blocks_dir(&root).exists());
-
-        for _ in 0..2 {
-            kura.recover_lane_geometry_journal(
-                &initial,
-                &initial_incarnations,
-                &initial_activations,
-            )
-            .expect("idempotent rollback recovery");
-            assert!(!lane1.blocks_dir(&root).exists());
-            assert!(!lane1.merge_log_path(&root).exists());
-        }
-
-        // The catalog is now authoritative (as after snapshot/block replay),
-        // so the same retained intent must roll forward and recover the exact
-        // unpublished segment instead of provisioning an empty replacement.
-        for _ in 0..2 {
-            kura.recover_lane_geometry_journal(
-                &extended,
-                &extended_incarnations,
-                &extended_activations,
-            )
-            .expect("idempotent roll-forward recovery");
-            assert!(lane1.blocks_dir(&root).exists());
-            assert!(lane1.merge_log_path(&root).exists());
-        }
-        let recovered = kura.read_lane_geometry_journal().expect("read journal");
-        assert_eq!(
-            recovered.records[0].phase,
-            LaneGeometryPhase::CatalogPublished
-        );
-    }
-
-    #[test]
-    fn geometry_moves_never_clobber_targets_materialized_after_preflight() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, _) = initial_and_extended_configs();
-        let kura = open_kura(&root, &initial);
-
-        let source_blocks = root.join("move-collision/source-blocks");
-        let target_blocks = root.join("move-collision/target-blocks");
-        fs::create_dir_all(&source_blocks).expect("seed source block directory");
-        fs::write(source_blocks.join("sentinel"), b"source-blocks")
-            .expect("seed source block sentinel");
-        *GEOMETRY_MOVE_TARGET_COLLISION
-            .lock()
-            .expect("geometry collision hook lock") = Some(target_blocks.clone());
-        kura.move_geometry_path(&source_blocks, &target_blocks, true)
-            .expect_err("a target created after preflight must stop the block-directory move");
-        assert_eq!(
-            fs::read(source_blocks.join("sentinel")).expect("source block sentinel retained"),
-            b"source-blocks"
-        );
-        assert!(
-            target_blocks.is_dir(),
-            "the injected target must not be replaced by the source directory"
-        );
-        assert!(
-            fs::read_dir(&target_blocks)
-                .expect("read injected block target")
-                .next()
-                .is_none(),
-            "the injected directory must remain untouched"
-        );
-
-        let source_merge = root.join("move-collision/source-merge.log");
-        let target_merge = root.join("move-collision/target-merge.log");
-        fs::write(&source_merge, b"source-merge").expect("seed source merge file");
-        *GEOMETRY_MOVE_TARGET_COLLISION
-            .lock()
-            .expect("geometry collision hook lock") = Some(target_merge.clone());
-        kura.move_geometry_path(&source_merge, &target_merge, false)
-            .expect_err("a target created after preflight must stop the merge-file move");
-        assert_eq!(
-            fs::read(&source_merge).expect("source merge file retained"),
-            b"source-merge"
-        );
-        assert_eq!(
-            fs::read(&target_merge).expect("injected merge target retained"),
-            b"injected-no-clobber-target"
-        );
-    }
-
-    #[cfg(any(
-        target_vendor = "apple",
-        target_os = "linux",
-        target_os = "android",
-        target_os = "redox"
-    ))]
-    #[test]
-    fn runtime_geometry_recovery_cannot_escape_a_substituted_parent() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let initial = RuntimeLaneConfig::from_catalog(&configured_primary_catalog("parent-alpha"));
-        let updated = RuntimeLaneConfig::from_catalog(&configured_primary_catalog("parent-beta"));
-        let (incarnations, activations) = initial_geometry();
-        let kura = open_kura(&root, &initial);
-        let _ = durable_geometry_snapshot_identity(&kura, 1);
-
-        kura.apply_lane_geometry_transition(
-            &initial,
-            &updated,
-            &incarnations,
-            &incarnations,
-            &activations,
-            &activations,
-            &BTreeSet::new(),
-        )
-        .expect("apply primary relabel before recovery");
-        assert_eq!(
-            kura.read_lane_geometry_journal()
-                .expect("geometry journal")
-                .records[0]
-                .phase,
-            LaneGeometryPhase::FilesApplied
-        );
-
-        let previous_blocks = initial.primary().blocks_dir(&root);
-        let updated_blocks = updated.primary().blocks_dir(&root);
-        let blocks_parent = previous_blocks.parent().expect("block-store parent");
-        assert_eq!(updated_blocks.parent(), Some(blocks_parent));
-        let displaced_parent = root.join("authenticated-blocks-parent");
-        let outside_parent = temp.path().join("outside-blocks-parent");
-        fs::create_dir(&outside_parent).expect("create outside replacement parent");
-        *GEOMETRY_MOVE_PARENT_SUBSTITUTION
-            .lock()
-            .expect("geometry parent-substitution hook lock") = Some((
-            blocks_parent.to_path_buf(),
-            displaced_parent.clone(),
-            outside_parent.clone(),
-        ));
-
-        kura.recover_lane_geometry_journal(&initial, &incarnations, &activations)
-            .expect_err("a substituted runtime parent must fail recovery closed");
-        assert!(
-            GEOMETRY_MOVE_PARENT_SUBSTITUTION
-                .lock()
-                .expect("geometry parent-substitution hook lock")
-                .is_none(),
-            "the parent substitution must occur at the pre-rename barrier"
-        );
-        assert!(
-            fs::symlink_metadata(blocks_parent)
-                .expect("substituted parent metadata")
-                .file_type()
-                .is_symlink()
-        );
-        for path in [&previous_blocks, &updated_blocks] {
-            assert!(
-                !outside_parent
-                    .join(path.file_name().expect("block-store name"))
-                    .exists(),
-                "descriptor-relative recovery must not publish through the replacement symlink"
-            );
-        }
-        assert!(
-            displaced_parent
-                .join(
-                    previous_blocks
-                        .file_name()
-                        .expect("previous block-store name")
-                )
-                .is_dir(),
-            "the authenticated parent handle must receive the recovered block store"
-        );
-        assert!(
-            !displaced_parent
-                .join(
-                    updated_blocks
-                        .file_name()
-                        .expect("updated block-store name")
-                )
-                .exists(),
-            "the descriptor-relative rename must consume its authenticated source"
-        );
-        fs::remove_file(blocks_parent).expect("remove substituted parent symlink");
-        fs::rename(&displaced_parent, blocks_parent)
-            .expect("restore authenticated block-store parent");
-        assert_eq!(
-            kura.read_lane_geometry_journal()
-                .expect("unchanged geometry journal")
-                .records[0]
-                .phase,
-            LaneGeometryPhase::FilesApplied,
-            "failed recovery must not advance the durable journal phase"
-        );
-    }
-
-    #[test]
-    fn bootstrap_geometry_moves_never_clobber_targets_materialized_after_preflight() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        fs::create_dir_all(&root).expect("create bootstrap Kura root");
-
-        let source_blocks = root.join("bootstrap-collision/source-blocks");
-        let target_blocks = root.join("bootstrap-collision/target-blocks");
-        fs::create_dir_all(&source_blocks).expect("seed bootstrap source blocks");
-        fs::write(source_blocks.join("sentinel"), b"source-blocks")
-            .expect("seed bootstrap source sentinel");
-        *GEOMETRY_MOVE_TARGET_COLLISION
-            .lock()
-            .expect("geometry collision hook lock") = Some(target_blocks.clone());
-        bootstrap_move_geometry_path(&root, &source_blocks, &target_blocks, true)
-            .expect_err("descriptor-relative bootstrap rename must reject the racing target");
-        assert_eq!(
-            fs::read(source_blocks.join("sentinel")).expect("source sentinel remains"),
-            b"source-blocks"
-        );
-        assert!(
-            fs::read_dir(&target_blocks)
-                .expect("read injected target")
-                .next()
-                .is_none(),
-            "the racing directory must remain empty and must not receive source contents"
-        );
-
-        let source_merge = root.join("bootstrap-collision/source-merge.log");
-        let target_merge = root.join("bootstrap-collision/target-merge.log");
-        fs::write(&source_merge, b"source-merge").expect("seed bootstrap source merge");
-        *GEOMETRY_MOVE_TARGET_COLLISION
-            .lock()
-            .expect("geometry collision hook lock") = Some(target_merge.clone());
-        bootstrap_move_geometry_path(&root, &source_merge, &target_merge, false)
-            .expect_err("descriptor-relative bootstrap rename must reject the racing file");
-        assert_eq!(
-            fs::read(source_merge).expect("source merge remains"),
-            b"source-merge"
-        );
-        assert_eq!(
-            fs::read(target_merge).expect("racing merge target remains"),
-            b"injected-no-clobber-target"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn bootstrap_geometry_move_rejects_a_symlinked_target_parent() {
-        use std::os::unix::fs::symlink;
-
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let outside = temp.path().join("outside");
-        fs::create_dir_all(&root).expect("create bootstrap Kura root");
-        fs::create_dir_all(&outside).expect("create outside target");
-        let source = root.join("source.log");
-        fs::write(&source, b"canonical-source").expect("seed canonical source");
-        symlink(&outside, root.join("escaped-parent")).expect("plant target-parent symlink");
-        let target = root.join("escaped-parent/target.log");
-
-        bootstrap_move_geometry_path(&root, &source, &target, false)
-            .expect_err("bootstrap move must reject an ancestor symlink");
-        assert_eq!(
-            fs::read(source).expect("canonical source remains"),
-            b"canonical-source"
-        );
-        assert!(
-            !outside.join("target.log").exists(),
-            "bootstrap recovery must not publish outside the authenticated Kura root"
-        );
-    }
-
-    #[test]
-    fn mutable_pair_move_supports_a_stationary_block_path_and_later_merge_appends() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, _) = initial_and_extended_configs();
-        let kura = open_kura(&root, &initial);
-        let blocks = root.join("pair-move/live-blocks");
-        let old_merge = root.join("pair-move/old-merge.log");
-        let new_merge = root.join("pair-move/new-merge.log");
-        let binding = LaneGeometryBinding {
-            lane_id: LaneId::new(7),
-            incarnation: Hash::new(b"stationary-block-pair"),
-            activation_height: 1,
-            blocks_path: kura
-                .relative_geometry_path(&blocks)
-                .expect("relative block path"),
-            merge_path: kura
-                .relative_geometry_path(&old_merge)
-                .expect("relative old merge path"),
-        };
-        kura.provision_geometry_binding(&binding)
-            .expect("provision movable geometry pair");
-        fs::write(&old_merge, b"before-move").expect("seed merge bytes");
-
-        kura.move_geometry_binding_pair(
-            &binding,
-            &blocks,
-            &old_merge,
-            &blocks,
-            &new_merge,
-            GeometryPairTargetKind::MutableLive,
-        )
-        .expect("move only the merge half under a stationary block path");
-        assert!(!old_merge.exists());
-        assert_eq!(fs::read(&new_merge).expect("moved merge"), b"before-move");
-        let marker = kura
-            .read_lane_marker(&blocks.join(MARKER_FILE_NAME))
-            .expect("read completed live marker");
-        assert!(marker.move_target_blocks.is_none());
-        assert!(marker.move_target_merge.is_none());
-
-        fs::write(&new_merge, b"before-move-and-legitimate-append")
-            .expect("append live merge history");
-        kura.move_geometry_binding_pair(
-            &binding,
-            &blocks,
-            &old_merge,
-            &blocks,
-            &new_merge,
-            GeometryPairTargetKind::MutableLive,
-        )
-        .expect("a completed live move remains idempotent after legitimate merge growth");
-        assert_eq!(
-            fs::read(&new_merge).expect("appended merge retained"),
-            b"before-move-and-legitimate-append"
-        );
-    }
-
-    #[test]
-    fn inverse_pair_move_recovers_a_seal_persisted_before_the_first_rename() {
-        fn exercise(
-            kura: &Kura,
-            root: &Path,
-            label: &str,
-            shared_blocks: bool,
-            shared_merge: bool,
-            inverse_target_kind: GeometryPairTargetKind,
-        ) {
-            let case_root = root.join(label);
-            let original_blocks = case_root.join("original-blocks");
-            let original_merge = case_root.join("original-merge.log");
-            let forward_blocks = if shared_blocks {
-                original_blocks.clone()
-            } else {
-                case_root.join("forward-blocks")
-            };
-            let forward_merge = if shared_merge {
-                original_merge.clone()
-            } else {
-                case_root.join("forward-merge.log")
-            };
-            let binding = LaneGeometryBinding {
-                lane_id: LaneId::new(20),
-                incarnation: Hash::new(label.as_bytes()),
-                activation_height: 1,
-                blocks_path: kura
-                    .relative_geometry_path(&original_blocks)
-                    .expect("relative original blocks"),
-                merge_path: kura
-                    .relative_geometry_path(&original_merge)
-                    .expect("relative original merge"),
-            };
-            kura.provision_geometry_binding(&binding)
-                .expect("provision original pair");
-            fs::write(&original_merge, format!("{label}-merge-evidence"))
-                .expect("seed merge evidence");
-            kura.seal_geometry_pair_move(
-                &binding,
-                &original_blocks,
-                &original_merge,
-                &forward_blocks,
-                &forward_merge,
-            )
-            .expect("persist forward seal before first rename");
-
-            kura.move_geometry_binding_pair(
-                &binding,
-                &forward_blocks,
-                &forward_merge,
-                &original_blocks,
-                &original_merge,
-                inverse_target_kind,
-            )
-            .expect("inverse move recognizes the exact opposite-path seal");
-
-            assert!(original_blocks.is_dir());
-            assert!(original_merge.is_file());
-            if forward_blocks != original_blocks {
-                assert!(!forward_blocks.exists());
-            }
-            if forward_merge != original_merge {
-                assert!(!forward_merge.exists());
-            }
-            match inverse_target_kind {
-                GeometryPairTargetKind::MutableLive => {
-                    let marker = kura
-                        .read_lane_marker(&original_blocks.join(MARKER_FILE_NAME))
-                        .expect("read normalized mutable marker");
-                    assert!(marker.move_target_blocks.is_none());
-                    assert!(marker.move_target_merge.is_none());
-                }
-                GeometryPairTargetKind::ImmutableRetained => kura
-                    .require_sealed_geometry_pair_at(
-                        &binding,
-                        &original_blocks,
-                        &original_merge,
-                        &original_blocks,
-                        &original_merge,
-                    )
-                    .expect("immutable inverse target retains its normalized seal"),
-            }
-        }
-
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, _) = initial_and_extended_configs();
-        let kura = open_kura(&root, &initial);
-        exercise(
-            &kura,
-            &root,
-            "full-mutable",
-            false,
-            false,
-            GeometryPairTargetKind::MutableLive,
-        );
-        exercise(
-            &kura,
-            &root,
-            "full-immutable",
-            false,
-            false,
-            GeometryPairTargetKind::ImmutableRetained,
-        );
-        exercise(
-            &kura,
-            &root,
-            "stationary-blocks",
-            true,
-            false,
-            GeometryPairTargetKind::MutableLive,
-        );
-        exercise(
-            &kura,
-            &root,
-            "stationary-merge",
-            false,
-            true,
-            GeometryPairTargetKind::MutableLive,
-        );
-    }
-
-    #[test]
-    fn inverse_pair_move_recovers_clear_temp_after_both_renames() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, _) = initial_and_extended_configs();
-        let kura = open_kura(&root, &initial);
-        let original_blocks = root.join("clear-temp/original-blocks");
-        let original_merge = root.join("clear-temp/original-merge.log");
-        let moved_blocks = root.join("clear-temp/moved-blocks");
-        let moved_merge = root.join("clear-temp/moved-merge.log");
-        let binding = LaneGeometryBinding {
-            lane_id: LaneId::new(21),
-            incarnation: Hash::new(b"clear-temp-direction-reversal"),
-            activation_height: 1,
-            blocks_path: kura
-                .relative_geometry_path(&original_blocks)
-                .expect("relative original blocks"),
-            merge_path: kura
-                .relative_geometry_path(&original_merge)
-                .expect("relative original merge"),
-        };
-        kura.provision_geometry_binding(&binding)
-            .expect("provision movable pair");
-        fs::write(&original_merge, b"clear-temp-merge-evidence").expect("seed merge evidence");
-        fs::write(original_blocks.join("payload"), b"block-image-evidence")
-            .expect("seed block evidence");
-
-        kura.seal_geometry_pair_move(
-            &binding,
-            &original_blocks,
-            &original_merge,
-            &moved_blocks,
-            &moved_merge,
-        )
-        .expect("seal forward pair move");
-        kura.move_geometry_path(&original_blocks, &moved_blocks, true)
-            .expect("move block half");
-        kura.move_geometry_path(&original_merge, &moved_merge, false)
-            .expect("move merge half");
-        let stale_clear = LaneIncarnationMarker {
-            version: MARKER_VERSION,
-            lane_id: binding.lane_id,
-            incarnation: binding.incarnation,
-            activation_height: binding.activation_height,
-            move_target_blocks: None,
-            move_target_merge: None,
-            block_store_digest: kura
-                .geometry_block_store_digest(&moved_blocks)
-                .expect("moved block digest"),
-            merge_log_digest: kura
-                .geometry_merge_log_digest(&moved_merge)
-                .expect("moved merge digest"),
-        };
-        let stale_temp = moved_blocks.join(MARKER_TEMP_FILE_NAME);
-        fs::write(&stale_temp, stale_clear.encode())
-            .expect("simulate crash before seal-clear marker rename");
-
-        kura.move_geometry_binding_pair(
-            &binding,
-            &moved_blocks,
-            &moved_merge,
-            &original_blocks,
-            &original_merge,
-            GeometryPairTargetKind::MutableLive,
-        )
-        .expect("inverse direction discards the authenticated uncommitted clear temp");
-        assert!(!stale_temp.exists());
-        assert_eq!(
-            fs::read(original_blocks.join("payload")).expect("block bytes restored"),
-            b"block-image-evidence"
-        );
-        assert_eq!(
-            fs::read(&original_merge).expect("merge bytes restored"),
-            b"clear-temp-merge-evidence"
-        );
-        let marker = kura
-            .read_lane_marker(&original_blocks.join(MARKER_FILE_NAME))
-            .expect("read restored live marker");
-        assert!(marker.move_target_blocks.is_none());
-        assert!(marker.move_target_merge.is_none());
-
-        kura.move_geometry_binding_pair(
-            &binding,
-            &moved_blocks,
-            &moved_merge,
-            &original_blocks,
-            &original_merge,
-            GeometryPairTargetKind::MutableLive,
-        )
-        .expect("completed inverse remains idempotent");
-
-        let foreign_temp = original_blocks.join(MARKER_TEMP_FILE_NAME);
-        fs::write(
-            &foreign_temp,
-            LaneIncarnationMarker {
-                version: MARKER_VERSION,
-                lane_id: binding.lane_id,
-                incarnation: Hash::new(b"foreign-marker-temp"),
-                activation_height: binding.activation_height,
-                move_target_blocks: None,
-                move_target_merge: None,
-                block_store_digest: kura
-                    .geometry_block_store_digest(&original_blocks)
-                    .expect("current block digest"),
-                merge_log_digest: kura
-                    .geometry_merge_log_digest(&original_merge)
-                    .expect("current merge digest"),
-            }
-            .encode(),
-        )
-        .expect("inject foreign marker temp");
-        let error = kura
-            .move_geometry_binding_pair(
-                &binding,
-                &original_blocks,
-                &original_merge,
-                &moved_blocks,
-                &moved_merge,
-                GeometryPairTargetKind::MutableLive,
-            )
-            .expect_err("foreign marker temp must not be removed or adopted");
-        assert_geometry_io_error(
-            &error,
-            ErrorKind::InvalidData,
-            "lane storage incarnation marker does not match authoritative binding",
-        );
-        assert!(foreign_temp.is_file());
-        assert!(original_blocks.is_dir());
-        assert!(original_merge.is_file());
-    }
-
-    #[test]
-    fn immutable_pair_move_rejects_a_post_crash_foreign_merge_swap() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, _) = initial_and_extended_configs();
-        let kura = open_kura(&root, &initial);
-        let source_blocks = root.join("sealed-pair/live-blocks");
-        let source_merge = root.join("sealed-pair/live-merge.log");
-        let target_blocks = root.join("sealed-pair/archive-blocks");
-        let target_merge = root.join("sealed-pair/archive-merge.log");
-        let binding = LaneGeometryBinding {
-            lane_id: LaneId::new(8),
-            incarnation: Hash::new(b"immutable-retained-pair"),
-            activation_height: 1,
-            blocks_path: kura
-                .relative_geometry_path(&source_blocks)
-                .expect("relative source block path"),
-            merge_path: kura
-                .relative_geometry_path(&source_merge)
-                .expect("relative source merge path"),
-        };
-        kura.provision_geometry_binding(&binding)
-            .expect("provision retained geometry pair");
-        fs::write(&source_merge, b"authoritative-merge-history")
-            .expect("seed authoritative merge bytes");
-        kura.move_geometry_binding_pair(
-            &binding,
-            &source_blocks,
-            &source_merge,
-            &target_blocks,
-            &target_merge,
-            GeometryPairTargetKind::ImmutableRetained,
-        )
-        .expect("archive authenticated pair");
-
-        fs::write(&target_merge, b"foreign-valid-looking-merge-history")
-            .expect("swap retained merge bytes");
-        let error = kura
-            .move_geometry_binding_pair(
-                &binding,
-                &source_blocks,
-                &source_merge,
-                &target_blocks,
-                &target_merge,
-                GeometryPairTargetKind::ImmutableRetained,
-            )
-            .expect_err("retained pair digest must reject a foreign merge swap");
-        assert_geometry_io_error(
-            &error,
-            ErrorKind::InvalidData,
-            "lane geometry pair does not match its durable block/merge evidence",
-        );
-        assert!(target_blocks.is_dir());
-        assert_eq!(
-            fs::read(&target_merge).expect("foreign bytes retained for operator inspection"),
-            b"foreign-valid-looking-merge-history"
-        );
-    }
-
-    #[test]
-    fn immutable_pair_move_rejects_a_post_crash_block_image_swap() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, _) = initial_and_extended_configs();
-        let kura = open_kura(&root, &initial);
-        let source_blocks = root.join("sealed-block-pair/live-blocks");
-        let source_merge = root.join("sealed-block-pair/live-merge.log");
-        let target_blocks = root.join("sealed-block-pair/archive-blocks");
-        let target_merge = root.join("sealed-block-pair/archive-merge.log");
-        let binding = LaneGeometryBinding {
-            lane_id: LaneId::new(9),
-            incarnation: Hash::new(b"immutable-retained-block-image"),
-            activation_height: 1,
-            blocks_path: kura
-                .relative_geometry_path(&source_blocks)
-                .expect("relative source block path"),
-            merge_path: kura
-                .relative_geometry_path(&source_merge)
-                .expect("relative source merge path"),
-        };
-        kura.provision_geometry_binding(&binding)
-            .expect("provision retained geometry pair");
-        let payload = source_blocks.join("retained-payload");
-        fs::write(&payload, b"authoritative-block-image").expect("seed block image bytes");
-        kura.move_geometry_binding_pair(
-            &binding,
-            &source_blocks,
-            &source_merge,
-            &target_blocks,
-            &target_merge,
-            GeometryPairTargetKind::ImmutableRetained,
-        )
-        .expect("archive authenticated pair");
-
-        let retained_payload = target_blocks.join("retained-payload");
-        fs::write(&retained_payload, b"foreign-valid-block-image")
-            .expect("swap retained block bytes");
-        let error = kura
-            .move_geometry_binding_pair(
-                &binding,
-                &source_blocks,
-                &source_merge,
-                &target_blocks,
-                &target_merge,
-                GeometryPairTargetKind::ImmutableRetained,
-            )
-            .expect_err("retained pair digest must reject a foreign block image");
-        assert_geometry_io_error(
-            &error,
-            ErrorKind::InvalidData,
-            "lane geometry pair does not match its durable block/merge evidence",
-        );
-        assert_eq!(
-            fs::read(&retained_payload).expect("foreign bytes retained for inspection"),
-            b"foreign-valid-block-image"
-        );
-    }
-
-    #[test]
-    fn recovery_completes_journal_owned_staging_created_before_marker() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, extended) = initial_and_extended_configs();
-        let (initial_incarnations, initial_activations) = initial_geometry();
-        let (extended_incarnations, extended_activations) = extended_geometry();
-        let kura = open_kura(&root, &initial);
-
-        let previous_bindings = kura
-            .geometry_bindings(&initial, &initial_incarnations, &initial_activations)
-            .expect("initial bindings");
-        let updated_bindings = kura
-            .geometry_bindings(&extended, &extended_incarnations, &extended_activations)
-            .expect("extended bindings");
-        let previous_catalog = geometry_catalog_fingerprint(&previous_bindings);
-        let updated_catalog = geometry_catalog_fingerprint(&updated_bindings);
-        let previous_lineage_root = unscoped_lineage_root(&previous_bindings);
-        let updated_lineage_root = unscoped_lineage_root(&updated_bindings);
-        let transition_id = geometry_transition_id(
-            0,
-            0,
-            previous_catalog,
-            previous_lineage_root,
-            updated_catalog,
-            updated_lineage_root,
-        );
-        let operations = kura
-            .build_geometry_operations(
-                transition_id,
-                &previous_bindings,
-                &updated_bindings,
-                &BTreeSet::new(),
-            )
-            .expect("create operation");
-        let intent = LaneGeometryIntent {
-            transition_id,
-            transition_sequence: 0,
-            transition_height: 0,
-            previous_catalog,
-            previous_lineage_root,
-            updated_catalog,
-            updated_lineage_root,
-            previous_bindings,
-            updated_bindings,
-            phase: LaneGeometryPhase::Intent,
-            operations,
-        };
-        let mut journal = LaneGeometryJournal::default();
-        journal.records.push(intent);
-        kura.write_lane_geometry_journal(&journal)
-            .expect("persist create intent before provisioning");
-        let operation = &journal.records[0].operations[0];
-        let staged_blocks = kura
-            .resolve_relative_path(&operation.unpublished_blocks_path)
-            .expect("staged blocks path");
-        fs::create_dir_all(&staged_blocks)
-            .expect("simulate crash after creating the journal-owned staging directory");
-        assert!(!staged_blocks.join(MARKER_FILE_NAME).exists());
-
-        kura.recover_lane_geometry_journal(
-            &extended,
-            &extended_incarnations,
-            &extended_activations,
-        )
-        .expect("recovery must finish marker-first staging and publish it atomically");
-        let lane = extended.entry(LaneId::new(1)).expect("created lane");
-        assert!(lane.blocks_dir(&root).join(MARKER_FILE_NAME).is_file());
-        assert!(lane.merge_log_path(&root).is_file());
-        assert!(!staged_blocks.exists());
-        assert_eq!(
-            kura.read_lane_geometry_journal().expect("journal").records[0].phase,
-            LaneGeometryPhase::CatalogPublished
-        );
-    }
-
-    #[test]
-    fn replacement_rollback_finishes_merge_half_after_block_archive_crash() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let lane_count = nonzero!(2_u32);
-        let primary = ModelLaneConfig::default();
-        let active_lane = ModelLaneConfig {
-            id: LaneId::new(1),
-            alias: "replace-before".to_owned(),
-            ..ModelLaneConfig::default()
-        };
-        let replacement_lane = ModelLaneConfig {
-            alias: "replace-after".to_owned(),
-            visibility: iroha_data_model::nexus::LaneVisibility::Restricted,
-            ..active_lane.clone()
-        };
-        let base_catalog =
-            LaneCatalog::new(lane_count, vec![primary.clone()]).expect("base catalog");
-        let active_catalog = LaneCatalog::new(lane_count, vec![primary.clone(), active_lane])
-            .expect("active catalog");
-        let replacement_catalog = LaneCatalog::new(lane_count, vec![primary, replacement_lane])
-            .expect("replacement catalog");
-        let base = RuntimeLaneConfig::from_catalog(&base_catalog);
-        let active = RuntimeLaneConfig::from_catalog(&active_catalog);
-        let replacement = RuntimeLaneConfig::from_catalog(&replacement_catalog);
-        let base_incarnations =
-            BTreeMap::from([(LaneId::SINGLE, Hash::prehashed([0x31; Hash::LENGTH]))]);
-        let active_incarnations = BTreeMap::from([
-            (LaneId::SINGLE, base_incarnations[&LaneId::SINGLE]),
-            (LaneId::new(1), Hash::prehashed([0x32; Hash::LENGTH])),
-        ]);
-        let replacement_incarnations = BTreeMap::from([
-            (LaneId::SINGLE, base_incarnations[&LaneId::SINGLE]),
-            (LaneId::new(1), Hash::prehashed([0x33; Hash::LENGTH])),
-        ]);
-        let base_activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
-        let active_activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 4)]);
-        let replacement_activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 5)]);
-        let kura = open_kura(&root, &base);
-        kura.apply_lane_geometry_transition(
-            &base,
-            &active,
-            &base_incarnations,
-            &active_incarnations,
-            &base_activations,
-            &active_activations,
-            &BTreeSet::new(),
-        )
-        .expect("create replaceable lane");
-        kura.mark_lane_geometry_catalog_published(
-            &active,
-            &active_incarnations,
-            &active_activations,
-            None,
-        )
-        .expect("publish replaceable lane");
-        kura.apply_lane_geometry_transition(
-            &active,
-            &replacement,
-            &active_incarnations,
-            &replacement_incarnations,
-            &active_activations,
-            &replacement_activations,
-            &BTreeSet::from([LaneId::new(1)]),
-        )
-        .expect("apply replacement before simulated rollback crash");
-
-        let journal = kura
-            .read_lane_geometry_journal()
-            .expect("replacement journal");
-        let operation = journal.records[1].operations[0].clone();
-        assert_eq!(operation.kind, LaneGeometryOperationKind::Replace);
-        let updated = operation.updated.as_ref().expect("updated binding");
-        let updated_blocks = kura.binding_blocks_path(updated);
-        let updated_merge = kura.binding_merge_path(updated);
-        let unpublished_blocks = kura
-            .resolve_relative_path(&operation.unpublished_blocks_path)
-            .expect("unpublished blocks");
-        let unpublished_merge = kura
-            .resolve_relative_path(&operation.unpublished_merge_path)
-            .expect("unpublished merge");
-        kura.seal_geometry_pair_move(
-            updated,
-            &updated_blocks,
-            &updated_merge,
-            &unpublished_blocks,
-            &unpublished_merge,
-        )
-        .expect("seal replacement rollback move before its block half");
-        kura.move_geometry_path(&updated_blocks, &unpublished_blocks, true)
-            .expect("simulate crash after archiving replacement blocks only");
-        assert!(!updated_blocks.exists());
-        assert!(updated_merge.is_file());
-        assert!(!unpublished_merge.exists());
-
-        kura.recover_lane_geometry_journal(&active, &active_incarnations, &active_activations)
-            .expect(
-                "rollback must finish the replacement merge half before restoring the prior lane",
-            );
-        assert!(!updated_merge.exists());
-        assert!(unpublished_blocks.is_dir());
-        assert!(unpublished_merge.is_file());
-        let active_lane = active.entry(LaneId::new(1)).expect("active lane");
-        assert!(active_lane.blocks_dir(&root).is_dir());
-        assert!(active_lane.merge_log_path(&root).is_file());
-        assert_eq!(
-            kura.read_lane_geometry_journal().expect("journal").records[1].phase,
-            LaneGeometryPhase::RolledBack
-        );
-
-        // Replacement replay has the same pre-first-rename frontier as Create: the retained
-        // updated incarnation can already carry its exact live-target seal while the journal is
-        // still terminally `RolledBack`. Retrying the replacement authority must consume it.
-        kura.seal_geometry_pair_move(
-            updated,
-            &unpublished_blocks,
-            &unpublished_merge,
-            &updated_blocks,
-            &updated_merge,
-        )
-        .expect("inject replacement replay crash before first rename");
-        kura.recover_lane_geometry_journal(
-            &replacement,
-            &replacement_incarnations,
-            &replacement_activations,
-        )
-        .expect("same-authority replacement replay resumes its pre-rename seal");
-        kura.require_complete_geometry_binding_at(updated, &updated_blocks, &updated_merge)
-            .expect("replacement incarnation is live after replay");
-        assert!(!unpublished_blocks.exists());
-        assert!(!unpublished_merge.exists());
-        assert_eq!(
-            kura.read_lane_geometry_journal().expect("journal").records[1].phase,
-            LaneGeometryPhase::CatalogPublished
-        );
-        kura.recover_lane_geometry_journal(&active, &active_incarnations, &active_activations)
-            .expect("return replayed replacement to its retained rollback image");
-        kura.require_sealed_geometry_pair_at(
-            updated,
-            &unpublished_blocks,
-            &unpublished_merge,
-            &unpublished_blocks,
-            &unpublished_merge,
-        )
-        .expect("replacement lifecycle restores an immutable rollback image");
-        assert_eq!(
-            kura.read_lane_geometry_journal().expect("journal").records[1].phase,
-            LaneGeometryPhase::RolledBack
-        );
-
-        let previous = operation.previous.as_ref().expect("previous binding");
-        assert_ne!(updated_blocks, kura.binding_blocks_path(previous));
-        assert_ne!(updated_merge, kura.binding_merge_path(previous));
-        fs::create_dir_all(&updated_blocks).expect("create duplicate updated block path");
-        fs::copy(
-            unpublished_blocks.join(MARKER_FILE_NAME),
-            updated_blocks.join(MARKER_FILE_NAME),
-        )
-        .expect("copy duplicate updated marker");
-        create_dir_all_with_context(updated_merge.parent().expect("updated merge parent"))
-            .expect("create duplicate updated merge parent");
-        fs::copy(&unpublished_merge, &updated_merge).expect("copy duplicate updated merge log");
-
-        let error = kura
-            .recover_lane_geometry_journal(&active, &active_incarnations, &active_activations)
-            .expect_err("rolled-back replacement must reject duplicate updated live storage");
-        assert_geometry_io_error(
-            &error,
-            ErrorKind::AlreadyExists,
-            "replacement rollback left the updated incarnation live",
-        );
-        assert!(updated_blocks.is_dir());
-        assert!(updated_merge.is_file());
-        assert!(unpublished_blocks.is_dir());
-        assert!(unpublished_merge.is_file());
-        assert_eq!(
-            kura.read_lane_geometry_journal().expect("journal").records[1].phase,
-            LaneGeometryPhase::RolledBack
-        );
-    }
-
-    #[test]
-    fn replacement_intent_rollback_resumes_block_only_inverse_half() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let lane_count = nonzero!(2_u32);
-        let primary = ModelLaneConfig::default();
-        let active_lane = ModelLaneConfig {
-            id: LaneId::new(1),
-            alias: "intent-replace-before".to_owned(),
-            ..ModelLaneConfig::default()
-        };
-        let replacement_lane = ModelLaneConfig {
-            alias: "intent-replace-after".to_owned(),
-            visibility: iroha_data_model::nexus::LaneVisibility::Restricted,
-            ..active_lane.clone()
-        };
-        let base_catalog =
-            LaneCatalog::new(lane_count, vec![primary.clone()]).expect("base catalog");
-        let active_catalog = LaneCatalog::new(lane_count, vec![primary.clone(), active_lane])
-            .expect("active catalog");
-        let replacement_catalog = LaneCatalog::new(lane_count, vec![primary, replacement_lane])
-            .expect("replacement catalog");
-        let base = RuntimeLaneConfig::from_catalog(&base_catalog);
-        let active = RuntimeLaneConfig::from_catalog(&active_catalog);
-        let replacement = RuntimeLaneConfig::from_catalog(&replacement_catalog);
-        let base_incarnations =
-            BTreeMap::from([(LaneId::SINGLE, Hash::prehashed([0x51; Hash::LENGTH]))]);
-        let active_incarnations = BTreeMap::from([
-            (LaneId::SINGLE, base_incarnations[&LaneId::SINGLE]),
-            (LaneId::new(1), Hash::prehashed([0x52; Hash::LENGTH])),
-        ]);
-        let replacement_incarnations = BTreeMap::from([
-            (LaneId::SINGLE, base_incarnations[&LaneId::SINGLE]),
-            (LaneId::new(1), Hash::prehashed([0x53; Hash::LENGTH])),
-        ]);
-        let base_activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
-        let active_activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 4)]);
-        let replacement_activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 5)]);
-        let kura = open_kura(&root, &base);
-        kura.apply_lane_geometry_transition(
-            &base,
-            &active,
-            &base_incarnations,
-            &active_incarnations,
-            &base_activations,
-            &active_activations,
-            &BTreeSet::new(),
-        )
-        .expect("create replaceable lane");
-        kura.mark_lane_geometry_catalog_published(
-            &active,
-            &active_incarnations,
-            &active_activations,
-            None,
-        )
-        .expect("publish replaceable lane");
-        kura.apply_lane_geometry_transition(
-            &active,
-            &replacement,
-            &active_incarnations,
-            &replacement_incarnations,
-            &active_activations,
-            &replacement_activations,
-            &BTreeSet::from([LaneId::new(1)]),
-        )
-        .expect("apply replacement before simulated Intent crash");
-
-        let mut journal = kura
-            .read_lane_geometry_journal()
-            .expect("replacement journal");
-        journal.records[1].phase = LaneGeometryPhase::Intent;
-        let operation = journal.records[1].operations[0].clone();
-        kura.write_lane_geometry_journal(&journal)
-            .expect("restore the pre-files-applied Intent frontier");
-        let updated = operation.updated.as_ref().expect("updated binding");
-        let updated_blocks = kura.binding_blocks_path(updated);
-        let updated_merge = kura.binding_merge_path(updated);
-        let unpublished_blocks = kura
-            .resolve_relative_path(&operation.unpublished_blocks_path)
-            .expect("unpublished blocks");
-        let unpublished_merge = kura
-            .resolve_relative_path(&operation.unpublished_merge_path)
-            .expect("unpublished merge");
-        kura.seal_geometry_pair_move(
-            updated,
-            &updated_blocks,
-            &updated_merge,
-            &unpublished_blocks,
-            &unpublished_merge,
-        )
-        .expect("seal Intent rollback before its block half");
-        kura.move_geometry_path(&updated_blocks, &unpublished_blocks, true)
-            .expect("simulate Intent rollback crash after moving only blocks");
-
-        kura.recover_lane_geometry_journal(&active, &active_incarnations, &active_activations)
-            .expect("Intent retry must resume its own inverse merge half");
-        assert!(!updated_blocks.exists());
-        assert!(!updated_merge.exists());
-        kura.require_sealed_geometry_pair_at(
-            updated,
-            &unpublished_blocks,
-            &unpublished_merge,
-            &unpublished_blocks,
-            &unpublished_merge,
-        )
-        .expect("Intent rollback retains the exact updated image");
-        let previous = operation.previous.as_ref().expect("previous binding");
-        kura.require_complete_geometry_binding_at(
-            previous,
-            &kura.binding_blocks_path(previous),
-            &kura.binding_merge_path(previous),
-        )
-        .expect("previous replacement image restored");
-        assert_eq!(
-            kura.read_lane_geometry_journal().expect("journal").records[1].phase,
-            LaneGeometryPhase::RolledBack
-        );
-    }
-
-    #[test]
-    fn same_path_replacement_rollback_preserves_old_merge_after_forward_half_archive() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let lane_count = nonzero!(2_u32);
-        let primary = ModelLaneConfig::default();
-        let active_lane = ModelLaneConfig {
-            id: LaneId::new(1),
-            alias: "same-path-replacement".to_owned(),
-            ..ModelLaneConfig::default()
-        };
-        let replacement_lane = ModelLaneConfig {
-            visibility: iroha_data_model::nexus::LaneVisibility::Restricted,
-            ..active_lane.clone()
-        };
-        let base_catalog =
-            LaneCatalog::new(lane_count, vec![primary.clone()]).expect("base catalog");
-        let active_catalog = LaneCatalog::new(lane_count, vec![primary.clone(), active_lane])
-            .expect("active catalog");
-        let replacement_catalog = LaneCatalog::new(lane_count, vec![primary, replacement_lane])
-            .expect("replacement catalog");
-        let base = RuntimeLaneConfig::from_catalog(&base_catalog);
-        let active = RuntimeLaneConfig::from_catalog(&active_catalog);
-        let replacement = RuntimeLaneConfig::from_catalog(&replacement_catalog);
-        let base_incarnations =
-            BTreeMap::from([(LaneId::SINGLE, Hash::prehashed([0x41; Hash::LENGTH]))]);
-        let active_incarnations = BTreeMap::from([
-            (LaneId::SINGLE, base_incarnations[&LaneId::SINGLE]),
-            (LaneId::new(1), Hash::prehashed([0x42; Hash::LENGTH])),
-        ]);
-        let replacement_incarnations = BTreeMap::from([
-            (LaneId::SINGLE, base_incarnations[&LaneId::SINGLE]),
-            (LaneId::new(1), Hash::prehashed([0x43; Hash::LENGTH])),
-        ]);
-        let base_activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
-        let active_activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 4)]);
-        let replacement_activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 5)]);
-        let kura = open_kura(&root, &base);
-        kura.apply_lane_geometry_transition_at_height(
-            &base,
-            &active,
-            &base_incarnations,
-            &active_incarnations,
-            &base_activations,
-            &active_activations,
-            &BTreeSet::new(),
-            4,
-        )
-        .expect("create replaceable lane");
-        kura.mark_lane_geometry_catalog_published(
-            &active,
-            &active_incarnations,
-            &active_activations,
-            None,
-        )
-        .expect("publish replaceable lane");
-
-        let previous_bindings = kura
-            .geometry_bindings(&active, &active_incarnations, &active_activations)
-            .expect("active bindings");
-        let updated_bindings = kura
-            .geometry_bindings(
-                &replacement,
-                &replacement_incarnations,
-                &replacement_activations,
-            )
-            .expect("replacement bindings");
-        let previous_catalog = geometry_catalog_fingerprint(&previous_bindings);
-        let updated_catalog = geometry_catalog_fingerprint(&updated_bindings);
-        let previous_lineage_root = unscoped_lineage_root(&previous_bindings);
-        let updated_lineage_root = unscoped_lineage_root(&updated_bindings);
-        let mut journal = kura.read_lane_geometry_journal().expect("active journal");
-        let transition_sequence = journal.records[0]
-            .transition_sequence
-            .checked_add(1)
-            .expect("transition sequence");
-        let transition_height = 5;
-        let transition_id = geometry_transition_id(
-            transition_sequence,
-            transition_height,
-            previous_catalog,
-            previous_lineage_root,
-            updated_catalog,
-            updated_lineage_root,
-        );
-        let operations = kura
-            .build_geometry_operations(
-                transition_id,
-                &previous_bindings,
-                &updated_bindings,
-                &BTreeSet::from([LaneId::new(1)]),
-            )
-            .expect("same-path replacement operation");
-        let operation = operations[0].clone();
-        let previous = operation.previous.as_ref().expect("previous binding");
-        let updated = operation.updated.as_ref().expect("updated binding");
-        assert_eq!(previous.blocks_path, updated.blocks_path);
-        assert_eq!(previous.merge_path, updated.merge_path);
-        journal.records.push(LaneGeometryIntent {
-            transition_id,
-            transition_sequence,
-            transition_height,
-            previous_catalog,
-            previous_lineage_root,
-            updated_catalog,
-            updated_lineage_root,
-            previous_bindings,
-            updated_bindings,
-            phase: LaneGeometryPhase::Intent,
-            operations,
-        });
-        kura.write_lane_geometry_journal(&journal)
-            .expect("persist replacement intent");
-
-        let previous_blocks = kura.binding_blocks_path(previous);
-        let previous_merge = kura.binding_merge_path(previous);
-        let archived_blocks = kura
-            .resolve_relative_path(&operation.archived_blocks_path)
-            .expect("archived blocks");
-        let archived_merge = kura
-            .resolve_relative_path(&operation.archived_merge_path)
-            .expect("archived merge");
-        let unpublished_merge = kura
-            .resolve_relative_path(&operation.unpublished_merge_path)
-            .expect("unpublished merge");
-        let unpublished_blocks = kura
-            .resolve_relative_path(&operation.unpublished_blocks_path)
-            .expect("unpublished blocks");
-        let sentinel = b"old-merge-half-must-remain-live";
-        fs::write(&previous_merge, sentinel).expect("write old merge sentinel");
-        kura.seal_geometry_pair_move(
-            previous,
-            &previous_blocks,
-            &previous_merge,
-            &archived_blocks,
-            &archived_merge,
-        )
-        .expect("seal previous archive move before its block half");
-        kura.move_geometry_path(&previous_blocks, &archived_blocks, true)
-            .expect("simulate crash after archiving only old blocks");
-        assert!(!previous_blocks.exists());
-        assert!(previous_merge.is_file());
-        assert!(!archived_merge.exists());
-
-        kura.recover_lane_geometry_journal_at_height(
-            &active,
-            &active_incarnations,
-            &active_activations,
-            4,
-        )
-        .expect("rollback must recognize the shared live merge as the old half");
-        assert!(previous_blocks.is_dir());
-        assert_eq!(
-            fs::read(&previous_merge).expect("old merge restored"),
-            sentinel
-        );
-        kura.require_sealed_geometry_pair_at(
-            updated,
-            &unpublished_blocks,
-            &unpublished_merge,
-            &unpublished_blocks,
-            &unpublished_merge,
-        )
-        .expect("rollback retains an authenticated empty replacement image");
-        assert_eq!(
-            kura.read_lane_geometry_journal().expect("journal").records[1].phase,
-            LaneGeometryPhase::RolledBack
-        );
-    }
-
-    #[test]
-    fn recovery_distinguishes_repeated_catalogs_by_retained_lineage_root() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, extended) = initial_and_extended_configs();
-        let (initial_incarnations, initial_activations) = initial_geometry();
-        let (first_incarnations, first_activations) = extended_geometry();
-        let mut second_incarnations = first_incarnations.clone();
-        second_incarnations.insert(LaneId::new(1), Hash::prehashed([0x44; Hash::LENGTH]));
-        let mut second_activations = first_activations.clone();
-        second_activations.insert(LaneId::new(1), 10);
-        let lineage_initial = Hash::new(b"lineage:initial:never-seen");
-        let lineage_first_active = Hash::new(b"lineage:first:active");
-        let lineage_first_retired = Hash::new(b"lineage:first:retired");
-        let lineage_second_active = Hash::new(b"lineage:second:active");
-        let lineage_second_retired = Hash::new(b"lineage:second:retired");
-        let kura = open_kura(&root, &initial);
-
-        kura.apply_lane_geometry_transition_at_height_with_lineage_roots(
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &first_incarnations,
-            &initial_activations,
-            &first_activations,
-            lineage_initial,
-            lineage_first_active,
-            &BTreeSet::new(),
-            9,
-        )
-        .expect("create first lane incarnation");
-        kura.mark_lane_geometry_catalog_published_with_lineage_root(
-            &extended,
-            &first_incarnations,
-            &first_activations,
-            Hash::new(b"lineage:first:wrong"),
-            None,
-        )
-        .expect_err("publication must reject a mismatched retained-lineage root");
-        assert_eq!(
-            kura.read_lane_geometry_journal()
-                .expect("unpublished rooted journal")
-                .records[0]
-                .phase,
-            LaneGeometryPhase::FilesApplied
-        );
-        kura.mark_lane_geometry_catalog_published_with_lineage_root(
-            &extended,
-            &first_incarnations,
-            &first_activations,
-            lineage_first_active,
-            None,
-        )
-        .expect("publish first active lineage");
-        kura.apply_lane_geometry_transition_at_height_with_lineage_roots(
-            &extended,
-            &initial,
-            &first_incarnations,
-            &initial_incarnations,
-            &first_activations,
-            &initial_activations,
-            lineage_first_active,
-            lineage_first_retired,
-            &BTreeSet::new(),
-            10,
-        )
-        .expect("retire first lane incarnation");
-        kura.mark_lane_geometry_catalog_published_with_lineage_root(
-            &initial,
-            &initial_incarnations,
-            &initial_activations,
-            lineage_first_retired,
-            None,
-        )
-        .expect("publish first retired lineage");
-        kura.apply_lane_geometry_transition_at_height_with_lineage_roots(
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &second_incarnations,
-            &initial_activations,
-            &second_activations,
-            lineage_first_retired,
-            lineage_second_active,
-            &BTreeSet::new(),
-            10,
-        )
-        .expect("create second lane incarnation");
-        kura.mark_lane_geometry_catalog_published_with_lineage_root(
-            &extended,
-            &second_incarnations,
-            &second_activations,
-            lineage_second_active,
-            None,
-        )
-        .expect("publish second active lineage");
-
-        let lane1 = extended.entry(LaneId::new(1)).expect("lane one");
-        kura.recover_lane_geometry_journal_before_transition_with_lineage_root(
-            &initial,
-            &initial_incarnations,
-            &initial_activations,
-            lineage_first_retired,
-            10,
-        )
-        .expect("recover first retired lineage while second incarnation is live");
-        assert!(!lane1.blocks_dir(&root).exists());
-        kura.recover_lane_geometry_journal_at_height_with_lineage_root(
-            &extended,
-            &second_incarnations,
-            &second_activations,
-            10,
-            lineage_second_active,
-        )
-        .expect("restore second active lineage after exact rooted rollback");
-        assert!(lane1.blocks_dir(&root).exists());
-
-        kura.apply_lane_geometry_transition_at_height_with_lineage_roots(
-            &extended,
-            &initial,
-            &second_incarnations,
-            &initial_incarnations,
-            &second_activations,
-            &initial_activations,
-            lineage_second_active,
-            lineage_second_retired,
-            &BTreeSet::new(),
-            11,
-        )
-        .expect("retire second lane incarnation");
-        kura.mark_lane_geometry_catalog_published_with_lineage_root(
-            &initial,
-            &initial_incarnations,
-            &initial_activations,
-            lineage_second_retired,
-            None,
-        )
-        .expect("publish second retired lineage");
-
-        let phases = kura
-            .read_lane_geometry_journal()
-            .expect("four-transition journal")
-            .records
-            .into_iter()
-            .map(|record| record.phase)
-            .collect::<Vec<_>>();
-        assert_eq!(phases, vec![LaneGeometryPhase::CatalogPublished; 4]);
-
-        kura.recover_lane_geometry_journal_before_transition_with_lineage_root(
-            &initial,
-            &initial_incarnations,
-            &initial_activations,
-            lineage_first_retired,
-            10,
-        )
-        .expect("recover the first repeated retired catalog exactly");
-        let phases = kura
-            .read_lane_geometry_journal()
-            .expect("rolled-back future lineage journal")
-            .records
-            .into_iter()
-            .map(|record| record.phase)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            phases,
-            vec![
-                LaneGeometryPhase::CatalogPublished,
-                LaneGeometryPhase::CatalogPublished,
-                LaneGeometryPhase::RolledBack,
-                LaneGeometryPhase::RolledBack,
-            ]
-        );
-
-        let before_unknown = kura
-            .read_lane_geometry_journal()
-            .expect("journal before unknown root");
-        kura.recover_lane_geometry_journal_before_transition_with_lineage_root(
-            &initial,
-            &initial_incarnations,
-            &initial_activations,
-            Hash::new(b"lineage:unknown"),
-            10,
-        )
-        .expect_err("an unretained lineage root must fail closed");
-        assert_eq!(
-            kura.read_lane_geometry_journal()
-                .expect("journal after unknown root"),
-            before_unknown,
-            "failed recovery must not rewrite transition phases"
-        );
-
-        drop(kura);
-        let restarted = open_kura(&root, &initial);
-        restarted
-            .recover_lane_geometry_journal_at_height_with_lineage_root(
-                &initial,
-                &initial_incarnations,
-                &initial_activations,
-                11,
-                lineage_second_retired,
-            )
-            .expect("restart recovers the latest repeated retired catalog");
-        assert!(
-            restarted
-                .read_lane_geometry_journal()
-                .expect("restarted journal")
-                .records
-                .iter()
-                .all(|record| record.phase == LaneGeometryPhase::CatalogPublished)
-        );
-    }
-
-    #[test]
-    fn files_applied_phase_rolls_forward_when_catalog_is_already_authoritative() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, extended) = initial_and_extended_configs();
-        let (initial_incarnations, initial_activations) = initial_geometry();
-        let (extended_incarnations, extended_activations) = extended_geometry();
-        let kura = open_kura(&root, &initial);
-
-        kura.apply_lane_geometry_transition(
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-            &BTreeSet::new(),
-        )
-        .expect("prepare transition");
-        assert_eq!(
-            kura.read_lane_geometry_journal().expect("journal").records[0].phase,
-            LaneGeometryPhase::FilesApplied
-        );
-
-        kura.recover_lane_geometry_journal(
-            &extended,
-            &extended_incarnations,
-            &extended_activations,
-        )
-        .expect("recover post-catalog crash");
-        assert_eq!(
-            kura.read_lane_geometry_journal().expect("journal").records[0].phase,
-            LaneGeometryPhase::CatalogPublished
-        );
-    }
-
-    #[test]
-    fn primary_relabel_files_applied_restart_recovers_exact_chain() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let initial_catalog = configured_primary_catalog("primary-alpha");
-        let updated_catalog = configured_primary_catalog("primary-beta");
-        let initial = RuntimeLaneConfig::from_catalog(&initial_catalog);
-        let updated = RuntimeLaneConfig::from_catalog(&updated_catalog);
-        let (incarnations, activations) = initial_geometry();
-        let kura = open_kura(&root, &initial);
-        let _ = durable_geometry_snapshot_identity(&kura, 3);
-        let expected_hashes = (1..=3)
-            .map(|height| {
-                kura.get_durable_block_hash(NonZeroUsize::new(height).expect("non-zero"))
-                    .expect("durable block hash")
-            })
-            .collect::<Vec<_>>();
-
-        kura.apply_lane_geometry_transition(
-            &initial,
-            &updated,
-            &incarnations,
-            &incarnations,
-            &activations,
-            &activations,
-            &BTreeSet::new(),
-        )
-        .expect("durably move primary files before catalog publication");
-        assert_eq!(
-            kura.read_lane_geometry_journal().unwrap().records[0].phase,
-            LaneGeometryPhase::FilesApplied
-        );
-        let old_blocks = initial.primary().blocks_dir(&root);
-        let new_blocks = updated.primary().blocks_dir(&root);
-        assert!(!old_blocks.exists());
-        assert!(new_blocks.exists());
-        drop(kura);
-
-        let reopened = open_kura(&root, &initial);
-        assert_eq!(reopened.exact_durable_blocks_count().unwrap(), 3);
-        assert_eq!(*reopened.active_blocks_dir.lock(), new_blocks);
-        assert!(
-            !old_blocks.exists(),
-            "startup must not provision an empty old path"
-        );
-        for (height, expected) in (1..=3).zip(expected_hashes) {
-            assert_eq!(
-                reopened.get_durable_block_hash(NonZeroUsize::new(height).unwrap()),
-                Some(expected)
-            );
-        }
-
-        reopened
-            .recover_lane_geometry_journal(&initial, &incarnations, &activations)
-            .expect("authoritative old catalog rolls the durable intent back");
-        assert_eq!(*reopened.active_blocks_dir.lock(), old_blocks);
-        assert!(old_blocks.exists());
-        assert!(!new_blocks.exists());
-        assert_eq!(reopened.exact_durable_blocks_count().unwrap(), 3);
-    }
-
-    #[test]
-    fn two_lane_relabel_files_applied_restart_recovers_exact_chain() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let lane_count = nonzero!(2_u32);
-        let initial_primary = ModelLaneConfig {
-            alias: "primary-alpha".to_owned(),
-            ..ModelLaneConfig::default()
-        };
-        let initial_secondary = ModelLaneConfig {
-            id: LaneId::new(1),
-            alias: "secondary-alpha".to_owned(),
-            ..ModelLaneConfig::default()
-        };
-        let updated_primary = ModelLaneConfig {
-            alias: "primary-beta".to_owned(),
-            ..initial_primary.clone()
-        };
-        let updated_secondary = ModelLaneConfig {
-            alias: "secondary-beta".to_owned(),
-            ..initial_secondary.clone()
-        };
-        let initial_catalog =
-            LaneCatalog::new(lane_count, vec![initial_primary, initial_secondary])
-                .expect("initial two-lane catalog");
-        let updated_catalog =
-            LaneCatalog::new(lane_count, vec![updated_primary, updated_secondary])
-                .expect("relabelled two-lane catalog");
-        let initial = RuntimeLaneConfig::from_catalog(&initial_catalog);
-        let updated = RuntimeLaneConfig::from_catalog(&updated_catalog);
-        let incarnations = BTreeMap::from([
-            (LaneId::SINGLE, Hash::prehashed([0x31; Hash::LENGTH])),
-            (LaneId::new(1), Hash::prehashed([0x32; Hash::LENGTH])),
-        ]);
-        let activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 0)]);
-        let kura = open_kura(&root, &initial);
-        let _ = durable_geometry_snapshot_identity(&kura, 3);
-        let exact_chain = |kura: &Kura| {
-            (1..=kura.exact_durable_blocks_count().unwrap())
-                .map(|height| {
-                    kura.get_block(NonZeroUsize::new(height).expect("non-zero block height"))
-                        .expect("durable block")
-                        .encode_wire()
-                        .expect("encode canonical block wire")
-                })
-                .collect::<Vec<_>>()
-        };
-        let expected_chain = exact_chain(&kura);
-
-        let initial_primary = initial.primary();
-        let initial_secondary = initial
-            .entry(LaneId::new(1))
-            .expect("initial secondary lane");
-        let updated_primary = updated.primary();
-        let updated_secondary = updated
-            .entry(LaneId::new(1))
-            .expect("updated secondary lane");
-        let old_primary_blocks = initial_primary.blocks_dir(&root);
-        let old_primary_merge = initial_primary.merge_log_path(&root);
-        let old_secondary_blocks = initial_secondary.blocks_dir(&root);
-        let old_secondary_merge = initial_secondary.merge_log_path(&root);
-        let new_primary_blocks = updated_primary.blocks_dir(&root);
-        let new_primary_merge = updated_primary.merge_log_path(&root);
-        let new_secondary_blocks = updated_secondary.blocks_dir(&root);
-        let new_secondary_merge = updated_secondary.merge_log_path(&root);
-        let secondary_sentinel = "secondary-lane-sentinel";
-        fs::write(
-            old_secondary_blocks.join(secondary_sentinel),
-            b"secondary-block-state",
-        )
-        .expect("seed secondary block state");
-        fs::write(&old_secondary_merge, b"secondary-merge-state")
-            .expect("seed secondary merge state");
-
-        kura.apply_lane_geometry_transition(
-            &initial,
-            &updated,
-            &incarnations,
-            &incarnations,
-            &activations,
-            &activations,
-            &BTreeSet::new(),
-        )
-        .expect("durably relabel both lanes before catalog publication");
-        let journal = kura.read_lane_geometry_journal().expect("geometry journal");
-        assert_eq!(journal.records[0].phase, LaneGeometryPhase::FilesApplied);
-        assert_eq!(journal.records[0].operations.len(), 2);
-        assert!(
-            journal.records[0]
-                .operations
-                .iter()
-                .all(|operation| operation.kind == LaneGeometryOperationKind::Relabel),
-            "both lane operations must be relabels"
-        );
-        for path in [
-            &old_primary_blocks,
-            &old_primary_merge,
-            &old_secondary_blocks,
-            &old_secondary_merge,
-        ] {
-            assert!(!path.exists(), "old lane path must be consumed: {path:?}");
-        }
-        for path in [
-            &new_primary_blocks,
-            &new_primary_merge,
-            &new_secondary_blocks,
-            &new_secondary_merge,
-        ] {
-            assert!(path.exists(), "updated lane path must exist: {path:?}");
-        }
-        assert_eq!(exact_chain(&kura), expected_chain);
-        drop(kura);
-
-        let reopened = open_kura(&root, &initial);
-        assert_eq!(
-            fs::canonicalize(reopened.active_blocks_dir.lock().as_path())
-                .expect("canonical active primary blocks path"),
-            fs::canonicalize(&new_primary_blocks).expect("canonical updated primary blocks path")
-        );
-        assert_eq!(
-            fs::canonicalize(reopened.active_merge_path.lock().as_path())
-                .expect("canonical active primary merge path"),
-            fs::canonicalize(&new_primary_merge).expect("canonical updated primary merge path")
-        );
-        for path in [
-            &old_primary_blocks,
-            &old_primary_merge,
-            &old_secondary_blocks,
-            &old_secondary_merge,
-        ] {
-            assert!(
-                !path.exists(),
-                "startup must not prematurely recreate a journal-owned old path: {path:?}"
-            );
-        }
-        assert_eq!(
-            fs::read(new_secondary_blocks.join(secondary_sentinel))
-                .expect("read relabelled secondary block state"),
-            b"secondary-block-state"
-        );
-        assert_eq!(
-            fs::read(&new_secondary_merge).expect("read relabelled secondary merge state"),
-            b"secondary-merge-state"
-        );
-        assert_eq!(exact_chain(&reopened), expected_chain);
-
-        reopened
-            .recover_lane_geometry_journal(&initial, &incarnations, &activations)
-            .expect("authoritative old catalog rolls both relabels back");
-        reopened
-            .recover_lane_geometry_journal(&initial, &incarnations, &activations)
-            .expect("two-lane rollback recovery is idempotent");
-        assert_eq!(
-            fs::canonicalize(reopened.active_blocks_dir.lock().as_path())
-                .expect("canonical recovered primary blocks path"),
-            fs::canonicalize(&old_primary_blocks).expect("canonical old primary blocks path")
-        );
-        assert_eq!(
-            fs::canonicalize(reopened.active_merge_path.lock().as_path())
-                .expect("canonical recovered primary merge path"),
-            fs::canonicalize(&old_primary_merge).expect("canonical old primary merge path")
-        );
-        for path in [
-            &old_primary_blocks,
-            &old_primary_merge,
-            &old_secondary_blocks,
-            &old_secondary_merge,
-        ] {
-            assert!(path.exists(), "rolled-back lane path must exist: {path:?}");
-        }
-        for path in [
-            &new_primary_blocks,
-            &new_primary_merge,
-            &new_secondary_blocks,
-            &new_secondary_merge,
-        ] {
-            assert!(
-                !path.exists(),
-                "updated lane path must be consumed: {path:?}"
-            );
-        }
-        assert_eq!(
-            fs::read(old_secondary_blocks.join(secondary_sentinel))
-                .expect("read recovered secondary block state"),
-            b"secondary-block-state"
-        );
-        assert_eq!(
-            fs::read(&old_secondary_merge).expect("read recovered secondary merge state"),
-            b"secondary-merge-state"
-        );
-        assert_eq!(
-            reopened
-                .read_lane_geometry_journal()
-                .expect("recovered geometry journal")
-                .records[0]
-                .phase,
-            LaneGeometryPhase::RolledBack
-        );
-        assert_eq!(
-            reopened.exact_durable_blocks_count().unwrap(),
-            expected_chain.len()
-        );
-        assert_eq!(exact_chain(&reopened), expected_chain);
-    }
-
-    struct PrimaryRelabelResumeGuard<'a>(&'a std::sync::atomic::AtomicBool);
-
-    impl Drop for PrimaryRelabelResumeGuard<'_> {
-        fn drop(&mut self) {
-            self.0.store(false, std::sync::atomic::Ordering::Release);
-        }
-    }
-
-    #[test]
-    fn primary_relabel_reader_blocks_until_retarget() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let initial = RuntimeLaneConfig::from_catalog(&configured_primary_catalog("reader-alpha"));
-        let updated = RuntimeLaneConfig::from_catalog(&configured_primary_catalog("reader-beta"));
-        let (incarnations, activations) = initial_geometry();
-        let kura = open_kura(&root, &initial);
-        let _ = durable_geometry_snapshot_identity(&kura, 1);
-        let expected = kura
-            .get_durable_block_hash(nonzero!(1_usize))
-            .expect("durable block hash");
-        kura.block_data.lock()[0].1 = None;
-        kura.pause_primary_relabel_before_retarget
-            .store(true, std::sync::atomic::Ordering::Release);
-
-        thread::scope(|scope| {
-            let transition = scope.spawn(|| {
-                kura.apply_lane_geometry_transition(
-                    &initial,
-                    &updated,
-                    &incarnations,
-                    &incarnations,
-                    &activations,
-                    &activations,
-                    &BTreeSet::new(),
-                )
-            });
-            let resume_guard = PrimaryRelabelResumeGuard(&kura.primary_relabel_paused);
-            let deadline = Instant::now() + Duration::from_secs(5);
-            while !kura
-                .primary_relabel_paused
-                .load(std::sync::atomic::Ordering::Acquire)
-            {
-                assert!(Instant::now() < deadline, "primary relabel did not pause");
-                thread::yield_now();
-            }
-            assert!(
-                kura.block_store.try_lock().is_none(),
-                "the canonical BlockStore guard must span rename through retarget"
-            );
-
-            let (reader_tx, reader_rx) = mpsc::channel();
-            let reader_kura = Arc::clone(&kura);
-            let reader = scope.spawn(move || {
-                let block = reader_kura.get_block(nonzero!(1_usize));
-                reader_tx.send(block).expect("send reader result");
-            });
-            assert!(
-                reader_rx.recv_timeout(Duration::from_millis(50)).is_err(),
-                "reader must not reopen the old path while relabel is between rename and retarget"
-            );
-            drop(resume_guard);
-            transition
-                .join()
-                .expect("transition thread")
-                .expect("journaled primary relabel");
-            let block = reader_rx
-                .recv_timeout(Duration::from_secs(5))
-                .expect("reader completes after retarget")
-                .expect("canonical block remains readable");
-            assert_eq!(block.hash(), expected);
-            reader.join().expect("reader thread");
-        });
-    }
-
-    #[test]
-    fn lane_geometry_recovery_holds_sidecar_lock() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let initial = RuntimeLaneConfig::from_catalog(&configured_primary_catalog("lock-alpha"));
-        let updated = RuntimeLaneConfig::from_catalog(&configured_primary_catalog("lock-beta"));
-        let (incarnations, activations) = initial_geometry();
-        let kura = open_kura(&root, &initial);
-        kura.apply_lane_geometry_transition(
-            &initial,
-            &updated,
-            &incarnations,
-            &incarnations,
-            &activations,
-            &activations,
-            &BTreeSet::new(),
-        )
-        .expect("apply primary relabel");
-        kura.pause_primary_relabel_before_retarget
-            .store(true, std::sync::atomic::Ordering::Release);
-
-        thread::scope(|scope| {
-            let recovery = scope.spawn(|| {
-                kura.recover_lane_geometry_journal(&initial, &incarnations, &activations)
-            });
-            let resume_guard = PrimaryRelabelResumeGuard(&kura.primary_relabel_paused);
-            let deadline = Instant::now() + Duration::from_secs(5);
-            while !kura
-                .primary_relabel_paused
-                .load(std::sync::atomic::Ordering::Acquire)
-            {
-                assert!(Instant::now() < deadline, "lane recovery did not pause");
-                thread::yield_now();
-            }
-            assert!(
-                kura.sidecar_lock.try_lock().is_none(),
-                "runtime geometry recovery must exclude lane sidecar I/O"
-            );
-            drop(resume_guard);
-            recovery
-                .join()
-                .expect("recovery thread")
-                .expect("recover primary relabel");
-        });
-    }
-
-    #[test]
-    fn recovery_publishes_uncertain_boundary_before_rolling_tail_forward() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let lane_count = nonzero!(3_u32);
-        let lane0 = ModelLaneConfig::default();
-        let lane1 = ModelLaneConfig {
-            id: LaneId::new(1),
-            alias: "frontier-one".to_owned(),
-            ..ModelLaneConfig::default()
-        };
-        let lane2 = ModelLaneConfig {
-            id: LaneId::new(2),
-            alias: "frontier-two".to_owned(),
-            ..ModelLaneConfig::default()
-        };
-        let base_catalog = LaneCatalog::new(lane_count, vec![lane0.clone()]).expect("base catalog");
-        let one_catalog = LaneCatalog::new(lane_count, vec![lane0.clone(), lane1.clone()])
-            .expect("one-lane extension");
-        let two_catalog =
-            LaneCatalog::new(lane_count, vec![lane0, lane1, lane2]).expect("two-lane extension");
-        let base = RuntimeLaneConfig::from_catalog(&base_catalog);
-        let one = RuntimeLaneConfig::from_catalog(&one_catalog);
-        let two = RuntimeLaneConfig::from_catalog(&two_catalog);
-        let base_incarnations =
-            BTreeMap::from([(LaneId::SINGLE, Hash::prehashed([0x41; Hash::LENGTH]))]);
-        let one_incarnations = BTreeMap::from([
-            (LaneId::SINGLE, base_incarnations[&LaneId::SINGLE]),
-            (LaneId::new(1), Hash::prehashed([0x42; Hash::LENGTH])),
-        ]);
-        let two_incarnations = BTreeMap::from([
-            (LaneId::SINGLE, base_incarnations[&LaneId::SINGLE]),
-            (LaneId::new(1), one_incarnations[&LaneId::new(1)]),
-            (LaneId::new(2), Hash::prehashed([0x43; Hash::LENGTH])),
-        ]);
-        let base_activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
-        let one_activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 6)]);
-        let two_activations = BTreeMap::from([
-            (LaneId::SINGLE, 0),
-            (LaneId::new(1), 6),
-            (LaneId::new(2), 7),
-        ]);
-        let kura = open_kura(&root, &base);
-        kura.apply_lane_geometry_transition(
-            &base,
-            &one,
-            &base_incarnations,
-            &one_incarnations,
-            &base_activations,
-            &one_activations,
-            &BTreeSet::new(),
-        )
-        .expect("apply first transition");
-        kura.mark_lane_geometry_catalog_published(&one, &one_incarnations, &one_activations, None)
-            .expect("publish first transition");
-        kura.apply_lane_geometry_transition(
-            &one,
-            &two,
-            &one_incarnations,
-            &two_incarnations,
-            &one_activations,
-            &two_activations,
-            &BTreeSet::new(),
-        )
-        .expect("apply second transition");
-        kura.mark_lane_geometry_catalog_published(&two, &two_incarnations, &two_activations, None)
-            .expect("publish second transition");
-
-        let mut journal = kura
-            .read_lane_geometry_journal()
-            .expect("published journal");
-        kura.apply_geometry_operations_rollback(
-            &journal.records[1].operations,
-            GeometryEvidencePolicy::RequireDurableEvidence,
-        )
-        .expect("place second transition behind the physical frontier");
-        journal.records[0].phase = LaneGeometryPhase::FilesApplied;
-        journal.records[1].phase = LaneGeometryPhase::RolledBack;
-        kura.write_lane_geometry_journal(&journal)
-            .expect("persist valid uncertain-plus-rolled-back frontier");
-
-        kura.recover_lane_geometry_journal(&two, &two_incarnations, &two_activations)
-            .expect("recovery must publish the uncertain boundary before the tail");
-        let recovered = kura
-            .read_lane_geometry_journal()
-            .expect("recovered journal");
-        assert_eq!(
-            recovered
-                .records
-                .iter()
-                .map(|record| record.phase)
-                .collect::<Vec<_>>(),
-            vec![
-                LaneGeometryPhase::CatalogPublished,
-                LaneGeometryPhase::CatalogPublished,
-            ]
-        );
-        assert!(
-            two.entry(LaneId::new(2))
-                .expect("lane two")
-                .blocks_dir(&root)
-                .is_dir()
-        );
-    }
-
-    #[test]
-    fn recovery_rejects_stale_incarnation_marker() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, extended) = initial_and_extended_configs();
-        let (initial_incarnations, initial_activations) = initial_geometry();
-        let (extended_incarnations, extended_activations) = extended_geometry();
-        let kura = open_kura(&root, &initial);
-        kura.apply_lane_geometry_transition(
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-            &BTreeSet::new(),
-        )
-        .expect("prepare transition");
-
-        let mut stale_incarnations = extended_incarnations.clone();
-        stale_incarnations.insert(LaneId::new(1), Hash::prehashed([0x77; Hash::LENGTH]));
-        let stale = kura
-            .geometry_binding(
-                extended.entry(LaneId::new(1)).expect("lane one"),
-                &stale_incarnations,
-                &extended_activations,
-            )
-            .expect("stale binding");
-        kura.write_lane_marker(&stale).expect("write stale marker");
-
-        kura.recover_lane_geometry_journal(
-            &extended,
-            &extended_incarnations,
-            &extended_activations,
-        )
-        .expect_err("stale incarnation marker must fail closed");
-    }
-
-    #[test]
-    fn transition_rejects_reserved_archive_collision_before_mutation() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, extended) = initial_and_extended_configs();
-        let (initial_incarnations, initial_activations) = initial_geometry();
-        let (extended_incarnations, extended_activations) = extended_geometry();
-        let kura = open_kura(&root, &initial);
-        let previous_bindings = kura
-            .geometry_bindings(&initial, &initial_incarnations, &initial_activations)
-            .expect("initial bindings");
-        let updated_bindings = kura
-            .geometry_bindings(&extended, &extended_incarnations, &extended_activations)
-            .expect("updated bindings");
-        let transition = geometry_transition_id(
-            0,
-            0,
-            geometry_catalog_fingerprint(&previous_bindings),
-            unscoped_lineage_root(&previous_bindings),
-            geometry_catalog_fingerprint(&updated_bindings),
-            unscoped_lineage_root(&updated_bindings),
-        );
-        let collision = root
-            .join("retired/lane_geometry")
-            .join(hex::encode(transition.as_ref()))
-            .join("lane_0000000001/previous_blocks");
-        fs::create_dir_all(&collision).expect("seed archive collision");
-
-        kura.apply_lane_geometry_transition(
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-            &BTreeSet::new(),
-        )
-        .expect_err("archive collision must fail before applying files");
-        assert!(
-            !extended
-                .entry(LaneId::new(1))
-                .expect("lane one")
-                .blocks_dir(&root)
-                .exists()
-        );
-        assert!(
-            kura.read_lane_geometry_journal()
-                .expect("journal remains readable")
-                .records
-                .is_empty()
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn transition_rejects_symlink_lane_target() {
-        use std::os::unix::fs::symlink;
-
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let outside = temp.path().join("outside");
-        fs::create_dir_all(&outside).expect("outside directory");
-        let (initial, extended) = initial_and_extended_configs();
-        let (initial_incarnations, initial_activations) = initial_geometry();
-        let (extended_incarnations, extended_activations) = extended_geometry();
-        let kura = open_kura(&root, &initial);
-        let target = extended
-            .entry(LaneId::new(1))
-            .expect("lane one")
-            .blocks_dir(&root);
-        fs::create_dir_all(target.parent().expect("target parent")).expect("target parent");
-        symlink(&outside, &target).expect("seed symlink target");
-
-        kura.apply_lane_geometry_transition(
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-            &BTreeSet::new(),
-        )
-        .expect_err("symlink target must fail closed");
-        assert!(
-            outside
-                .read_dir()
-                .expect("outside remains readable")
-                .next()
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn snapshot_checkpoint_compacts_only_proven_history_and_preserves_latest_recovery() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let kura = open_kura(&root, &initial_and_extended_configs().0);
-        let fixture = prepare_retired_geometry_archive(&kura, &root);
-
-        // Before checkpoint publication, both the old and current authoritative catalogs remain
-        // recoverable from the retained transition chain.
-        kura.recover_lane_geometry_journal_at_height(
-            &fixture.extended,
-            &fixture.extended_incarnations,
-            &fixture.extended_activations,
-            0,
-        )
-        .expect("old snapshot geometry remains recoverable before GC");
-        kura.recover_lane_geometry_journal_at_height(
-            &fixture.initial,
-            &fixture.initial_incarnations,
-            &fixture.initial_activations,
-            1,
-        )
-        .expect("restore current snapshot geometry");
-
-        durable_geometry_snapshot_identity(&kura, 20);
-        let cached_before = kura.refresh_disk_usage_bytes().expect("usage before GC");
-        let summary = checkpoint_retired_geometry(&kura, &fixture, 20)
-            .expect("checkpoint current snapshot geometry");
-        assert_eq!(summary.compacted_transitions, 2);
-        assert_eq!(summary.removed_archive_roots, 2);
-        assert!(
-            summary.reclaimed_bytes
-                >= u64::try_from(GC_PAYLOAD_LEN).expect("GC payload length fits u64")
-        );
-        assert!(!fixture.archive_root.exists());
-        let journal = kura
-            .read_lane_geometry_journal()
-            .expect("compacted journal");
-        assert!(journal.records.is_empty());
-        assert!(journal.pending_archive_gc.is_empty());
-        assert_eq!(
-            journal
-                .checkpoint
-                .as_ref()
-                .map(|checkpoint| checkpoint.catalog),
-            Some(geometry_catalog_fingerprint(
-                &kura
-                    .geometry_bindings(
-                        &fixture.initial,
-                        &fixture.initial_incarnations,
-                        &fixture.initial_activations,
-                    )
-                    .expect("initial bindings")
-            ))
-        );
-        let cached_after = kura.disk_usage.load(std::sync::atomic::Ordering::Relaxed);
-        assert_eq!(
-            cached_after,
-            kura.kura_disk_usage_bytes().expect("exact usage scan")
-        );
-        assert!(cached_after < cached_before);
-
-        assert_eq!(
-            checkpoint_retired_geometry(&kura, &fixture, 20)
-                .expect("checkpoint replay is idempotent"),
-            LaneGeometryGcSummary::default()
-        );
-        kura.recover_lane_geometry_journal(
-            &fixture.initial,
-            &fixture.initial_incarnations,
-            &fixture.initial_activations,
-        )
-        .expect("new snapshot remains recoverable");
-        kura.recover_lane_geometry_journal(
-            &fixture.extended,
-            &fixture.extended_incarnations,
-            &fixture.extended_activations,
-        )
-        .expect_err("checkpointed-away old snapshot must not synthesize empty lane storage");
-
-        drop(kura);
-        let restarted = open_kura(&root, &fixture.initial);
-        restarted
-            .recover_lane_geometry_journal(
-                &fixture.initial,
-                &fixture.initial_incarnations,
-                &fixture.initial_activations,
-            )
-            .expect("restart recovers checkpoint-authoritative geometry");
-    }
-
-    #[test]
-    fn configured_primary_replay_preflight_is_read_only_when_floor_is_retained() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, extended) = initial_and_extended_configs();
-        let (initial_incarnations, initial_activations) = initial_geometry();
-        let (extended_incarnations, extended_activations) = extended_geometry();
-        let kura = open_kura(&root, &initial);
-        kura.apply_lane_geometry_transition(
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-            &BTreeSet::new(),
-        )
-        .expect("retain primary-to-extended transition");
-        kura.mark_lane_geometry_catalog_published(
-            &extended,
-            &extended_incarnations,
-            &extended_activations,
-            None,
-        )
-        .expect("publish extended geometry");
-        let journal_path = kura.lane_geometry_journal_path();
-        let journal_before = fs::read(&journal_path).expect("retained geometry journal");
-        let initial_bindings = kura
-            .geometry_bindings(&initial, &initial_incarnations, &initial_activations)
-            .expect("configured-primary bindings");
-
-        kura.preflight_lane_geometry_recovery_floor_with_lineage_root(
-            &initial,
-            &initial_incarnations,
-            &initial_activations,
-            unscoped_lineage_root(&initial_bindings),
-        )
-        .expect("retained transition must preserve the configured-primary replay floor");
-        assert_eq!(
-            fs::read(&journal_path).expect("journal after replay preflight"),
-            journal_before,
-            "replay preflight must not rewrite retained geometry"
-        );
-    }
-
-    #[test]
-    fn configured_primary_replay_preflight_checks_durable_binding_without_history() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let configured = configured_primary_catalog("replay-binding");
-        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
-        let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
-        let (kura, _) =
-            Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-                .expect("open authenticated configured Kura");
-        let durable_incarnation = Hash::prehashed([0x61; Hash::LENGTH]);
-        kura.establish_or_verify_configured_primary_geometry_anchor(
-            lane_config.primary(),
-            durable_incarnation,
-            baseline,
-        )
-        .expect("bind configured primary");
-        let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
-        let durable_incarnations = BTreeMap::from([(LaneId::SINGLE, durable_incarnation)]);
-        let journal_path = kura.lane_geometry_journal_path();
-        let journal = kura
-            .read_lane_geometry_journal()
-            .expect("read binding-only geometry journal");
-        assert!(journal.records.is_empty());
-        assert!(journal.checkpoint.is_none());
-        assert!(journal.configured_primary_binding.is_some());
-        let journal_before = fs::read(&journal_path).expect("binding-only journal bytes");
-
-        let mismatched_incarnations =
-            BTreeMap::from([(LaneId::SINGLE, Hash::prehashed([0x62; Hash::LENGTH]))]);
-        let mismatched_bindings = kura
-            .geometry_bindings(&lane_config, &mismatched_incarnations, &activation_heights)
-            .expect("mismatched replay bindings");
-        let error = kura
-            .preflight_lane_geometry_recovery_floor_with_lineage_root(
-                &lane_config,
-                &mismatched_incarnations,
-                &activation_heights,
-                unscoped_lineage_root(&mismatched_bindings),
-            )
-            .expect_err("durable configured-primary binding must fail closed");
-        assert_geometry_io_error(
-            &error,
-            ErrorKind::InvalidData,
-            "configured-primary geometry binding differs from its durable anchor",
-        );
-        assert_eq!(
-            fs::read(&journal_path).expect("journal after rejected binding preflight"),
-            journal_before,
-            "binding mismatch preflight must not rewrite the journal"
-        );
-
-        let durable_bindings = kura
-            .geometry_bindings(&lane_config, &durable_incarnations, &activation_heights)
-            .expect("durable replay bindings");
-        kura.preflight_lane_geometry_recovery_floor_with_lineage_root(
-            &lane_config,
-            &durable_incarnations,
-            &activation_heights,
-            unscoped_lineage_root(&durable_bindings),
-        )
-        .expect("matching durable configured-primary binding remains replayable");
-        assert_eq!(
-            fs::read(&journal_path).expect("journal after matching binding preflight"),
-            journal_before,
-            "successful binding preflight must also remain read-only"
-        );
-    }
-
-    #[test]
-    fn configured_primary_replay_preflight_requires_snapshot_after_compaction() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, extended) = initial_and_extended_configs();
-        let (initial_incarnations, initial_activations) = initial_geometry();
-        let (extended_incarnations, extended_activations) = extended_geometry();
-        let kura = open_kura(&root, &initial);
-        kura.apply_lane_geometry_transition(
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-            &BTreeSet::new(),
-        )
-        .expect("create geometry transition to compact");
-        kura.mark_lane_geometry_catalog_published(
-            &extended,
-            &extended_incarnations,
-            &extended_activations,
-            None,
-        )
-        .expect("publish extended geometry");
-        let (block_hash, state_hash) = durable_geometry_snapshot_identity(&kura, 20);
-        let extended_bindings = kura
-            .geometry_bindings(&extended, &extended_incarnations, &extended_activations)
-            .expect("extended checkpoint bindings");
-        let extended_lineage_root = unscoped_lineage_root(&extended_bindings);
-        let summary = kura
-            .checkpoint_lane_geometry_with_proven_snapshot(
-                extended_bindings,
-                extended_lineage_root,
-                20,
-                Some(block_hash),
-                state_hash,
-                Vec::new(),
-            )
-            .expect("compact transition behind the extended snapshot");
-        assert_eq!(summary.compacted_transitions, 1);
-        let journal_path = kura.lane_geometry_journal_path();
-        let journal_before = fs::read(&journal_path).expect("compacted geometry journal");
-        let initial_bindings = kura
-            .geometry_bindings(&initial, &initial_incarnations, &initial_activations)
-            .expect("configured-primary bindings");
-
-        let error = kura
-            .preflight_lane_geometry_recovery_floor_with_lineage_root(
-                &initial,
-                &initial_incarnations,
-                &initial_activations,
-                unscoped_lineage_root(&initial_bindings),
-            )
-            .expect_err("empty-state replay must not cross compacted geometry");
-        assert_geometry_io_error(
-            &error,
-            ErrorKind::InvalidData,
-            "state snapshot at height 20 is required because the configured-primary lane-geometry recovery floor was compacted",
-        );
-        assert_eq!(
-            fs::read(&journal_path).expect("journal after rejected replay preflight"),
-            journal_before,
-            "rejected replay preflight must leave compacted geometry untouched"
-        );
-
-        kura.preflight_lane_geometry_recovery_floor_with_lineage_root(
-            &extended,
-            &extended_incarnations,
-            &extended_activations,
-            extended_lineage_root,
-        )
-        .expect("checkpoint-authoritative geometry remains a valid recovery floor");
-        assert_eq!(
-            fs::read(&journal_path).expect("journal after checkpoint preflight"),
-            journal_before,
-            "successful checkpoint preflight must also be read-only"
-        );
-    }
-
-    #[test]
-    fn journal_publication_forces_a_paused_usage_scan_to_retry_exactly() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, extended) = initial_and_extended_configs();
-        let kura = open_kura(&root, &initial);
-        let (initial_incarnations, initial_activations) = initial_geometry();
-        let (extended_incarnations, extended_activations) = extended_geometry();
-        kura.refresh_disk_usage_bytes()
-            .expect("establish exact usage baseline");
-
-        kura.pause_next_total_disk_usage_scan_after_scan_for_tests();
-        let scan_kura = Arc::clone(&kura);
-        let (scan_tx, scan_rx) = mpsc::channel();
-        let scan = thread::spawn(move || {
-            scan_tx
-                .send(scan_kura.refresh_disk_usage_bytes())
-                .expect("report usage scan result");
-        });
-        wait_for_total_usage_scan_pause(&kura);
-
-        let publication = kura.apply_lane_geometry_transition(
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-            &BTreeSet::new(),
-        );
-        let remained_paused = matches!(
-            scan_rx.recv_timeout(Duration::from_millis(50)),
-            Err(mpsc::RecvTimeoutError::Timeout)
-        );
-        kura.resume_total_disk_usage_scan_for_tests();
-        let refreshed = scan_rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("paused usage scan must finish after release")
-            .expect("retried usage scan succeeds");
-        scan.join().expect("join paused usage scan");
-
-        publication.expect("publish a real lane-geometry journal transition");
-        assert!(
-            remained_paused,
-            "the deterministic scan barrier must remain active through publication"
-        );
-        assert!(
-            !kura
-                .read_lane_geometry_journal()
-                .expect("published lane-geometry journal")
-                .records
-                .is_empty(),
-            "the race must exercise a non-empty journal publication"
-        );
-        let exact_enforced = kura
-            .kura_disk_usage_bytes()
-            .expect("exact enforced usage after journal publication");
-        let exact_total = kura
-            .kura_total_disk_usage_bytes()
-            .expect("exact total usage after journal publication");
-        assert_eq!(refreshed, exact_enforced);
-        assert_eq!(
-            kura.disk_usage.load(std::sync::atomic::Ordering::Relaxed),
-            exact_enforced,
-            "a scan spanning journal publication must retry before updating enforced usage"
-        );
-        assert_eq!(
-            kura.disk_usage_total
-                .load(std::sync::atomic::Ordering::Relaxed),
-            exact_total,
-            "a scan spanning journal publication must retry before updating total usage"
-        );
-    }
-
-    #[test]
-    fn public_checkpoint_requires_exact_durable_block_and_wsv_identity() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let kura = open_kura(&root, &initial_and_extended_configs().0);
-        let fixture = prepare_retired_geometry_archive(&kura, &root);
-        let (block_hash, state_hash) = durable_geometry_snapshot_identity(&kura, 20);
-
-        kura.checkpoint_lane_geometry_after_durable_snapshot(
-            &fixture.initial,
-            &fixture.initial_incarnations,
-            &fixture.initial_activations,
-            20,
-            Some(HashOf::from_untyped_unchecked(Hash::new(b"wrong-block"))),
-            state_hash,
-            &BTreeMap::new(),
-        )
-        .expect_err("mismatched canonical block hash must retain rollback evidence");
-        assert!(fixture.archive_root.exists());
-        assert_eq!(
-            kura.read_lane_geometry_journal()
-                .expect("retained journal")
-                .records
-                .len(),
-            2
-        );
-
-        kura.checkpoint_lane_geometry_after_durable_snapshot(
-            &fixture.initial,
-            &fixture.initial_incarnations,
-            &fixture.initial_activations,
-            20,
-            Some(block_hash),
-            Hash::new(b"wrong-state"),
-            &BTreeMap::new(),
-        )
-        .expect_err("mismatched canonical state hash must retain rollback evidence");
-        assert!(fixture.archive_root.exists());
-
-        let summary = kura
-            .checkpoint_lane_geometry_after_durable_snapshot(
-                &fixture.initial,
-                &fixture.initial_incarnations,
-                &fixture.initial_activations,
-                20,
-                Some(block_hash),
-                state_hash,
-                &BTreeMap::new(),
-            )
-            .expect("exact durable snapshot identity permits GC");
-        assert_eq!(summary.compacted_transitions, 2);
-        assert_eq!(summary.removed_archive_roots, 2);
-    }
-
-    #[test]
-    fn pending_gc_rejoins_checkpoint_to_current_canonical_wsv_before_deletion() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let kura = open_kura(&root, &initial_and_extended_configs().0);
-        let fixture = prepare_retired_geometry_archive(&kura, &root);
-        kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_COMPACTION_INTENT);
-        checkpoint_retired_geometry(&kura, &fixture, 20)
-            .expect_err("leave a durable pending deletion intent");
-        let original_state_hash = kura
-            .wsv_checkpoint(20)
-            .expect("read WSV checkpoint")
-            .expect("WSV checkpoint exists")
-            .state_hash();
-        kura.overwrite_wsv_checkpoint_without_validation_for_tests(
-            20,
-            Hash::new(b"forked-state"),
-            None,
-        )
-        .expect("replace WSV checkpoint for adversarial test");
-
-        kura.resume_proven_lane_geometry_archive_gc()
-            .expect_err("changed WSV identity must block replayed deletion");
-        assert!(fixture.archive_root.exists());
-        assert!(
-            !kura
-                .read_lane_geometry_journal()
-                .expect("pending journal")
-                .pending_archive_gc
-                .is_empty()
-        );
-
-        kura.overwrite_wsv_checkpoint_without_validation_for_tests(20, original_state_hash, None)
-            .expect("restore authoritative WSV checkpoint");
-        let resumed = kura
-            .resume_proven_lane_geometry_archive_gc()
-            .expect("matching canonical WSV resumes deletion");
-        assert_eq!(resumed.removed_archive_roots, 2);
-        assert!(!fixture.archive_root.exists());
-    }
-
-    #[test]
-    fn pending_gc_rejects_ahead_missing_and_unbound_checkpoint_metadata() {
-        for case in ["ahead", "missing", "unbound"] {
-            let temp = TempDir::new().expect("temporary directory");
-            let root = temp.path().join(format!("kura-{case}"));
-            let kura = open_kura(&root, &initial_and_extended_configs().0);
-            let fixture = prepare_retired_geometry_archive(&kura, &root);
-            kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_COMPACTION_INTENT);
-            checkpoint_retired_geometry(&kura, &fixture, 20)
-                .expect_err("leave a durable pending deletion intent");
-            let mut journal = kura.read_lane_geometry_journal().expect("pending journal");
-            match case {
-                "ahead" => {
-                    let checkpoint = journal.checkpoint.as_mut().expect("checkpoint");
-                    checkpoint.snapshot_height = 21;
-                    checkpoint.snapshot_block_hash =
-                        Some(HashOf::from_untyped_unchecked(Hash::new(b"ahead-block")));
-                    checkpoint.snapshot_state_hash = Hash::new(b"ahead-state");
-                    checkpoint.commitment = geometry_checkpoint_commitment(checkpoint);
-                }
-                "missing" => journal.checkpoint = None,
-                "unbound" => {
-                    let checkpoint = journal.checkpoint.as_mut().expect("checkpoint");
-                    checkpoint.pending_archive_gc_root = Some(Hash::new(b"wrong-gc-root"));
-                    checkpoint.commitment = geometry_checkpoint_commitment(checkpoint);
-                }
-                _ => unreachable!(),
-            }
-            fs::write(kura.lane_geometry_journal_path(), journal.encode())
-                .expect("persist adversarial journal");
-
-            kura.resume_proven_lane_geometry_archive_gc()
-                .expect_err("invalid pending checkpoint metadata must fail closed");
-            assert!(fixture.archive_root.exists());
-        }
-    }
-
-    #[test]
-    fn checkpoint_rejects_stale_height_and_lane_incarnation_aba() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let kura = open_kura(&root, &initial_and_extended_configs().0);
-        let fixture = prepare_retired_geometry_archive(&kura, &root);
-        checkpoint_retired_geometry(&kura, &fixture, 20).expect("initial checkpoint");
-        checkpoint_retired_geometry(&kura, &fixture, 19)
-            .expect_err("older snapshot checkpoint must fail closed");
-
-        let mut recreated_incarnations = fixture.extended_incarnations.clone();
-        recreated_incarnations.insert(LaneId::new(1), Hash::prehashed([0x33; Hash::LENGTH]));
-        let mut recreated_activations = fixture.extended_activations.clone();
-        recreated_activations.insert(LaneId::new(1), 21);
-        kura.apply_lane_geometry_transition_at_height(
-            &fixture.initial,
-            &fixture.extended,
-            &fixture.initial_incarnations,
-            &recreated_incarnations,
-            &fixture.initial_activations,
-            &recreated_activations,
-            &BTreeSet::new(),
-            21,
-        )
-        .expect("recreate lane id with fresh incarnation");
-        kura.mark_lane_geometry_catalog_published(
-            &fixture.extended,
-            &recreated_incarnations,
-            &recreated_activations,
-            None,
-        )
-        .expect("publish recreated lane");
-
-        let stale_bindings = kura
-            .geometry_bindings(
-                &fixture.extended,
-                &fixture.extended_incarnations,
-                &fixture.extended_activations,
-            )
-            .expect("stale bindings");
-        let (block_hash, state_hash) = durable_geometry_snapshot_identity(&kura, 30);
-        let stale_lineage_root = unscoped_lineage_root(&stale_bindings);
-        kura.checkpoint_lane_geometry_with_proven_snapshot(
-            stale_bindings,
-            stale_lineage_root,
-            30,
-            Some(block_hash),
-            state_hash,
-            Vec::new(),
-        )
-        .expect_err("same lane id with an old incarnation is not a reachable checkpoint");
-
-        let recreated_bindings = kura
-            .geometry_bindings(
-                &fixture.extended,
-                &recreated_incarnations,
-                &recreated_activations,
-            )
-            .expect("recreated bindings");
-        let recreated_lineage_root = unscoped_lineage_root(&recreated_bindings);
-        let summary = kura
-            .checkpoint_lane_geometry_with_proven_snapshot(
-                recreated_bindings,
-                recreated_lineage_root,
-                30,
-                Some(block_hash),
-                state_hash,
-                Vec::new(),
-            )
-            .expect("fresh incarnation checkpoint");
-        assert_eq!(summary.compacted_transitions, 1);
-    }
-
-    #[test]
-    fn geometry_gc_crash_boundaries_replay_safely_after_restart() {
-        for stage in [
-            GC_FAIL_AFTER_COMPACTION_INTENT,
-            GC_FAIL_AFTER_ARCHIVE_QUARANTINE,
-            GC_FAIL_AFTER_ARCHIVE_DELETION,
-            GC_FAIL_AFTER_COMPLETION,
-        ] {
-            let temp = TempDir::new().expect("temporary directory");
-            let root = temp.path().join(format!("kura-stage-{stage}"));
-            let kura = open_kura(&root, &initial_and_extended_configs().0);
-            let fixture = prepare_retired_geometry_archive(&kura, &root);
-            let transition_roots = kura
-                .read_lane_geometry_journal()
-                .expect("journal before GC")
-                .records
-                .iter()
-                .map(|record| {
-                    root.join("retired/lane_geometry")
-                        .join(hex::encode(record.transition_id.as_ref()))
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(transition_roots.len(), 2);
-            assert!(transition_roots.iter().all(|archive| archive.exists()));
-            let first_archive = &transition_roots[0];
-            let quarantine = first_archive
-                .parent()
-                .expect("archive parent")
-                .join(format!(
-                    "{GC_QUARANTINE_PREFIX}{}",
-                    first_archive
-                        .file_name()
-                        .expect("transition id")
-                        .to_string_lossy()
-                ));
-            kura.fail_next_lane_geometry_gc_at_stage_for_test(stage);
-            checkpoint_retired_geometry(&kura, &fixture, 20)
-                .expect_err("injected GC boundary must interrupt acknowledgement");
-            let after_failure = kura
-                .read_lane_geometry_journal()
-                .expect("journal after crash");
-            assert!(after_failure.records.is_empty());
-            if stage == GC_FAIL_AFTER_COMPACTION_INTENT {
-                assert!(transition_roots.iter().all(|archive| archive.exists()));
-                assert!(!quarantine.exists());
-                assert!(!after_failure.pending_archive_gc.is_empty());
-            } else if stage == GC_FAIL_AFTER_ARCHIVE_QUARANTINE {
-                assert!(!first_archive.exists());
-                assert!(fixture.archive_root.exists());
-                assert!(quarantine.exists());
-                assert!(!after_failure.pending_archive_gc.is_empty());
-            } else if stage == GC_FAIL_AFTER_ARCHIVE_DELETION {
-                assert!(transition_roots.iter().all(|archive| !archive.exists()));
-                assert!(!quarantine.exists());
-                assert!(!after_failure.pending_archive_gc.is_empty());
-            } else {
-                assert!(transition_roots.iter().all(|archive| !archive.exists()));
-                assert!(!quarantine.exists());
-                assert!(after_failure.pending_archive_gc.is_empty());
-            }
-
-            drop(kura);
-            let restarted = open_kura(&root, &fixture.initial);
-            restarted
-                .recover_lane_geometry_journal(
-                    &fixture.initial,
-                    &fixture.initial_incarnations,
-                    &fixture.initial_activations,
-                )
-                .expect("restart completes or observes completed GC");
-            let recovered = restarted
-                .read_lane_geometry_journal()
-                .expect("recovered journal");
-            assert!(recovered.pending_archive_gc.is_empty());
-            assert!(transition_roots.iter().all(|archive| !archive.exists()));
-            assert!(!quarantine.exists());
-        }
-    }
-
-    #[test]
-    fn storage_budget_purge_only_resumes_snapshot_proven_geometry_gc() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let kura = open_kura(&root, &initial_and_extended_configs().0);
-        let fixture = prepare_retired_geometry_archive(&kura, &root);
-        kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_COMPACTION_INTENT);
-        checkpoint_retired_geometry(&kura, &fixture, 20)
-            .expect_err("leave durable pending-GC intent");
-        assert!(fixture.archive_root.exists());
-
-        assert!(
-            kura.purge_retired_segments()
-                .expect("budget purge must validate retired geometry"),
-            "budget purge resumes only the already-proven archive deletion"
-        );
-        assert!(!fixture.archive_root.exists());
-        assert!(
-            kura.read_lane_geometry_journal()
-                .expect("journal after budget purge")
-                .pending_archive_gc
-                .is_empty()
-        );
-        assert_eq!(
-            kura.disk_usage.load(std::sync::atomic::Ordering::Relaxed),
-            kura.kura_disk_usage_bytes()
-                .expect("exact usage after purge")
-        );
-    }
-
-    #[test]
-    fn archive_gc_through_budget_purge_forces_a_paused_usage_scan_to_retry_exactly() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let kura = open_kura(&root, &initial_and_extended_configs().0);
-        let fixture = prepare_retired_geometry_archive(&kura, &root);
-        kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_COMPACTION_INTENT);
-        checkpoint_retired_geometry(&kura, &fixture, 20)
-            .expect_err("leave a durable, snapshot-proven pending archive deletion");
-        assert!(fixture.archive_root.exists());
-        kura.refresh_disk_usage_bytes()
-            .expect("establish exact pre-GC usage baseline");
-
-        kura.pause_next_total_disk_usage_scan_after_scan_for_tests();
-        let scan_kura = Arc::clone(&kura);
-        let (scan_tx, scan_rx) = mpsc::channel();
-        let scan = thread::spawn(move || {
-            scan_tx
-                .send(scan_kura.refresh_disk_usage_bytes())
-                .expect("report usage scan result");
-        });
-        wait_for_total_usage_scan_pause(&kura);
-
-        let purged = kura
-            .purge_retired_segments()
-            .expect("budget purge must validate retired geometry");
-        let remained_paused = matches!(
-            scan_rx.recv_timeout(Duration::from_millis(50)),
-            Err(mpsc::RecvTimeoutError::Timeout)
-        );
-        kura.resume_total_disk_usage_scan_for_tests();
-        let refreshed = scan_rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("paused usage scan must finish after release")
-            .expect("retried usage scan succeeds");
-        scan.join().expect("join paused usage scan");
-
-        assert!(purged, "budget purge must resume the proven archive GC");
-        assert!(
-            remained_paused,
-            "the deterministic scan barrier must remain active through archive GC"
-        );
-        assert!(!fixture.archive_root.exists());
-        assert!(
-            kura.read_lane_geometry_journal()
-                .expect("journal after archive GC")
-                .pending_archive_gc
-                .is_empty()
-        );
-        let exact_enforced = kura
-            .kura_disk_usage_bytes()
-            .expect("exact enforced usage after archive GC");
-        let exact_total = kura
-            .kura_total_disk_usage_bytes()
-            .expect("exact total usage after archive GC");
-        assert_eq!(refreshed, exact_enforced);
-        assert_eq!(
-            kura.disk_usage.load(std::sync::atomic::Ordering::Relaxed),
-            exact_enforced,
-            "archive GC must publish its enforced-usage subtraction exactly"
-        );
-        assert_eq!(
-            kura.disk_usage_total
-                .load(std::sync::atomic::Ordering::Relaxed),
-            exact_total,
-            "archive GC must publish its total-usage subtraction exactly"
-        );
-    }
-
-    #[test]
-    fn storage_budget_purge_never_deletes_uncheckpointed_geometry_by_age_or_pressure() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let kura = open_kura(&root, &initial_and_extended_configs().0);
-        let fixture = prepare_retired_geometry_archive(&kura, &root);
-        let sentinel = fixture
-            .archive_root
-            .join("lane_0000000001/previous_blocks/gc-payload.norito");
-        assert!(sentinel.exists());
-
-        let _ = kura.purge_retired_segments();
-        assert!(fixture.archive_root.exists());
-        assert_eq!(
-            fs::read(sentinel).expect("uncheckpointed archive retained"),
-            [0xA5; GC_PAYLOAD_LEN]
-        );
-        assert_eq!(
-            kura.read_lane_geometry_journal()
-                .expect("retained recovery journal")
-                .records
-                .len(),
-            2
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn geometry_sidecar_temp_symlink_and_regular_collision_fail_without_clobbering() {
-        use std::os::unix::fs::symlink;
-
-        for collision_kind in ["symlink", "regular"] {
-            let temp = TempDir::new().expect("temporary directory");
-            let root = temp.path().join(format!("kura-{collision_kind}"));
-            let (initial, extended) = initial_and_extended_configs();
-            let (initial_incarnations, initial_activations) = initial_geometry();
-            let (extended_incarnations, extended_activations) = extended_geometry();
-            let kura = open_kura(&root, &initial);
-            let collision = root.join(JOURNAL_TEMP_FILE_NAME);
-            let outside = temp.path().join("operator-data");
-            fs::write(&outside, b"operator-owned").expect("outside sentinel");
-            if collision_kind == "symlink" {
-                symlink(&outside, &collision).expect("journal temp symlink");
-            } else {
-                fs::write(&collision, b"operator-owned").expect("journal temp collision");
-            }
-
-            kura.apply_lane_geometry_transition(
-                &initial,
-                &extended,
-                &initial_incarnations,
-                &extended_incarnations,
-                &initial_activations,
-                &extended_activations,
-                &BTreeSet::new(),
-            )
-            .expect_err("unsafe or unrelated temp collision must fail closed");
-            assert_eq!(
-                fs::read(&outside).expect("outside retained"),
-                b"operator-owned"
-            );
-            if collision_kind == "regular" {
-                assert_eq!(
-                    fs::read(&collision).expect("regular collision retained"),
-                    b"operator-owned"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn geometry_inode_identity_detects_path_replacement() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let kura = open_kura(&root, &initial_and_extended_configs().0);
-        let path = root.join("inode-guard.norito");
-        fs::write(&path, b"first").expect("first inode");
-        let identity = kura
-            .geometry_path_identity(&path, false)
-            .expect("capture first inode");
-        fs::rename(&path, root.join("inode-guard.old")).expect("move first inode");
-        fs::write(&path, b"second").expect("replacement inode");
-        kura.require_geometry_path_identity(&path, false, identity)
-            .expect_err("replacement inode must not pass identity revalidation");
-    }
-
-    #[test]
-    fn geometry_gc_rejects_preexisting_quarantine_collision() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let kura = open_kura(&root, &initial_and_extended_configs().0);
-        let fixture = prepare_retired_geometry_archive(&kura, &root);
-        kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_COMPACTION_INTENT);
-        checkpoint_retired_geometry(&kura, &fixture, 20).expect_err("leave pending deletion");
-        let quarantine = fixture
-            .archive_root
-            .parent()
-            .expect("archive parent")
-            .join(format!(
-                "{GC_QUARANTINE_PREFIX}{}",
-                fixture
-                    .archive_root
-                    .file_name()
-                    .expect("transition id")
-                    .to_string_lossy()
-            ));
-        fs::create_dir(&quarantine).expect("quarantine collision");
-        fs::write(quarantine.join("operator-data"), b"retain").expect("collision sentinel");
-
-        kura.resume_proven_lane_geometry_archive_gc()
-            .expect_err("root plus quarantine collision must fail closed");
-        assert!(fixture.archive_root.exists());
-        assert_eq!(
-            fs::read(quarantine.join("operator-data")).expect("collision retained"),
-            b"retain"
-        );
-    }
-
-    #[cfg(any(
-        target_vendor = "apple",
-        target_os = "linux",
-        target_os = "android",
-        target_os = "redox"
-    ))]
-    #[test]
-    fn geometry_gc_quarantine_cannot_escape_a_substituted_parent() {
-        let temp = TempDir::new().expect("temporary directory");
-        let configured_root = temp.path().join("kura");
-        let kura = open_kura(&configured_root, &initial_and_extended_configs().0);
-        // Kura resolves a configured root exactly once at startup. On macOS,
-        // `TempDir` may spell a `/private/var/...` directory through its
-        // `/var/...` alias, so every post-startup path must descend from Kura's
-        // authenticated root.
-        let root = kura.store_root();
-        let fixture = prepare_retired_geometry_archive(&kura, &root);
-        kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_COMPACTION_INTENT);
-        checkpoint_retired_geometry(&kura, &fixture, 20).expect_err("leave pending deletion");
-
-        let pending = kura
-            .read_lane_geometry_journal()
-            .expect("pending geometry journal")
-            .pending_archive_gc;
-        let attacked_transition = pending
-            .first()
-            .expect("at least one pending archive deletion")
-            .intent
-            .transition_id;
-        let archive_parent = root.join("retired/lane_geometry");
-        let root_name = hex::encode(attacked_transition.as_ref());
-        let quarantine_name = format!("{GC_QUARANTINE_PREFIX}{root_name}");
-        assert!(
-            archive_parent.join(&root_name).is_dir(),
-            "the attacked pending archive must exist before parent substitution"
-        );
-        let journal_path = kura.lane_geometry_journal_path();
-        let durable_intent_before = fs::read(&journal_path).expect("durable pending GC intent");
-        let displaced_parent = root.join("authenticated-retired-parent");
-        let outside_parent = temp.path().join("outside-retired-parent");
-        fs::create_dir(&outside_parent).expect("create outside replacement parent");
-        *GEOMETRY_MOVE_PARENT_SUBSTITUTION
-            .lock()
-            .expect("geometry parent-substitution hook lock") = Some((
-            archive_parent.clone(),
-            displaced_parent.clone(),
-            outside_parent.clone(),
-        ));
-
-        let substitution_error = kura
-            .resume_proven_lane_geometry_archive_gc()
-            .expect_err("a substituted archive parent must fail GC closed");
-        assert!(
-            GEOMETRY_MOVE_PARENT_SUBSTITUTION
-                .lock()
-                .expect("geometry parent-substitution hook lock")
-                .is_none(),
-            "the parent substitution must occur at the pre-rename barrier"
-        );
-        assert!(
-            fs::symlink_metadata(&archive_parent)
-                .expect("substituted archive parent metadata")
-                .file_type()
-                .is_symlink()
-        );
-        for name in [&root_name, &quarantine_name] {
-            assert!(
-                !outside_parent.join(name).exists(),
-                "descriptor-relative GC must not publish through the replacement symlink"
-            );
-        }
-        let retained_source = displaced_parent.join(&root_name).is_dir();
-        let retained_quarantine = displaced_parent.join(&quarantine_name).is_dir();
-        assert_ne!(
-            retained_source, retained_quarantine,
-            "the authenticated parent must retain exactly one archive image after the failed GC: {substitution_error:?}"
-        );
-        kura.read_lane_geometry_journal()
-            .expect_err("validated journal reads must reject the substituted archive namespace");
-        assert_eq!(
-            fs::read(&journal_path).expect("durable pending GC intent after failed revalidation"),
-            durable_intent_before,
-            "failed parent revalidation must not acknowledge or rewrite the durable GC intent"
-        );
-        fs::remove_file(&archive_parent).expect("remove substituted archive-parent symlink");
-        fs::rename(&displaced_parent, &archive_parent)
-            .expect("restore authenticated archive parent");
-        assert!(
-            !kura
-                .read_lane_geometry_journal()
-                .expect("pending geometry journal")
-                .pending_archive_gc
-                .is_empty(),
-            "failed parent revalidation must retain the durable GC intent"
-        );
-    }
-
-    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
-    #[test]
-    fn geometry_gc_descriptor_deletion_cannot_follow_a_substituted_parent() {
-        use std::os::unix::fs::symlink;
-
-        let temp = TempDir::new().expect("temporary directory");
-        let configured_root = temp.path().join("kura");
-        let kura = open_kura(&configured_root, &initial_and_extended_configs().0);
-        // Use the root identity Kura authenticated, rather than retaining a
-        // possibly symlink-aliased spelling supplied at the configuration edge.
-        let root = kura.store_root();
-        let archive_parent = root.join("descriptor-gc-parent");
-        let deletion_root = archive_parent.join(".gc-authenticated");
-        let nested = deletion_root.join("nested/leaf");
-        fs::create_dir_all(&nested).expect("create authenticated deletion tree");
-        fs::write(nested.join("payload.norito"), b"authenticated")
-            .expect("seed authenticated deletion tree");
-        let deletion_identity = kura
-            .geometry_path_identity(&deletion_root, true)
-            .expect("authenticated deletion identity");
-        let (parent_handle, _) = kura
-            .open_geometry_parent(&archive_parent)
-            .expect("authenticated deletion parent");
-
-        let displaced_parent = root.join("descriptor-gc-parent.displaced");
-        let outside_parent = temp.path().join("outside-descriptor-gc-parent");
-        let outside_collision = outside_parent.join(".gc-authenticated");
-        fs::create_dir_all(&outside_collision).expect("create outside collision");
-        fs::write(outside_collision.join("operator-data"), b"retain")
-            .expect("outside collision sentinel");
-        fs::rename(&archive_parent, &displaced_parent).expect("displace authenticated parent");
-        symlink(&outside_parent, &archive_parent).expect("substitute archive parent");
-
-        Kura::remove_authenticated_geometry_tree_at(
-            &parent_handle,
-            std::ffi::OsStr::new(".gc-authenticated"),
-            deletion_identity,
-            &deletion_root,
-        )
-        .expect("descriptor-relative deletion stays under the authenticated parent handle");
-        assert!(
-            !displaced_parent.join(".gc-authenticated").exists(),
-            "the authenticated quarantine must be removed"
-        );
-        assert_eq!(
-            fs::read(outside_collision.join("operator-data")).expect("outside sentinel retained"),
-            b"retain",
-            "the substituted path namespace must remain untouched"
-        );
-    }
-
-    #[test]
-    fn geometry_gc_rejects_unauthenticated_archive_collision_without_deleting_it() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let kura = open_kura(&root, &initial_and_extended_configs().0);
-        let fixture = prepare_retired_geometry_archive(&kura, &root);
-        let collision = fixture.archive_root.join("operator-data.txt");
-        fs::write(&collision, b"must not delete").expect("seed unauthenticated collision");
-
-        checkpoint_retired_geometry(&kura, &fixture, 20)
-            .expect_err("unexpected archive content must fail closed");
-        assert_eq!(
-            fs::read(&collision).expect("collision retained"),
-            b"must not delete"
-        );
-        let journal = kura.read_lane_geometry_journal().expect("pending journal");
-        assert!(journal.records.is_empty());
-        assert!(!journal.pending_archive_gc.is_empty());
-
-        fs::remove_file(&collision).expect("operator resolves collision");
-        let resumed = kura
-            .resume_proven_lane_geometry_archive_gc()
-            .expect("resume proven GC after repair");
-        assert_eq!(resumed.removed_archive_roots, 1);
-    }
-
-    #[test]
-    fn native_amx_archive_is_admissible_accounted_and_purged_without_touching_sibling() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (kura, fixture) = prepare_native_amx_archive(&root);
-        let sibling = root.join("operator-sibling.keep");
-        fs::write(&sibling, b"retain across Native archive GC").expect("seed non-archive sibling");
-
-        let native_paths = [&fixture.manifest, &fixture.receipt, &fixture.latest_index];
-        for path in native_paths {
-            assert!(
-                path.is_file(),
-                "recognized Native archive evidence is retained: {}",
-                path.display()
-            );
-        }
-        kura.ensure_archived_lane_work_released_for_test(
-            &fixture.archived_blocks,
-            &fixture.binding,
-            &[],
-        )
-        .expect("exact Native manifest, receipt, and latest index are terminal");
-
-        let recognized_bytes = native_paths
-            .into_iter()
-            .map(|path| {
-                fs::metadata(path)
-                    .expect("Native archive artifact metadata")
-                    .len()
-            })
-            .sum::<u64>();
-        let archived_bytes = Kura::regular_geometry_archive_tree_bytes(&fixture.archived_blocks)
-            .expect("account authenticated Native archive bytes");
-        assert!(
-            archived_bytes >= recognized_bytes && recognized_bytes > 0,
-            "archive accounting must include Native manifest, receipt, and latest-index bytes"
-        );
-
-        durable_geometry_snapshot_identity(&kura, 20);
-        kura.refresh_disk_usage_bytes()
-            .expect("refresh usage with Native evidence archive");
-        let usage_before = kura
-            .kura_disk_usage_bytes()
-            .expect("exact usage before Native archive GC");
-        kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_COMPACTION_INTENT);
-        checkpoint_retired_geometry(&kura, &fixture.geometry, 20)
-            .expect_err("leave the Native archive under a durable snapshot-proven GC intent");
-        assert!(
-            fixture.geometry.archive_root.exists(),
-            "the injected boundary must preserve Native evidence for purge replay"
-        );
-        assert!(
-            kura.purge_retired_segments()
-                .expect("budget purge revalidates exact Native archive evidence"),
-            "budget purge must resume the snapshot-proven Native archive deletion"
-        );
-        assert!(!fixture.geometry.archive_root.exists());
-        let usage_after = kura
-            .kura_disk_usage_bytes()
-            .expect("exact usage after Native archive GC");
-        assert!(
-            usage_after < usage_before,
-            "removing the Native evidence archive must reduce accounted disk usage"
-        );
-        assert_eq!(
-            kura.disk_usage.load(std::sync::atomic::Ordering::Relaxed),
-            usage_after,
-            "Native archive GC must publish exact post-removal disk accounting"
-        );
-        assert_eq!(
-            fs::read(&sibling).expect("non-archive sibling retained"),
-            b"retain across Native archive GC",
-            "authenticated Native archive purge must remain path-scoped"
-        );
-    }
-
-    #[test]
-    fn native_amx_archive_gc_rejects_malformed_truncated_and_oversized_evidence() {
-        for corruption in [
-            "malformed",
-            "truncated",
-            "missing-receipt",
-            "oversized",
-            "oversized-artifact",
-            "aggregate",
-        ] {
-            let temp = TempDir::new().expect("temporary directory");
-            let root = temp.path().join(corruption);
-            let (kura, fixture) = prepare_native_amx_archive(&root);
-            let sibling = root.join("operator-sibling.keep");
-            fs::write(&sibling, b"retain while Native evidence is repaired")
-                .expect("seed non-archive sibling");
-            match corruption {
-                "malformed" => {
-                    fs::write(&fixture.latest_index, b"malformed Native latest index")
-                        .expect("corrupt Native latest index");
-                }
-                "truncated" => {
-                    let mut bytes = fs::read(&fixture.receipt).expect("read Native receipt");
-                    assert!(bytes.pop().is_some(), "receipt fixture is non-empty");
-                    fs::write(&fixture.receipt, bytes).expect("truncate Native receipt");
-                }
-                "missing-receipt" => {
-                    fs::remove_file(&fixture.receipt)
-                        .expect("remove Native archive receipt half-pair");
-                }
-                "oversized" => {
-                    let file = OpenOptions::new()
-                        .write(true)
-                        .truncate(true)
-                        .open(&fixture.latest_index)
-                        .expect("open Native latest index for oversize corruption");
-                    file.set_len(
-                        u64::try_from(
-                            crate::kura::NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES
-                                .saturating_add(1),
-                        )
-                        .expect("Native latest-index limit fits u64"),
-                    )
-                    .expect("extend Native latest index beyond its hard limit");
-                }
-                "oversized-artifact" => {
-                    let file = OpenOptions::new()
-                        .write(true)
-                        .truncate(true)
-                        .open(&fixture.manifest)
-                        .expect("open Native manifest for oversize corruption");
-                    file.set_len(
-                        DEFAULT_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES
-                            .checked_add(1)
-                            .expect("Native evidence limit can grow by one"),
-                    )
-                    .expect("extend Native manifest beyond its hard limit");
-                }
-                "aggregate" => {
-                    let second_manifest = fixture
-                        .manifest
-                        .parent()
-                        .expect("Native manifest has an archive directory")
-                        .join(format!(
-                            "{NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX}{:0width$}{NATIVE_AMX_EVIDENCE_FILE_SUFFIX}",
-                            2,
-                            width = NATIVE_AMX_EVIDENCE_HEIGHT_DIGITS,
-                        ));
-                    let file = OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .open(&second_manifest)
-                        .expect("create a second Native manifest");
-                    file.set_len(DEFAULT_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES)
-                        .expect("stage aggregate-bound Native manifest");
-                }
-                _ => unreachable!("enumerated corruption"),
-            }
-
-            let result = kura.ensure_archived_lane_work_released_for_test(
-                &fixture.archived_blocks,
-                &fixture.binding,
-                &[],
-            );
-            assert!(
-                result.is_err(),
-                "{corruption} Native evidence must fail archive validation"
-            );
-            assert!(
-                fixture.geometry.archive_root.exists(),
-                "{corruption} Native evidence must pin the archive for repair"
-            );
-            assert_eq!(
-                fs::read(&sibling).expect("non-archive sibling retained"),
-                b"retain while Native evidence is repaired",
-                "failed Native validation must not mutate a sibling"
-            );
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn native_amx_archive_gc_rejects_symlinked_evidence_without_following_it() {
-        use std::os::unix::fs::symlink;
-
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let outside = temp.path().join("operator-owned-native-manifest");
-        fs::write(&outside, b"operator-owned").expect("outside Native sentinel");
-        let (kura, fixture) = prepare_native_amx_archive(&root);
-        fs::remove_file(&fixture.manifest).expect("remove canonical Native manifest");
-        symlink(&outside, &fixture.manifest).expect("install Native manifest symlink");
-
-        kura.ensure_archived_lane_work_released_for_test(
-            &fixture.archived_blocks,
-            &fixture.binding,
-            &[],
-        )
-        .expect_err("a symlinked Native manifest must fail closed");
-        assert_eq!(
-            fs::read(&outside).expect("outside Native sentinel retained"),
-            b"operator-owned"
-        );
-        assert!(
-            fs::symlink_metadata(&fixture.manifest)
-                .expect("Native manifest symlink remains for operator repair")
-                .file_type()
-                .is_symlink()
-        );
-        assert!(fixture.geometry.archive_root.exists());
-
-        let hardlink_root = temp.path().join("hardlink-kura");
-        let hardlink_outside = temp.path().join("operator-owned-native-hardlink");
-        let (hardlink_kura, hardlink_fixture) = prepare_native_amx_archive(&hardlink_root);
-        fs::hard_link(&hardlink_fixture.manifest, &hardlink_outside)
-            .expect("create external hardlink to the Native manifest");
-        hardlink_kura
-            .ensure_archived_lane_work_released_for_test(
-                &hardlink_fixture.archived_blocks,
-                &hardlink_fixture.binding,
-                &[],
-            )
-            .expect_err("a hardlinked Native manifest must fail closed");
-        assert_eq!(
-            fs::read(&hardlink_outside).expect("outside hardlink remains readable"),
-            fs::read(&hardlink_fixture.manifest).expect("archived hardlink remains readable"),
-        );
-        assert!(hardlink_fixture.geometry.archive_root.exists());
-    }
-
-    #[test]
-    fn tombstoned_autonomous_artifacts_are_retirement_archive_gc_admissible_and_accounted() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (kura, fixture) = prepare_tombstoned_autonomous_archive(&root);
-        for path in [
-            &fixture.autonomous_attempt,
-            &fixture.view_state,
-            &fixture.height_pointer,
-            &fixture.route_pointer,
-        ] {
-            assert!(
-                path.is_file(),
-                "recognized autonomous archive artifact is retained: {}",
-                path.display()
-            );
-        }
-        kura.ensure_archived_lane_work_released_for_test(
-            &fixture.archived_blocks,
-            &fixture.binding,
-            &[],
-        )
-        .expect("an exact tombstone makes archived autonomous work terminal");
-
-        let recognized_bytes = [
-            &fixture.autonomous_attempt,
-            &fixture.view_state,
-            &fixture.height_pointer,
-            &fixture.route_pointer,
-        ]
-        .into_iter()
-        .map(|path| {
-            fs::metadata(path)
-                .expect("recognized artifact metadata")
-                .len()
-        })
-        .sum::<u64>();
-        let archived_bytes = Kura::regular_geometry_archive_tree_bytes(&fixture.archived_blocks)
-            .expect("account authenticated autonomous archive bytes");
-        assert!(
-            archived_bytes >= recognized_bytes && recognized_bytes > 0,
-            "archive accounting must include autonomous attempt, view, and latest-pointer bytes"
-        );
-
-        durable_geometry_snapshot_identity(&kura, 20);
-        kura.refresh_disk_usage_bytes()
-            .expect("refresh usage with autonomous archive");
-        let usage_before = kura
-            .kura_disk_usage_bytes()
-            .expect("exact usage before autonomous archive GC");
-        let summary = checkpoint_retired_geometry(&kura, &fixture.geometry, 20)
-            .expect("snapshot-proven GC accepts tombstoned autonomous evidence");
-        assert_eq!(summary.removed_archive_roots, 2);
-        assert!(!fixture.geometry.archive_root.exists());
-        let usage_after = kura
-            .kura_disk_usage_bytes()
-            .expect("exact usage after autonomous archive GC");
-        assert!(
-            usage_after < usage_before,
-            "removing the authenticated autonomous archive must reduce accounted disk usage"
-        );
-        assert_eq!(
-            kura.disk_usage.load(std::sync::atomic::Ordering::Relaxed),
-            usage_after,
-            "archive GC must publish exact post-removal disk accounting"
-        );
-    }
-
-    #[test]
-    fn autonomous_archive_gc_rejects_malformed_oversized_temporary_and_unexpected_artifacts() {
-        for corruption in ["malformed", "oversized", "temporary", "unexpected"] {
-            let temp = TempDir::new().expect("temporary directory");
-            let root = temp.path().join(corruption);
-            let (kura, fixture) = prepare_tombstoned_autonomous_archive(&root);
-            match corruption {
-                "malformed" => {
-                    fs::write(&fixture.view_state, b"malformed autonomous view state")
-                        .expect("corrupt autonomous view state");
-                }
-                "oversized" => {
-                    let file = OpenOptions::new()
-                        .write(true)
-                        .truncate(true)
-                        .open(&fixture.view_state)
-                        .expect("open autonomous view state for oversize corruption");
-                    file.set_len(
-                        u64::try_from(
-                            crate::kura::AUTONOMOUS_LANE_BLOCK_VIEW_STATE_MAX_BYTES
-                                .saturating_add(1),
-                        )
-                        .expect("view-state limit fits u64"),
-                    )
-                    .expect("extend autonomous view state past its hard limit");
-                }
-                "temporary" => {
-                    fs::write(
-                        fixture.view_state.with_extension("norito.tmp"),
-                        b"ambiguous autonomous view rewrite",
-                    )
-                    .expect("stage autonomous view temp");
-                }
-                "unexpected" => {
-                    fs::write(
-                        fixture
-                            .view_state
-                            .parent()
-                            .expect("lane artifact directory")
-                            .join("operator-junk.bin"),
-                        b"unexpected",
-                    )
-                    .expect("seed unexpected autonomous archive artifact");
-                }
-                _ => unreachable!("enumerated corruption"),
-            }
-
-            let result = kura.ensure_archived_lane_work_released_for_test(
-                &fixture.archived_blocks,
-                &fixture.binding,
-                &[],
-            );
-            assert!(
-                result.is_err(),
-                "{corruption} autonomous archive artifact must fail closed"
-            );
-            assert!(
-                fixture.geometry.archive_root.exists(),
-                "{corruption} autonomous evidence must pin the archive for repair"
-            );
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn autonomous_archive_gc_rejects_symlinked_view_artifact_without_following_it() {
-        use std::os::unix::fs::symlink;
-
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let outside = temp.path().join("operator-owned-view-state");
-        fs::write(&outside, b"operator-owned").expect("outside sentinel");
-        let (kura, fixture) = prepare_tombstoned_autonomous_archive(&root);
-        fs::remove_file(&fixture.view_state).expect("remove canonical archived view state");
-        symlink(&outside, &fixture.view_state).expect("install autonomous view-state symlink");
-
-        kura.ensure_archived_lane_work_released_for_test(
-            &fixture.archived_blocks,
-            &fixture.binding,
-            &[],
-        )
-        .expect_err("a symlinked autonomous view state must fail closed");
-        assert_eq!(
-            fs::read(&outside).expect("outside sentinel retained"),
-            b"operator-owned"
-        );
-        assert!(
-            fs::symlink_metadata(&fixture.view_state)
-                .expect("symlink remains for operator repair")
-                .file_type()
-                .is_symlink()
-        );
-        assert!(fixture.geometry.archive_root.exists());
-    }
-
-    #[test]
-    fn geometry_gc_pins_unmerged_autonomous_work_and_preserves_global_claim_evidence() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (kura, fixture) = prepare_tombstoned_autonomous_archive(&root);
-        let terminal_view =
-            fs::read(&fixture.view_state).expect("read exact archived autonomous tombstone");
-        fs::remove_file(&fixture.view_state)
-            .expect("remove tombstone to model a valid pending autonomous attempt");
-        let claim = root
-            .join("blocks/autonomous_entrypoint_claims_ff")
-            .join("claim.norito");
-        fs::create_dir_all(claim.parent().expect("claim parent")).expect("claim directory");
-        fs::write(
-            &claim,
-            b"reservation/entrypoint claim outside retired geometry",
-        )
-        .expect("global claim sentinel");
-
-        checkpoint_retired_geometry(&kura, &fixture.geometry, 20)
-            .expect_err("unmerged autonomous sidecar must pin retired geometry");
-        assert!(fixture.geometry.archive_root.exists());
-        assert!(
-            !kura
-                .read_lane_geometry_journal()
-                .expect("pinned pending journal")
-                .pending_archive_gc
-                .is_empty()
-        );
-
-        // Restore the exact durable tombstone. Once the attempt is terminal, the
-        // already-proven snapshot may release storage.
-        fs::write(&fixture.view_state, terminal_view).expect("restore exact autonomous tombstone");
-        let resumed = kura
-            .resume_proven_lane_geometry_archive_gc()
-            .expect("empty retired work set releases after repair");
-        assert_eq!(resumed.removed_archive_roots, 1);
-        assert_eq!(
-            fs::read(&claim).expect("global claim evidence retained"),
-            b"reservation/entrypoint claim outside retired geometry"
-        );
-    }
-
-    #[test]
-    fn geometry_gc_pins_certified_work_without_a_durable_merge_receipt() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let kura = open_kura(&root, &initial_and_extended_configs().0);
-        let fixture = prepare_retired_geometry_archive(&kura, &root);
-        let lane_id = LaneId::new(1);
-        let incarnation = fixture.extended_incarnations[&lane_id];
-        let dataspace_id = fixture
-            .extended
-            .entry(lane_id)
-            .expect("retired lane")
-            .dataspace_id;
-        let certified = certified_geometry_lane_block(lane_id, dataspace_id, incarnation, 1);
-        let descriptor = &certified.proposal.descriptor;
-        let archived_blocks = fixture.archive_root.join("lane_0000000001/previous_blocks");
-        let lane_artifacts = archived_blocks.join(LANE_ARTIFACTS_DIR_NAME);
-        fs::create_dir_all(&lane_artifacts).expect("archived lane artifacts");
-        let payload = certified
-            .encode_framed()
-            .expect("encode certified lane block");
-        fs::write(
-            lane_artifacts.join(CERTIFIED_LANE_BLOCKS_DATA_FILE),
-            &payload,
-        )
-        .expect("certified data sidecar");
-        fs::write(
-            lane_artifacts.join(CERTIFIED_LANE_BLOCKS_INDEX_FILE),
-            SidecarIndexEntry {
-                offset: 0,
-                len: u64::try_from(payload.len()).expect("payload length"),
-            }
-            .to_bytes(),
-        )
-        .expect("certified index sidecar");
-        let journal = kura.read_lane_geometry_journal().expect("geometry journal");
-        let binding = journal
-            .records
-            .last()
-            .expect("retirement transition")
-            .operations
-            .iter()
-            .find_map(|operation| {
-                (operation.lane_id == lane_id)
-                    .then_some(operation.previous.as_ref())
-                    .flatten()
-            })
-            .expect("retired lane binding")
-            .clone();
-        let carrier_hash = HashOf::from_untyped_unchecked(Hash::new(b"carrier"));
-        let release = LaneGeometryMergeRelease {
-            lane_id,
-            dataspace_id,
-            lane_incarnation: incarnation,
-            lane_block_height: descriptor.lane_block_height,
-            application_block_height: 20,
-            application_block_hash: carrier_hash,
-            merge_entry_hash: HashOf::from_untyped_unchecked(Hash::new(b"merge-entry")),
-            merge_epoch_id: 7,
-            source_bundle_hash: Hash::new(b"source-bundle"),
-            batch_identity_hash: Hash::new(b"batch-identity"),
-            batch_hash: Hash::new(b"batch"),
-            lane_execution_hash: Hash::new(b"lane-execution"),
-            marker_set_root: Hash::new(b"markers"),
-            receipt_hash: Hash::new(b"receipt"),
-        };
-
-        let error = kura
-            .ensure_archived_lane_work_released_for_test(&archived_blocks, &binding, &[release])
-            .expect_err("a merge release without its durable receipt must pin the archive");
-        assert_geometry_io_error(
-            &error,
-            ErrorKind::WouldBlock,
-            "retired lane merge application receipt is missing or malformed",
-        );
-        let Error::IO(_, path) = &error else {
-            unreachable!("assert_geometry_io_error established the error variant")
-        };
-        assert_eq!(path, &kura.lane_geometry_journal_path());
-        assert!(fixture.archive_root.exists());
-    }
-
-    #[test]
-    fn geometry_gc_requires_bound_merge_receipt_durability_before_deletion() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, extended) = retirement_test_configs();
-        let (extended_incarnations, extended_activations) = retirement_test_geometry();
-        let initial_incarnations =
-            BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-        let initial_activations =
-            BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-        let (kura, _, _) = open_published_retirement_kura(
-            &root,
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-        );
-        let retiring_lane = LaneId::new(1);
-        let retiring_incarnation = extended_incarnations[&retiring_lane];
-        let work = install_merge_applied_retirement_work(&kura, retiring_incarnation);
-        kura.apply_lane_geometry_transition(
-            &extended,
-            &initial,
-            &extended_incarnations,
-            &initial_incarnations,
-            &extended_activations,
-            &initial_activations,
-            &BTreeSet::new(),
-        )
-        .expect("archive merge-applied retiring work");
-        kura.mark_lane_geometry_catalog_published(
-            &initial,
-            &initial_incarnations,
-            &initial_activations,
-            None,
-        )
-        .expect("publish merge-applied retirement");
-
-        let journal = kura
-            .read_lane_geometry_journal()
-            .expect("retirement journal");
-        let retirement = journal.records.last().expect("retirement transition");
-        let archive_root = root
-            .join("retired/lane_geometry")
-            .join(hex::encode(retirement.transition_id.as_ref()));
-        let archived_blocks = archive_root.join("lane_0000000001/previous_blocks");
-        let lane_artifacts = archived_blocks.join(LANE_ARTIFACTS_DIR_NAME);
-        let receipt_data = lane_artifacts.join(LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE);
-        let receipt_index = lane_artifacts.join(LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE);
-        {
-            let _sidecar_guard = kura.sidecar_lock.lock();
-            assert!(
-                kura.read_lane_block_application_receipt_from_paths_locked(
-                    retiring_lane,
-                    work.certified.proposal.descriptor.lane_block_height,
-                    &receipt_data,
-                    &receipt_index,
-                    false,
-                )
-                .is_some(),
-                "the merge receipt must remain page-cache readable before its barrier fails"
-            );
-        }
-
-        let (snapshot_block_hash, snapshot_state_hash) =
-            durable_geometry_snapshot_identity(&kura, 20);
-        let bindings = kura
-            .geometry_bindings(&initial, &initial_incarnations, &initial_activations)
-            .expect("snapshot geometry bindings");
-        let lineage_root = unscoped_lineage_root(&bindings);
-        fail_next_archived_receipt_durability_attestation_for_test(
-            ProgressSidecarDurabilityFault::Ancestor(0),
-        );
-        let error = kura
-            .checkpoint_lane_geometry_with_proven_snapshot(
-                bindings,
-                lineage_root,
-                20,
-                Some(snapshot_block_hash),
-                snapshot_state_hash,
-                vec![work.release],
-            )
-            .expect_err("an unsynchronized merge receipt must not authorize archive deletion");
-        assert_geometry_io_error(
-            &error,
-            ErrorKind::WouldBlock,
-            "retired lane merge application receipt durability attestation failed",
-        );
-        assert!(
-            archive_root.is_dir(),
-            "failed receipt durability must retain the authenticated archive"
-        );
-        assert!(
-            !kura
-                .read_lane_geometry_journal()
-                .expect("pending GC journal")
-                .pending_archive_gc
-                .is_empty(),
-            "failed receipt durability must retain the replayable GC intent"
-        );
-        assert!(
-            receipt_data.is_file() && receipt_index.is_file(),
-            "failed receipt durability must retain both readable sidecar files"
-        );
-
-        let resumed = kura
-            .resume_proven_lane_geometry_archive_gc()
-            .expect("receipt durability recovery resumes exact archived GC");
-        assert_eq!(resumed.removed_archive_roots, 1);
-        assert!(
-            !archive_root.exists(),
-            "the same authenticated archive is deleted only after barrier recovery"
-        );
-    }
-
-    #[test]
-    fn partial_multi_archive_gc_retains_intent_and_repairs_disk_accounting_on_resume() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let kura = open_kura(&root, &initial_and_extended_configs().0);
-        let fixture = prepare_retired_geometry_archive(&kura, &root);
-
-        let mut recreated_incarnations = fixture.extended_incarnations.clone();
-        recreated_incarnations.insert(LaneId::new(1), Hash::prehashed([0x44; Hash::LENGTH]));
-        let mut recreated_activations = fixture.extended_activations.clone();
-        recreated_activations.insert(LaneId::new(1), 10);
-        kura.apply_lane_geometry_transition(
-            &fixture.initial,
-            &fixture.extended,
-            &fixture.initial_incarnations,
-            &recreated_incarnations,
-            &fixture.initial_activations,
-            &recreated_activations,
-            &BTreeSet::new(),
-        )
-        .expect("recreate retired lane");
-        kura.mark_lane_geometry_catalog_published(
-            &fixture.extended,
-            &recreated_incarnations,
-            &recreated_activations,
-            None,
-        )
-        .expect("publish recreated lane");
-        let recreated_blocks = fixture
-            .extended
-            .entry(LaneId::new(1))
-            .expect("recreated lane")
-            .blocks_dir(&root);
-        fs::write(
-            recreated_blocks.join("second-gc-payload.norito"),
-            [0x5A; 53],
-        )
-        .expect("seed second archive payload");
-        kura.apply_lane_geometry_transition(
-            &fixture.extended,
-            &fixture.initial,
-            &recreated_incarnations,
-            &fixture.initial_incarnations,
-            &recreated_activations,
-            &fixture.initial_activations,
-            &BTreeSet::new(),
-        )
-        .expect("retire recreated lane");
-        kura.mark_lane_geometry_catalog_published(
-            &fixture.initial,
-            &fixture.initial_incarnations,
-            &fixture.initial_activations,
-            None,
-        )
-        .expect("publish second retirement");
-
-        let journal = kura.read_lane_geometry_journal().expect("four transitions");
-        assert_eq!(journal.records.len(), 4);
-        let second_archive = root
-            .join("retired/lane_geometry")
-            .join(hex::encode(journal.records[3].transition_id.as_ref()));
-        let collision = second_archive.join("operator-data.txt");
-        fs::write(&collision, b"retain until operator repair").expect("collision");
-        durable_geometry_snapshot_identity(&kura, 20);
-        kura.refresh_disk_usage_bytes()
-            .expect("usage before partial GC");
-
-        checkpoint_retired_geometry(&kura, &fixture, 20)
-            .expect_err("second archive collision interrupts a multi-root GC pass");
-        assert!(
-            !fixture.archive_root.exists(),
-            "first proven root was deleted"
-        );
-        assert!(second_archive.exists(), "failing root remains intact");
-        assert_eq!(
-            fs::read(&collision).expect("collision retained"),
-            b"retain until operator repair"
-        );
-        assert!(
-            !kura
-                .read_lane_geometry_journal()
-                .expect("pending partial GC")
-                .pending_archive_gc
-                .is_empty()
-        );
-        let exact_after_partial = kura.kura_disk_usage_bytes().expect("exact partial usage");
-        assert_eq!(
-            kura.disk_usage.load(std::sync::atomic::Ordering::Relaxed),
-            exact_after_partial,
-            "a failed partial pass must repair the live disk-usage cache to the exact retained tree"
-        );
-
-        fs::remove_file(&collision).expect("repair archive collision");
-        let resumed = kura
-            .resume_proven_lane_geometry_archive_gc()
-            .expect("resume all exact pending roots");
-        assert_eq!(resumed.removed_archive_roots, 1);
-        assert!(!second_archive.exists());
-        assert_eq!(
-            kura.disk_usage.load(std::sync::atomic::Ordering::Relaxed),
-            kura.kura_disk_usage_bytes()
-                .expect("exact usage after completed resume")
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn geometry_gc_rejects_symlink_inside_archive_tree() {
-        use std::os::unix::fs::symlink;
-
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let outside = temp.path().join("outside.txt");
-        fs::write(&outside, b"outside").expect("outside sentinel");
-        let kura = open_kura(&root, &initial_and_extended_configs().0);
-        let fixture = prepare_retired_geometry_archive(&kura, &root);
-        let archived_blocks = fixture.archive_root.join("lane_0000000001/previous_blocks");
-        let link = archived_blocks.join("escape");
-        symlink(&outside, &link).expect("seed archive symlink");
-
-        checkpoint_retired_geometry(&kura, &fixture, 20)
-            .expect_err("archive symlink must fail closed");
-        assert_eq!(fs::read(&outside).expect("outside retained"), b"outside");
-        assert!(link.exists());
-    }
-
-    #[test]
-    fn recovery_rejects_pre_release_journal_layout() {
-        #[derive(Encode)]
-        struct PreReleaseLaneGeometryJournal {
-            version: u8,
-            records: Vec<LaneGeometryIntent>,
-        }
-
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, _) = initial_and_extended_configs();
-        let kura = open_kura(&root, &initial);
-        let pre_release = PreReleaseLaneGeometryJournal {
-            version: 1,
-            records: Vec::new(),
-        };
-        fs::write(kura.lane_geometry_journal_path(), pre_release.encode())
-            .expect("write pre-release journal");
-
-        kura.read_lane_geometry_journal()
-            .expect_err("pre-release journal layout must fail closed");
-    }
-
-    #[test]
-    fn recovery_rejects_corrupt_and_forged_journals() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, extended) = initial_and_extended_configs();
-        let (initial_incarnations, initial_activations) = initial_geometry();
-        let (extended_incarnations, extended_activations) = extended_geometry();
-        let kura = open_kura(&root, &initial);
-        fs::write(kura.lane_geometry_journal_path(), b"not norito").expect("write corrupt journal");
-        kura.recover_lane_geometry_journal(&initial, &initial_incarnations, &initial_activations)
-            .expect_err("corrupt journal must fail closed");
-
-        fs::remove_file(kura.lane_geometry_journal_path()).expect("remove corrupt journal");
-        kura.apply_lane_geometry_transition(
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-            &BTreeSet::new(),
-        )
-        .expect("prepare valid journal");
-        let valid = kura.read_lane_geometry_journal().expect("valid journal");
-        let mut forged_root = valid.clone();
-        forged_root.records[0].updated_lineage_root = Hash::new(b"forged-lineage-root");
-        fs::write(kura.lane_geometry_journal_path(), forged_root.encode())
-            .expect("write forged lineage root");
-        kura.recover_lane_geometry_journal(
-            &extended,
-            &extended_incarnations,
-            &extended_activations,
-        )
-        .expect_err("lineage-root tampering must invalidate the transition id");
-
-        let mut forged_sequence = valid.clone();
-        forged_sequence.records[0].transition_sequence = forged_sequence.records[0]
-            .transition_sequence
-            .checked_add(1)
-            .expect("test transition sequence");
-        fs::write(kura.lane_geometry_journal_path(), forged_sequence.encode())
-            .expect("write forged transition sequence");
-        kura.recover_lane_geometry_journal(
-            &extended,
-            &extended_incarnations,
-            &extended_activations,
-        )
-        .expect_err("transition-sequence tampering must invalidate the transition id");
-
-        let mut forged_height = valid.clone();
-        forged_height.records[0].transition_height = forged_height.records[0]
-            .transition_height
-            .checked_add(1)
-            .expect("test transition height");
-        fs::write(kura.lane_geometry_journal_path(), forged_height.encode())
-            .expect("write forged transition height");
-        kura.recover_lane_geometry_journal(
-            &extended,
-            &extended_incarnations,
-            &extended_activations,
-        )
-        .expect_err("transition-height tampering must invalidate the transition id");
-
-        fs::write(kura.lane_geometry_journal_path(), valid.encode())
-            .expect("restore valid journal");
-        let mut forged = valid;
-        forged.records[0].operations[0].archived_blocks_path = "../escape".to_owned();
-        fs::write(kura.lane_geometry_journal_path(), forged.encode())
-            .expect("write forged journal bytes");
-        kura.recover_lane_geometry_journal(
-            &extended,
-            &extended_incarnations,
-            &extended_activations,
-        )
-        .expect_err("forged archive path must fail closed");
-    }
-
-    #[test]
-    fn recovery_rejects_noncontiguous_phase_frontiers() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let kura = open_kura(&root, &initial_and_extended_configs().0);
-        let _fixture = prepare_retired_geometry_archive(&kura, &root);
-        let valid = kura
-            .read_lane_geometry_journal()
-            .expect("two-transition published journal");
-        assert_eq!(valid.records.len(), 2);
-
-        for (_label, phases, expected_message) in [
-            (
-                "published-after-rollback",
-                [
-                    LaneGeometryPhase::RolledBack,
-                    LaneGeometryPhase::CatalogPublished,
-                ],
-                "lane geometry journal phases do not form a durable applied frontier",
-            ),
-            (
-                "multiple-uncertain-boundaries",
-                [LaneGeometryPhase::Intent, LaneGeometryPhase::FilesApplied],
-                "lane geometry journal has more than one uncertain transition boundary",
-            ),
-        ] {
-            let mut forged = valid.clone();
-            for (record, phase) in forged.records.iter_mut().zip(phases) {
-                record.phase = phase;
-            }
-            fs::write(kura.lane_geometry_journal_path(), forged.encode())
-                .expect("write phase-frontier forgery");
-            let error = kura
-                .read_lane_geometry_journal()
-                .expect_err("impossible phase topology must fail closed");
-            assert_geometry_io_error(&error, ErrorKind::InvalidData, expected_message);
-        }
-    }
-
-    #[test]
-    fn recovery_rejects_both_branch_v5_journal_layouts_without_migration() {
-        #[derive(Encode)]
-        struct HeightCursorJournalV5 {
-            version: u8,
-            configured_catalog_hash: Option<Hash>,
-            configured_primary_binding: Option<LaneGeometryBinding>,
-            checkpoint: Option<LaneGeometrySnapshotCheckpoint>,
-            pending_archive_gc: Vec<LaneGeometryPendingArchiveGc>,
-            records: Vec<LaneGeometryIntent>,
-        }
-
-        #[derive(Encode)]
-        struct LineageJournalV5 {
-            version: u8,
-            configured_catalog_hash: Option<Hash>,
-            // These containers are empty below, so their bytes exactly match the lineage
-            // branch's checkpoint and transition container encodings.
-            checkpoint: Option<LaneGeometrySnapshotCheckpoint>,
-            pending_archive_gc: Vec<LaneGeometryPendingArchiveGc>,
-            records: Vec<LaneGeometryIntent>,
-        }
-
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, _) = initial_and_extended_configs();
-        let (initial_incarnations, initial_activations) = initial_geometry();
-        let kura = open_kura(&root, &initial);
-        let obsolete_layouts = [
-            (
-                "height-cursor v5",
-                HeightCursorJournalV5 {
-                    version: 5,
-                    configured_catalog_hash: None,
-                    configured_primary_binding: None,
-                    checkpoint: None,
-                    pending_archive_gc: Vec::new(),
-                    records: Vec::new(),
-                }
-                .encode(),
-            ),
-            (
-                "lineage v5",
-                LineageJournalV5 {
-                    version: 5,
-                    configured_catalog_hash: Some(Hash::new(b"lineage-v5")),
-                    checkpoint: None,
-                    pending_archive_gc: Vec::new(),
-                    records: Vec::new(),
-                }
-                .encode(),
-            ),
-        ];
-
-        for (name, bytes) in obsolete_layouts {
-            let journal_path = kura.lane_geometry_journal_path();
-            fs::write(&journal_path, &bytes).expect("write obsolete v5 journal");
-
-            let error = match kura.recover_lane_geometry_journal(
-                &initial,
-                &initial_incarnations,
-                &initial_activations,
-            ) {
-                Ok(()) => panic!("{name} must not be migrated to journal v6"),
-                Err(error) => error,
-            };
-            assert_eq!(
-                fs::read(&journal_path).expect("read rejected v5 journal"),
-                bytes,
-                "recovery must leave the rejected {name} bytes untouched"
-            );
-            if name == "height-cursor v5" {
-                assert_kura_io_error(
-                    &error,
-                    std::io::ErrorKind::InvalidData,
-                    "unsupported lane geometry journal version 5; expected 6",
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn recovery_rejects_prior_lane_geometry_checkpoint_version() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let kura = open_kura(&root, &initial_and_extended_configs().0);
-        let fixture = prepare_retired_geometry_archive(&kura, &root);
-        checkpoint_retired_geometry(&kura, &fixture, 20).expect("create rooted checkpoint v4");
-        let mut prior = kura
-            .read_lane_geometry_journal()
-            .expect("read rooted checkpoint journal");
-        let checkpoint = prior.checkpoint.as_mut().expect("checkpoint exists");
-        checkpoint.version = CHECKPOINT_VERSION - 1;
-        checkpoint.commitment = geometry_checkpoint_commitment(checkpoint);
-        fs::write(kura.lane_geometry_journal_path(), prior.encode())
-            .expect("write prior-version checkpoint");
-
-        let error = kura
-            .recover_lane_geometry_journal(
-                &fixture.initial,
-                &fixture.initial_incarnations,
-                &fixture.initial_activations,
-            )
-            .expect_err("checkpoint v3 must not be interpreted as rooted checkpoint v4");
-        assert_kura_io_error(
-            &error,
-            std::io::ErrorKind::InvalidData,
-            "lane geometry checkpoint commitment, catalog, height, block hash, or activation is invalid",
-        );
-    }
-
-    #[test]
-    fn configured_catalog_preflight_persists_baseline_before_any_lane_path() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let configured_a = configured_primary_catalog("crash-a");
-        let configured_b = configured_primary_catalog("crash-b");
-        let lane_config_a = RuntimeLaneConfig::from_catalog(&configured_a);
-        let lane_config_b = RuntimeLaneConfig::from_catalog(&configured_b);
-        let config = kura_config(&root);
-
-        Kura::fail_after_configured_catalog_preflight_for_test(&root);
-        let error = Kura::new_with_configured_lane_catalog(&config, &lane_config_a, &configured_a)
-            .expect_err("injected crash must stop immediately after baseline establishment");
-        assert!(matches!(
-            error,
-            Error::IO(ref source, _) if source.kind() == ErrorKind::Interrupted
-        ));
-        assert_lane_paths_absent(&root, &lane_config_a);
-        let journal = decode_exact::<LaneGeometryJournal>(
-            &fs::read(root.join(JOURNAL_FILE_NAME)).expect("durable baseline journal"),
-        )
-        .expect("decode durable baseline journal");
-        assert_eq!(
-            journal.configured_catalog_hash,
-            Some(LaneLifecycleParameterV1::catalog_hash(&configured_a))
-        );
-
-        Kura::new_with_configured_lane_catalog(&config, &lane_config_b, &configured_b)
-            .expect_err("a reconstructed process must reject a different configured catalog");
-        assert_lane_paths_absent(&root, &lane_config_b);
-
-        Kura::new_with_configured_lane_catalog(&config, &lane_config_a, &configured_a)
-            .expect("the exact configured catalog must resume after the crash boundary");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn configured_primary_preflight_rejects_block_path_symlink_before_external_write() {
-        use std::os::unix::fs::symlink;
-
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let outside = temp.path().join("outside-blocks");
-        fs::create_dir_all(&outside).expect("outside directory");
-        let configured = configured_primary_catalog("primary-block-symlink");
-        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
-        Kura::establish_or_verify_configured_lane_catalog_baseline(
-            &root,
-            LaneLifecycleParameterV1::catalog_hash(&configured),
-        )
-        .expect("establish configured-catalog baseline");
-        let blocks = lane_config.primary().blocks_dir(&root);
-        fs::create_dir_all(blocks.parent().expect("block parent")).expect("block parent");
-        symlink(&outside, &blocks).expect("configured primary block symlink");
-
-        Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-            .expect_err("configured primary block symlink must fail before BlockStore opens it");
-        assert!(blocks.is_symlink());
-        assert_eq!(
-            fs::read_dir(&outside).expect("outside directory").count(),
-            0,
-            "preflight rejection must not create block-store files outside the Kura root"
-        );
-        assert!(!lane_config.primary().merge_log_path(&root).exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn configured_primary_preflight_rejects_merge_path_symlink_before_external_write() {
-        use std::os::unix::fs::symlink;
-
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let outside = temp.path().join("outside-merge.log");
-        fs::write(&outside, b"operator-owned").expect("outside merge sentinel");
-        let configured = configured_primary_catalog("primary-merge-symlink");
-        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
-        Kura::establish_or_verify_configured_lane_catalog_baseline(
-            &root,
-            LaneLifecycleParameterV1::catalog_hash(&configured),
-        )
-        .expect("establish configured-catalog baseline");
-        let merge = lane_config.primary().merge_log_path(&root);
-        fs::create_dir_all(merge.parent().expect("merge parent")).expect("merge parent");
-        symlink(&outside, &merge).expect("configured primary merge symlink");
-
-        Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-            .expect_err(
-                "configured primary merge symlink must fail before MergeLedgerLog opens it",
-            );
-        assert!(merge.is_symlink());
-        assert_eq!(
-            fs::read(&outside).expect("outside sentinel"),
-            b"operator-owned"
-        );
-        assert!(!lane_config.primary().blocks_dir(&root).exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn configured_primary_preflight_rejects_core_block_file_symlinks_before_external_write() {
-        use std::os::unix::fs::symlink;
-
-        for file_name in [
-            INDEX_FILE_NAME,
-            DATA_FILE_NAME,
-            HASHES_FILE_NAME,
-            COUNT_FILE_NAME,
-        ] {
-            let temp = TempDir::new().expect("temporary directory");
-            let root = temp.path().join("kura");
-            let outside = temp.path().join(format!("outside-{file_name}"));
-            fs::write(&outside, b"operator-owned-block-file").expect("outside sentinel");
-            let configured = configured_primary_catalog("child-link");
-            let lane_config = RuntimeLaneConfig::from_catalog(&configured);
-            let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
-            let incarnation = Hash::prehashed([0xA7; Hash::LENGTH]);
-            let (kura, _) = Kura::new_with_configured_lane_catalog(
-                &kura_config(&root),
-                &lane_config,
-                &configured,
-            )
-            .expect("open authenticated configured Kura");
-            kura.establish_or_verify_configured_primary_geometry_anchor(
-                lane_config.primary(),
-                incarnation,
-                baseline,
-            )
-            .expect("bind configured primary");
-            drop(kura);
-
-            let child = lane_config.primary().blocks_dir(&root).join(file_name);
-            fs::remove_file(&child).expect("remove core block file before symlink injection");
-            symlink(&outside, &child).expect("inject core block-file symlink");
-
-            Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-                .expect_err(
-                    "configured primary descendants must be rejected before BlockStore opens",
-                );
-            assert!(child.is_symlink());
-            assert_eq!(
-                fs::read(&outside).expect("outside sentinel retained"),
-                b"operator-owned-block-file",
-                "outside target changed for {file_name}"
-            );
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn configured_primary_preflight_rejects_root_sidecar_temp_symlink() {
-        use std::os::unix::fs::symlink;
-
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let outside = temp.path().join("outside-roster-temp");
-        fs::write(&outside, b"operator-owned-roster-temp").expect("outside sentinel");
-        let configured = configured_primary_catalog("root-sidecar-link");
-        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
-        let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
-        let (kura, _) =
-            Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-                .expect("open authenticated configured Kura");
-        kura.establish_or_verify_configured_primary_geometry_anchor(
-            lane_config.primary(),
-            Hash::prehashed([0xA8; Hash::LENGTH]),
-            baseline,
-        )
-        .expect("bind configured primary");
-        drop(kura);
-        let sidecar_temp = root.join("commit-rosters.norito.tmp");
-        symlink(&outside, &sidecar_temp).expect("inject roster temp symlink");
-
-        Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-            .expect_err("root sidecar temp symlink must fail before CommitRosterJournal opens");
-        assert!(sidecar_temp.is_symlink());
-        assert_eq!(
-            fs::read(&outside).expect("outside sentinel retained"),
-            b"operator-owned-roster-temp"
-        );
-    }
-
-    #[test]
-    fn configured_primary_preflight_rejects_foreign_marker_before_kura_reconciliation() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let configured = configured_primary_catalog("primary-marker");
-        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
-        let (kura, _) =
-            Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-                .expect("open configured Kura");
-        let incarnation = Hash::prehashed([0xA1; Hash::LENGTH]);
-        kura.establish_or_verify_configured_primary_geometry_anchor(
-            lane_config.primary(),
-            incarnation,
-            LaneLifecycleParameterV1::catalog_hash(&configured),
-        )
-        .expect("bind configured primary");
-        let marker_path = lane_config
-            .primary()
-            .blocks_dir(&root)
-            .join(MARKER_FILE_NAME);
-        fs::write(
-            &marker_path,
-            LaneIncarnationMarker {
-                version: MARKER_VERSION,
-                lane_id: LaneId::SINGLE,
-                incarnation: Hash::prehashed([0xA2; Hash::LENGTH]),
-                activation_height: 0,
-                move_target_blocks: None,
-                move_target_merge: None,
-                block_store_digest: Hash::prehashed([0xA4; Hash::LENGTH]),
-                merge_log_digest: Hash::prehashed([0xA3; Hash::LENGTH]),
-            }
-            .encode(),
-        )
-        .expect("write foreign marker");
-        drop(kura);
-
-        Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-            .expect_err("foreign configured-primary marker must fail before Kura reconciliation");
-        let marker = decode_exact::<LaneIncarnationMarker>(
-            &fs::read(&marker_path).expect("foreign marker retained"),
-        )
-        .expect("decode retained marker");
-        assert_eq!(marker.incarnation, Hash::prehashed([0xA2; Hash::LENGTH]));
-    }
-
-    #[test]
-    fn configured_catalog_preflight_rejects_nonzero_physical_primary_without_mutation() {
-        let temp = TempDir::new().expect("temporary directory");
-        let nonzero_root = temp.path().join("nonzero-primary");
-        let nonzero_catalog = LaneCatalog::new(
-            nonzero!(2_u32),
-            vec![ModelLaneConfig {
-                id: LaneId::new(1),
-                alias: "not-physical-primary".to_owned(),
-                ..ModelLaneConfig::default()
-            }],
-        )
-        .expect("sparse nonzero-only catalog");
-        let nonzero_config = RuntimeLaneConfig::from_catalog(&nonzero_catalog);
-        let error = Kura::new_with_configured_lane_catalog(
-            &kura_config(&nonzero_root),
-            &nonzero_config,
-            &nonzero_catalog,
-        )
-        .expect_err("authenticated Kura must require physical lane zero");
-        assert_geometry_io_error(
-            &error,
-            ErrorKind::InvalidInput,
-            "authenticated configured catalog must contain physical primary lane zero",
-        );
-        assert!(!nonzero_root.exists());
-    }
-
-    #[test]
-    fn configured_catalog_preflight_refuses_to_bind_a_nonpristine_root() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        fs::create_dir_all(&root).expect("seed Kura root");
-        let sentinel = root.join("operator-ledger-data");
-        fs::write(&sentinel, b"must-not-adopt-or-delete").expect("seed foreign ledger data");
-        let configured = configured_primary_catalog("pristine-root-required");
-        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
-
-        let error =
-            Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-                .expect_err("a missing baseline must never bind an existing ledger root");
-        assert_geometry_io_error(
-            &error,
-            ErrorKind::InvalidData,
-            "cannot establish a configured-catalog baseline on a non-pristine Kura root",
-        );
-        assert_eq!(
-            fs::read(&sentinel).expect("foreign data retained"),
-            b"must-not-adopt-or-delete"
-        );
-        assert!(!root.join(JOURNAL_FILE_NAME).exists());
-        assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
-        assert_lane_paths_absent(&root, &lane_config);
-    }
-
-    #[test]
-    fn authenticated_primary_restore_heals_missing_lane_artifact_namespace() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let configured_catalog = configured_primary_catalog("authenticated-primary");
-        let configured = RuntimeLaneConfig::from_catalog(&configured_catalog);
-        let (incarnations, activation_heights) = initial_geometry();
-        let configured_catalog_hash = LaneLifecycleParameterV1::catalog_hash(&configured_catalog);
-
-        let (kura, _) = Kura::new_with_configured_lane_catalog(
-            &kura_config(&root),
-            &configured,
-            &configured_catalog,
-        )
-        .expect("open authenticated configured Kura");
-        kura.establish_or_verify_configured_primary_geometry_anchor(
-            configured.primary(),
-            incarnations[&LaneId::SINGLE],
-            configured_catalog_hash,
-        )
-        .expect("authenticate configured primary geometry");
-        let bindings = kura
-            .geometry_bindings(&configured, &incarnations, &activation_heights)
-            .expect("derive authenticated primary binding");
-        let lineage_root = unscoped_lineage_root(&bindings);
-        let primary_blocks = configured.primary().blocks_dir(&root);
-        let lane_artifacts = Kura::lane_artifact_dir(&primary_blocks);
-        if lane_artifacts.exists() {
-            fs::remove_dir(&lane_artifacts).expect("remove empty primary artifact namespace");
-        }
-        assert!(
-            !lane_artifacts.exists(),
-            "fixture must restore an authenticated primary without its empty artifact namespace"
-        );
-
-        kura.restore_lane_segments_with_geometry_at_height_and_lineage_root(
-            &configured,
-            &incarnations,
-            &activation_heights,
-            0,
-            lineage_root,
-        )
-        .expect("restore must durably heal the authenticated primary namespace");
-        let namespace = Kura::open_bound_progress_directory(&root, &lane_artifacts)
-            .expect("healed primary artifact namespace is descriptor-bound");
-        assert!(
-            kura.geometry_bound_progress_directory_unchanged(&namespace),
-            "healed primary artifact namespace must retain its durable identity"
-        );
-        drop(namespace);
-        drop(kura);
-
-        let (reopened, _) = Kura::new_with_configured_lane_catalog(
-            &kura_config(&root),
-            &configured,
-            &configured_catalog,
-        )
-        .expect("reopen authenticated configured Kura");
-        reopened
-            .restore_lane_segments_with_geometry_at_height_and_lineage_root(
-                &configured,
-                &incarnations,
-                &activation_heights,
-                0,
-                lineage_root,
-            )
-            .expect("authenticated namespace healing must be restart-idempotent");
-        let namespace = Kura::open_bound_progress_directory(&root, &lane_artifacts)
-            .expect("reopened primary artifact namespace is descriptor-bound");
-        assert!(
-            reopened.geometry_bound_progress_directory_unchanged(&namespace),
-            "reopened primary artifact namespace must retain its durable identity"
-        );
-    }
-
-    #[test]
-    fn configured_multilane_startup_defers_secondary_provisioning_to_geometry_journal() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let lane_count = NonZeroU32::new(2).expect("non-zero lane count");
-        let primary = ModelLaneConfig::default();
-        let secondary = ModelLaneConfig {
-            id: LaneId::new(1),
-            alias: "configured-secondary".to_owned(),
-            ..ModelLaneConfig::default()
-        };
-        let initial_catalog = LaneCatalog::new(lane_count, vec![primary.clone()])
-            .expect("configured startup base catalog");
-        let configured_catalog = LaneCatalog::new(lane_count, vec![primary, secondary])
-            .expect("configured startup two-lane catalog");
-        let initial = RuntimeLaneConfig::from_catalog(&initial_catalog);
-        let configured = RuntimeLaneConfig::from_catalog(&configured_catalog);
-        let initial_incarnations =
-            BTreeMap::from([(LaneId::SINGLE, Hash::prehashed([0x81; Hash::LENGTH]))]);
-        let configured_incarnations = BTreeMap::from([
-            (LaneId::SINGLE, initial_incarnations[&LaneId::SINGLE]),
-            (LaneId::new(1), Hash::prehashed([0x82; Hash::LENGTH])),
-        ]);
-        let initial_activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
-        let configured_activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 0)]);
-        let secondary_entry = configured.entry(LaneId::new(1)).expect("secondary lane");
-        let secondary_blocks = secondary_entry.blocks_dir(&root);
-        let secondary_merge = secondary_entry.merge_log_path(&root);
-
-        let (kura, _) = Kura::new_with_configured_lane_catalog(
-            &kura_config(&root),
-            &configured,
-            &configured_catalog,
-        )
-        .expect("open authenticated configured Kura");
-        kura.establish_or_verify_configured_primary_geometry_anchor(
-            initial.primary(),
-            initial_incarnations[&LaneId::SINGLE],
-            LaneLifecycleParameterV1::catalog_hash(&configured_catalog),
-        )
-        .expect("bind configured primary before publishing the full catalog");
-        assert!(
-            !secondary_blocks.exists() && !secondary_merge.exists(),
-            "authenticated Kura open must not precreate secondary storage without incarnation evidence"
-        );
-        assert!(
-            kura.lane_storage_entry(LaneId::new(1)).is_err(),
-            "authenticated Kura must not advertise an unowned secondary segment"
-        );
-
-        kura.apply_lane_geometry_transition(
-            &initial,
-            &configured,
-            &initial_incarnations,
-            &configured_incarnations,
-            &initial_activations,
-            &configured_activations,
-            &BTreeSet::new(),
-        )
-        .expect("journal configured secondary-lane creation");
-        kura.mark_lane_geometry_catalog_published(
-            &configured,
-            &configured_incarnations,
-            &configured_activations,
-            Some(LaneLifecycleParameterV1::catalog_hash(&configured_catalog)),
-        )
-        .expect("publish configured secondary-lane geometry");
-        let secondary_binding = kura
-            .geometry_bindings(
-                &configured,
-                &configured_incarnations,
-                &configured_activations,
-            )
-            .expect("configured geometry bindings")
-            .into_iter()
-            .find(|binding| binding.lane_id == LaneId::new(1))
-            .expect("secondary geometry binding");
-        kura.require_lane_marker(&secondary_binding)
-            .expect("secondary storage has the exact authoritative marker");
-        assert!(secondary_merge.is_file());
-        assert!(kura.lane_storage_entry(LaneId::new(1)).is_ok());
-
-        drop(kura);
-        let (reopened, _) = Kura::new_with_configured_lane_catalog(
-            &kura_config(&root),
-            &configured,
-            &configured_catalog,
-        )
-        .expect("reopen exact configured Kura");
-        reopened
-            .recover_lane_geometry_journal(
-                &configured,
-                &configured_incarnations,
-                &configured_activations,
-            )
-            .expect("reopen authenticates published configured geometry");
-        reopened
-            .require_lane_marker(&secondary_binding)
-            .expect("reopened secondary marker remains exact");
-
-        fs::remove_dir_all(&secondary_blocks).expect("simulate loss of published secondary blocks");
-        fs::remove_file(&secondary_merge).expect("simulate loss of published secondary merge log");
-        let error = reopened
-            .recover_lane_geometry_journal(
-                &configured,
-                &configured_incarnations,
-                &configured_activations,
-            )
-            .expect_err("published configured secondary must never be silently recreated empty");
-        assert_geometry_io_error(
-            &error,
-            ErrorKind::NotFound,
-            "durable lane geometry evidence is missing; refusing to provision an empty replacement",
-        );
-        assert!(!secondary_blocks.exists());
-        assert!(!secondary_merge.exists());
-    }
-
-    #[test]
-    fn configured_multilane_startup_rejects_unjournaled_secondary_storage() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let lane_count = NonZeroU32::new(2).expect("non-zero lane count");
-        let primary = ModelLaneConfig::default();
-        let secondary = ModelLaneConfig {
-            id: LaneId::new(1),
-            alias: "unjournaled-secondary".to_owned(),
-            ..ModelLaneConfig::default()
-        };
-        let initial_catalog = LaneCatalog::new(lane_count, vec![primary.clone()])
-            .expect("configured startup base catalog");
-        let configured_catalog = LaneCatalog::new(lane_count, vec![primary, secondary])
-            .expect("configured startup two-lane catalog");
-        let initial = RuntimeLaneConfig::from_catalog(&initial_catalog);
-        let configured = RuntimeLaneConfig::from_catalog(&configured_catalog);
-        let initial_incarnations =
-            BTreeMap::from([(LaneId::SINGLE, Hash::prehashed([0x91; Hash::LENGTH]))]);
-        let configured_incarnations = BTreeMap::from([
-            (LaneId::SINGLE, initial_incarnations[&LaneId::SINGLE]),
-            (LaneId::new(1), Hash::prehashed([0x92; Hash::LENGTH])),
-        ]);
-        let initial_activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
-        let configured_activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 0)]);
-        let secondary_blocks = configured
-            .entry(LaneId::new(1))
-            .expect("secondary lane")
-            .blocks_dir(&root);
-        Kura::establish_or_verify_configured_lane_catalog_baseline(
-            &root,
-            LaneLifecycleParameterV1::catalog_hash(&configured_catalog),
-        )
-        .expect("establish the authenticated baseline before injecting foreign storage");
-        fs::create_dir_all(&secondary_blocks).expect("seed unjournaled secondary directory");
-        let sentinel = secondary_blocks.join("operator-sentinel");
-        fs::write(&sentinel, b"must-not-adopt-or-delete").expect("seed unjournaled sentinel");
-
-        let (kura, _) = Kura::new_with_configured_lane_catalog(
-            &kura_config(&root),
-            &configured,
-            &configured_catalog,
-        )
-        .expect("authenticated Kura open preserves unproven secondary path for diagnosis");
-        let error = kura
-            .apply_lane_geometry_transition(
-                &initial,
-                &configured,
-                &initial_incarnations,
-                &configured_incarnations,
-                &initial_activations,
-                &configured_activations,
-                &BTreeSet::new(),
-            )
-            .expect_err("unjournaled secondary storage must not be adopted");
-        assert_geometry_io_error(
-            &error,
-            ErrorKind::AlreadyExists,
-            "lane storage already exists at a create target",
-        );
-        assert_eq!(
-            fs::read(&sentinel).expect("unjournaled sentinel retained"),
-            b"must-not-adopt-or-delete"
-        );
-        assert!(
-            kura.read_lane_geometry_journal()
-                .expect("configured baseline journal")
-                .records
-                .is_empty(),
-            "rejection must precede geometry intent publication"
-        );
-    }
-
-    #[test]
-    fn configured_catalog_preflight_recovers_exact_first_start_temp() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        fs::create_dir_all(&root).expect("Kura root");
-        let configured = configured_primary_catalog("temp-recovery");
-        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
-        let expected = LaneGeometryJournal {
-            configured_catalog_hash: Some(LaneLifecycleParameterV1::catalog_hash(&configured)),
-            ..LaneGeometryJournal::default()
-        };
-        fs::write(root.join(JOURNAL_TEMP_FILE_NAME), expected.encode())
-            .expect("simulate synced first-start temp before hard-link promotion");
-
-        Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-            .expect("reconstructed process must promote the exact baseline temp");
-        assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
-        let recovered = decode_exact::<LaneGeometryJournal>(
-            &fs::read(root.join(JOURNAL_FILE_NAME)).expect("promoted baseline journal"),
-        )
-        .expect("decode promoted baseline journal");
-        assert_eq!(recovered, expected);
-    }
-
-    #[test]
-    fn configured_catalog_preflight_cleans_exact_startup_owned_hard_link_temp() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let configured = configured_primary_catalog("link-recovery");
-        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
-        let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
-        Kura::establish_or_verify_configured_lane_catalog_baseline(&root, baseline)
-            .expect("establish baseline before simulated crash");
-        let journal_path = root.join(JOURNAL_FILE_NAME);
-        fs::hard_link(&journal_path, root.join(JOURNAL_TEMP_FILE_NAME))
-            .expect("simulate crash after durable hard-link promotion");
-
-        Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-            .expect("exact startup-owned hard-link temp must be cleaned before lane storage opens");
-        assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
-        assert!(journal_path.is_file());
-    }
-
-    #[test]
-    fn configured_catalog_preflight_rejects_unproven_restore_temp() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let configured = configured_primary_catalog("restore-temp");
-        let attempted = configured_primary_catalog("restore-must-not-open");
-        let attempted_lane_config = RuntimeLaneConfig::from_catalog(&attempted);
-        let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
-        Kura::establish_or_verify_configured_lane_catalog_baseline(&root, baseline)
-            .expect("establish baseline");
-        let journal_path = root.join(JOURNAL_FILE_NAME);
-        fs::copy(&journal_path, root.join(JOURNAL_RESTORE_TEMP_FILE_NAME))
-            .expect("seed byte-identical but unowned restore temp");
-
-        Kura::new_with_configured_lane_catalog(
-            &kura_config(&root),
-            &attempted_lane_config,
-            &configured,
-        )
-        .expect_err("byte equality does not prove restore-temp ownership");
-        assert_lane_paths_absent(&root, &attempted_lane_config);
-        assert!(root.join(JOURNAL_RESTORE_TEMP_FILE_NAME).is_file());
-    }
-
-    #[test]
-    fn configured_catalog_preflight_discards_uncommitted_restore_temp() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let configured = configured_primary_catalog("restore-temp");
-        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
-        let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
-        Kura::establish_or_verify_configured_lane_catalog_baseline(&root, baseline)
-            .expect("establish baseline");
-        let journal_path = root.join(JOURNAL_FILE_NAME);
-        let authoritative = fs::read(&journal_path).expect("authoritative journal bytes");
-        let root_identity = configured_catalog_store_root_identity(&root).expect("root identity");
-        write_initial_configured_catalog_temp(
-            &root,
-            root_identity,
-            &root.join(JOURNAL_RESTORE_TEMP_FILE_NAME),
-            b"synced-but-uncommitted-restore-bytes",
-        )
-        .expect("simulate crash before restore-temp rename");
-
-        Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-            .expect("the final journal is the sole restore commit point");
-        assert!(!root.join(JOURNAL_RESTORE_TEMP_FILE_NAME).exists());
-        assert_eq!(
-            fs::read(&journal_path).expect("journal retained"),
-            authoritative
-        );
-    }
-
-    #[test]
-    fn configured_catalog_preflight_discards_different_uncommitted_publication_temp() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let configured = configured_primary_catalog("publication-temp");
-        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
-        let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
-        Kura::establish_or_verify_configured_lane_catalog_baseline(&root, baseline)
-            .expect("establish baseline");
-        let journal_path = root.join(JOURNAL_FILE_NAME);
-        let authoritative = fs::read(&journal_path).expect("authoritative journal bytes");
-        let different = LaneGeometryJournal {
-            configured_catalog_hash: Some(Hash::new(b"different-uncommitted-catalog")),
-            ..LaneGeometryJournal::default()
-        }
-        .encode();
-        let root_identity = configured_catalog_store_root_identity(&root).expect("root identity");
-        write_initial_configured_catalog_temp(
-            &root,
-            root_identity,
-            &root.join(JOURNAL_TEMP_FILE_NAME),
-            &different,
-        )
-        .expect("simulate crash before publication-temp rename");
-
-        Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-            .expect("the final journal is the sole publication commit point");
-        assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
-        assert_eq!(
-            fs::read(&journal_path).expect("journal retained"),
-            authoritative
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn configured_catalog_preflight_rejects_reserved_temp_symlink_without_touching_target() {
-        use std::os::unix::fs::symlink;
-
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let outside = temp.path().join("outside-temp-target");
-        fs::write(&outside, b"operator-owned").expect("outside sentinel");
-        let configured = configured_primary_catalog("reserved-temp-symlink");
-        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
-        let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
-        Kura::establish_or_verify_configured_lane_catalog_baseline(&root, baseline)
-            .expect("establish authoritative baseline");
-        let reserved = root.join(JOURNAL_TEMP_FILE_NAME);
-        symlink(&outside, &reserved).expect("reserved temp symlink");
-
-        Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-            .expect_err("reserved temp symlinks must never be deleted or followed");
-        assert!(reserved.is_symlink());
-        assert_eq!(
-            fs::read(&outside).expect("outside sentinel"),
-            b"operator-owned"
-        );
-    }
-
-    #[test]
-    fn configured_catalog_preflight_rejects_tampered_v6_structure_before_lane_mutation() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let configured = configured_primary_catalog("structural-baseline");
-        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
-        let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
-        Kura::establish_or_verify_configured_lane_catalog_baseline(&root, baseline)
-            .expect("establish valid v6 baseline");
-
-        let journal_path = root.join(JOURNAL_FILE_NAME);
-        let mut journal = decode_exact::<LaneGeometryJournal>(
-            &fs::read(&journal_path).expect("read valid baseline journal"),
-        )
-        .expect("decode valid baseline journal");
-        let previous_catalog = Hash::new(b"forged previous catalog");
-        let previous_lineage_root = Hash::new(b"forged previous lineage");
-        let updated_catalog = Hash::new(b"forged updated catalog");
-        let updated_lineage_root = Hash::new(b"forged updated lineage");
-        journal.records.push(LaneGeometryIntent {
-            transition_id: geometry_transition_id(
-                0,
-                0,
-                previous_catalog,
-                previous_lineage_root,
-                updated_catalog,
-                updated_lineage_root,
-            ),
-            transition_sequence: 0,
-            transition_height: 0,
-            previous_catalog,
-            previous_lineage_root,
-            updated_catalog,
-            updated_lineage_root,
-            previous_bindings: Vec::new(),
-            updated_bindings: Vec::new(),
-            phase: LaneGeometryPhase::Intent,
-            operations: Vec::new(),
-        });
-        fs::write(&journal_path, journal.encode()).expect("write decodable structural forgery");
-
-        Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-            .expect_err("correct baseline must not mask a malformed v6 journal");
-        assert_lane_paths_absent(&root, &lane_config);
-    }
-
-    #[test]
-    fn configured_catalog_preflight_rejects_version_mismatch_before_lane_mutation() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let configured = configured_primary_catalog("version-baseline");
-        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
-        let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
-        Kura::establish_or_verify_configured_lane_catalog_baseline(&root, baseline)
-            .expect("establish valid v6 baseline");
-        let journal_path = root.join(JOURNAL_FILE_NAME);
-        let mut journal = decode_exact::<LaneGeometryJournal>(
-            &fs::read(&journal_path).expect("read valid baseline journal"),
-        )
-        .expect("decode valid baseline journal");
-        journal.version = JOURNAL_VERSION.saturating_add(1);
-        fs::write(&journal_path, journal.encode()).expect("write unsupported journal version");
-
-        Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-            .expect_err("unsupported journal version must fail at the startup boundary");
-        assert_lane_paths_absent(&root, &lane_config);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn configured_catalog_preflight_rejects_journal_derived_symlink_before_lane_mutation() {
-        use std::os::unix::fs::symlink;
-
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let configured = LaneCatalog::default();
-        let (initial, extended) = initial_and_extended_configs();
-        let (initial_incarnations, initial_activations) = initial_geometry();
-        let (extended_incarnations, extended_activations) = extended_geometry();
-        let (kura, _) =
-            Kura::new_with_configured_lane_catalog(&kura_config(&root), &initial, &configured)
-                .expect("establish valid configured startup");
-        kura.apply_lane_geometry_transition(
-            &initial,
-            &extended,
-            &initial_incarnations,
-            &extended_incarnations,
-            &initial_activations,
-            &extended_activations,
-            &BTreeSet::new(),
-        )
-        .expect("persist a valid journal-derived archive path");
-        let journal = kura
-            .read_lane_geometry_journal()
-            .expect("transition journal");
-        let relative_link = &journal.records[0].operations[0].archived_blocks_path;
-        let link = root.join(relative_link);
-        fs::create_dir_all(link.parent().expect("archive path parent"))
-            .expect("archive path parent");
-        let outside = temp.path().join("outside");
-        fs::create_dir(&outside).expect("outside directory");
-        symlink(&outside, &link).expect("inject journal-derived symlink");
-        drop(kura);
-
-        Kura::new_with_configured_lane_catalog(&kura_config(&root), &initial, &configured)
-            .expect_err("journal-derived symlink must fail before opening attempted lane storage");
-        assert!(link.is_symlink());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn configured_catalog_preflight_rejects_journal_symlink_before_lane_mutation() {
-        use std::os::unix::fs::symlink;
-
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let configured = configured_primary_catalog("journal-symlink-baseline");
-        let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
-        Kura::establish_or_verify_configured_lane_catalog_baseline(&root, baseline)
-            .expect("establish valid configured baseline");
-        let journal_path = root.join(JOURNAL_FILE_NAME);
-        let outside_journal = temp.path().join("outside-journal.norito");
-        fs::rename(&journal_path, &outside_journal).expect("move journal outside Kura root");
-        symlink(&outside_journal, &journal_path).expect("replace journal with a symlink");
-
-        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
-        Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-            .expect_err("configured-catalog journal symlink must fail closed");
-        assert_lane_paths_absent(&root, &lane_config);
-        assert!(journal_path.is_symlink());
-        assert!(outside_journal.is_file());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn configured_catalog_preflight_rejects_journal_identity_swap_before_lane_mutation() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let configured = configured_primary_catalog("identity-baseline");
-        let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
-        Kura::establish_or_verify_configured_lane_catalog_baseline(&root, baseline)
-            .expect("establish valid configured baseline");
-        let journal_path = root.join(JOURNAL_FILE_NAME);
-        fs::copy(&journal_path, root.join(JOURNAL_IDENTITY_SWAP_FILE_NAME))
-            .expect("prepare same-content replacement inode");
-        Kura::replace_configured_catalog_journal_after_open_for_test(&root);
-
-        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
-        Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-            .expect_err("journal identity replacement during read must fail closed");
-        assert_lane_paths_absent(&root, &lane_config);
-        assert!(root.join(JOURNAL_IDENTITY_DISPLACED_FILE_NAME).is_file());
-    }
+    include!("lane_geometry_tests/00_retirement.rs");
+    include!("lane_geometry_tests/01_retirement_and_recovery.rs");
+    include!("lane_geometry_tests/02_geometry_moves_and_journal.rs");
+    include!("lane_geometry_tests/03_gc_and_startup.rs");
 }

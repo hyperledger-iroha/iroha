@@ -20,7 +20,7 @@ use super::{
 use crate::block::BlockHeader;
 
 /// Current Norito layout version of [`V2FinalityArtifact`].
-pub const V2_FINALITY_ARTIFACT_VERSION: u16 = 3;
+pub const V2_FINALITY_ARTIFACT_VERSION: u16 = 4;
 /// Maximum encoded BLS proof-of-possession bytes retained per validator.
 pub const MAX_VALIDATOR_POP_BYTES: usize = 256;
 
@@ -793,12 +793,13 @@ mod tests {
     }
 
     fn execution_commitment(seed: u8) -> super::super::ExecutionCommitment {
-        super::super::ExecutionCommitment::new(
+        super::super::ExecutionCommitment::new_without_merge_carrier(
             Hash::new([seed, 3]),
             Hash::new([seed, 4]),
             Hash::new([seed, 5]),
             None,
             0,
+            1,
             Hash::new([seed, 6]),
         )
         .expect("canonical fixture execution commitment")
@@ -858,6 +859,20 @@ mod tests {
 
         assert_eq!(decoded, artifact);
         decoded.validate().expect("roundtrip remains valid");
+    }
+
+    #[test]
+    fn artifact_rejects_legacy_v3_layout() {
+        let mut legacy = artifact();
+        legacy.format_version = 3;
+
+        assert_eq!(
+            legacy.validate(),
+            Err(V2FinalityValidationError::UnsupportedFormatVersion {
+                expected: V2_FINALITY_ARTIFACT_VERSION,
+                actual: 3,
+            })
+        );
     }
 
     #[test]

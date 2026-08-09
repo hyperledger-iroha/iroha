@@ -49,7 +49,7 @@ impl<F: ProofScalar> Drop for NormalizedDivisor<F> {
 }
 
 impl<F: ProofScalar> NormalizedDivisor<F> {
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(super) fn eval(&self, x: F, y: F) -> F {
         let mut result = self.zero + (self.y * y);
         let mut x_power = x;

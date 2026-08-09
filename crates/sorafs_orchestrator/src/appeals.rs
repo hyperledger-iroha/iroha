@@ -735,25 +735,17 @@ pub struct AppealVerdictParseError {
 impl FromStr for AppealVerdict {
     type Err = AppealVerdictParseError;
 
+    /// Parse one exact canonical V1 verdict spelling.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let normalized = s.trim().to_ascii_lowercase();
-        match normalized.as_str() {
+        match s {
             "uphold" => Ok(Self::Decision(AppealDecision::Uphold)),
             "overturn" => Ok(Self::Decision(AppealDecision::Overturn)),
             "modify" => Ok(Self::Decision(AppealDecision::Modify)),
-            "withdrawn_before_panel"
-            | "withdrawn-before-panel"
-            | "withdrawn_pre"
-            | "withdrawn-pre" => Ok(Self::WithdrawnBeforePanel),
-            "withdrawn_after_panel"
-            | "withdrawn-after-panel"
-            | "withdrawn_post"
-            | "withdrawn-post" => Ok(Self::WithdrawnAfterPanel),
+            "withdrawn_before_panel" => Ok(Self::WithdrawnBeforePanel),
+            "withdrawn_after_panel" => Ok(Self::WithdrawnAfterPanel),
             "frivolous" => Ok(Self::Frivolous),
-            "escalated" | "pending" => Ok(Self::Escalated),
-            _ => Err(AppealVerdictParseError {
-                raw: s.trim().to_string(),
-            }),
+            "escalated" => Ok(Self::Escalated),
+            _ => Err(AppealVerdictParseError { raw: s.to_string() }),
         }
     }
 }
@@ -1816,20 +1808,40 @@ mod tests {
     }
 
     #[test]
-    fn appeal_verdict_parser_accepts_decisions_and_aliases() {
-        assert_eq!(
-            "overturn".parse::<AppealVerdict>().expect("decision"),
-            AppealVerdict::Decision(AppealDecision::Overturn)
-        );
-        assert_eq!(
-            "withdrawn-post".parse::<AppealVerdict>().expect("alias"),
-            AppealVerdict::WithdrawnAfterPanel
-        );
-        assert_eq!(
-            "pending".parse::<AppealVerdict>().expect("alias"),
-            AppealVerdict::Escalated
-        );
-        assert!("unknown".parse::<AppealVerdict>().is_err());
+    fn appeal_verdict_parser_accepts_only_exact_v1_spellings() {
+        let cases = [
+            ("uphold", AppealVerdict::Decision(AppealDecision::Uphold)),
+            (
+                "overturn",
+                AppealVerdict::Decision(AppealDecision::Overturn),
+            ),
+            ("modify", AppealVerdict::Decision(AppealDecision::Modify)),
+            (
+                "withdrawn_before_panel",
+                AppealVerdict::WithdrawnBeforePanel,
+            ),
+            ("withdrawn_after_panel", AppealVerdict::WithdrawnAfterPanel),
+            ("frivolous", AppealVerdict::Frivolous),
+            ("escalated", AppealVerdict::Escalated),
+        ];
+        for (spelling, expected) in cases {
+            assert_eq!(spelling.parse::<AppealVerdict>().unwrap(), expected);
+        }
+        for alias in [
+            "withdrawn-before-panel",
+            "withdrawn_pre",
+            "withdrawn-post",
+            "pending",
+            "Overturn",
+            " overturn",
+            "overturn ",
+            "unknown",
+        ] {
+            assert!(
+                alias.parse::<AppealVerdict>().is_err(),
+                "noncanonical appeal verdict {alias:?} must be rejected"
+            );
+        }
     }
 
     #[test]

@@ -12,12 +12,13 @@ use iroha_data_model::privacy::{
 };
 use thiserror::Error;
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::io_air::ZkX509IoChannelWitnessV1;
 use super::{
     der_air::ZK_X509_RFC5280_MAX_TOP_LEVEL_DOCUMENT_BYTES_V1,
     io_air::{
         ZK_X509_IO_FIXED_CAPACITY_ROWS_V1, ZkX509IoAirErrorV1, ZkX509IoChannelDeclarationV1,
-        ZkX509IoChannelWitnessV1, ZkX509IoEndpointV1, ZkX509IoSegmentRoleV1,
-        validate_declarations_v1,
+        ZkX509IoEndpointV1, ZkX509IoSegmentRoleV1, validate_declarations_v1,
     },
     profile::{
         ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1, ZK_X509_MAX_SERIAL_BYTES_V1,
@@ -60,6 +61,7 @@ pub(crate) struct ZkX509MainIoDeclarationsV1 {
 
 impl ZkX509MainIoDeclarationsV1 {
     /// Reject witness-selected channel metadata before either base table is built.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn validate_witness_declarations_v1(
         &self,
         witnesses: &[ZkX509IoChannelWitnessV1],
@@ -76,6 +78,7 @@ impl ZkX509MainIoDeclarationsV1 {
     }
 
     /// Replay the statement-only compiler and reject any altered plan field.
+    #[cfg(test)]
     pub(crate) fn validate_for_statement_v1(
         &self,
         statement: &IrohaZkX509StarkP256StatementV1,

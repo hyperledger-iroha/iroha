@@ -25,7 +25,7 @@ class TransportResponse(
             if (source == null) return emptyMap()
             val merged = TreeMap<String, MutableList<String>>(String.CASE_INSENSITIVE_ORDER)
             for ((key, value) in source) {
-                merged.getOrPut(key) { ArrayList() }.addAll(value ?: emptyList())
+                merged.getOrPut(key) { ArrayList() }.addAll(value)
             }
             return merged.mapValues { (_, values) -> values.toList() }
         }
@@ -61,7 +61,7 @@ class TransportResponse(
             this.headers.clear()
             if (headers != null) {
                 for ((key, value) in headers) {
-                    this.headers[key] = value?.toMutableList() ?: mutableListOf()
+                    this.headers[key] = value.toMutableList()
                 }
             }
             return this

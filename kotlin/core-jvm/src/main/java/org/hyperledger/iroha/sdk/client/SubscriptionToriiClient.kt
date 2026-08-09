@@ -181,11 +181,11 @@ class SubscriptionToriiClient private constructor(builder: Builder) {
         fun executor(executor: HttpTransportExecutor): Builder { this.executor = executor; return this }
         fun baseUri(baseUri: URI): Builder { this.baseUri = baseUri; return this }
         fun timeout(timeout: Duration?): Builder { this.timeout = timeout; return this }
-        fun addHeader(name: String, value: String): Builder { if (name != null && value != null) defaultHeaders[name] = value; return this }
-        fun defaultHeaders(headers: Map<String, String>?): Builder { defaultHeaders.clear(); headers?.forEach { (k, v) -> if (k != null && v != null) defaultHeaders[k] = v }; return this }
+        fun addHeader(name: String, value: String): Builder { defaultHeaders[name] = value; return this }
+        fun defaultHeaders(headers: Map<String, String>?): Builder { defaultHeaders.clear(); headers?.forEach { (key, value) -> defaultHeaders[key] = value }; return this }
         fun addObserver(observer: ClientObserver?): Builder { if (observer != null) observers.add(observer); return this }
         fun observers(observers: List<ClientObserver>?): Builder { this.observers.clear(); observers?.forEach { addObserver(it) }; return this }
-        fun build(): SubscriptionToriiClient { check(baseUri != null) { "baseUri is required" }; return SubscriptionToriiClient(this) }
+        fun build(): SubscriptionToriiClient = SubscriptionToriiClient(this)
     }
 
     companion object {

@@ -14,8 +14,7 @@ class ContractCallResponse(
     @JvmField val entrypoint: String?,
     @JvmField val transactionTtlMs: Long?,
     @JvmField val entrypointHashHex: String?,
-    @JvmField val transactionScaffoldB64: String?,
-    @JvmField val signedTransactionB64: String?,
+    @JvmField val transactionPayloadB64: String?,
     @JvmField val signingMessageB64: String?,
     @JvmField val operationReceipt: ContractOperationReceipt,
 )

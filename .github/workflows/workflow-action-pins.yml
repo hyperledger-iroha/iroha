@@ -28,7 +28,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install pinned workflow-test dependency
-        run: python3 -m pip install --disable-pip-version-check pytest==8.4.2
+        run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
       - name: Exercise the fail-closed checker
         run: python3 scripts/tests/check_workflow_action_pins_test.py
       - name: Enforce immutable action references

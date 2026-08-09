@@ -1,0 +1,207 @@
+from __future__ import annotations
+
+import base64
+import json
+from urllib.parse import urlsplit
+
+import pytest
+import requests
+
+from iroha_python import (
+    Ed25519KeyPair,
+    ExplorerCursorMeta,
+    ExplorerRwasPage,
+    Instruction,
+    ToriiClient,
+)
+
+
+class FakeSession:
+    def __init__(self, responses: list[requests.Response]):
+        self.responses = responses
+        self.calls: list[dict[str, object]] = []
+
+    def request(self, method: str, url: str, **kwargs: object) -> requests.Response:
+        self.calls.append(
+            {
+                "method": method,
+                "path": urlsplit(url).path,
+                "params": kwargs.get("params"),
+                "data": kwargs.get("data"),
+            }
+        )
+        if not self.responses:
+            raise AssertionError(f"unexpected request {method} {url}")
+        response = self.responses.pop(0)
+        response.url = url
+        return response
+
+
+def response(status: int, payload: object) -> requests.Response:
+    result = requests.Response()
+    result.status_code = status
+    result._content = json.dumps(payload).encode("utf-8")
+    result.headers["Content-Type"] = "application/json"
+    return result
+
+
+def account_address(seed: int, discriminant: int = 0x02F1) -> str:
+    return Ed25519KeyPair.from_private_key(bytes([seed] * 32)).default_account_id(
+        "wonderland",
+        discriminant,
+    )
+
+
+def canonical_proof_attachment(*, vk_name: str) -> dict[str, object]:
+    return {
+        "backend": "halo2/ipa",
+        "proof": {"backend": "halo2/ipa", "bytes": b"proof-bytes"},
+        "vk_ref": {"backend": "halo2/ipa", "name": vk_name},
+    }
+
+
+@pytest.mark.parametrize("quantity", ["1.0", "01", "+1", "-1", 1, None])
+def test_asset_balance_rejects_noncanonical_or_untyped_quantities(quantity: object) -> None:
+    session = FakeSession(
+        [
+            response(
+                200,
+                {
+                    "items": [
+                        {
+                            "asset_id": "canonical-ds-id#adult@is",
+                            "asset_alias": "ds#wonderland.is",
+                            "quantity": quantity,
+                        }
+                    ],
+                    "total": 1,
+                },
+            )
+        ]
+    )
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    with pytest.raises((TypeError, ValueError)):
+        client.asset_balance("adult@is", "ds#wonderland.is")
+
+
+def test_explorer_rwa_list_uses_strict_cursor_contract() -> None:
+    cursor = base64.urlsafe_b64encode(b"canonical explorer cursor").rstrip(b"=").decode()
+    payload = {
+        "pagination": {"limit": 2, "next_cursor": cursor, "has_more": True},
+        "items": [
+            {
+                "id": "lot-001$commodities",
+                "owned_by": "account",
+                "quantity": "10",
+                "held_quantity": "2",
+                "primary_reference": "warehouse-1",
+                "status": None,
+                "is_frozen": False,
+                "metadata": {},
+            }
+        ],
+    }
+    session = FakeSession([response(200, payload)])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    page = client.list_explorer_rwas_typed(
+        cursor=cursor,
+        limit=2,
+        owned_by="account",
+        domain="commodities",
+    )
+
+    assert page.pagination == ExplorerCursorMeta(
+        limit=2,
+        next_cursor=cursor,
+        has_more=True,
+    )
+    assert [item.id for item in page.items] == ["lot-001$commodities"]
+    assert session.calls[0]["params"] == {
+        "cursor": cursor,
+        "limit": 2,
+        "owned_by": "account",
+        "domain": "commodities",
+    }
+
+
+@pytest.mark.parametrize("limit", [0, 101, True, 1.5])
+def test_explorer_rwa_list_rejects_invalid_limit_before_dispatch(limit: object) -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    with pytest.raises((TypeError, ValueError)):
+        client.list_explorer_rwas(limit=limit)  # type: ignore[arg-type]
+    assert session.calls == []
+
+
+@pytest.mark.parametrize("cursor", ["", "padded=", "a", "contains space"])
+def test_explorer_rwa_list_rejects_noncanonical_cursor_before_dispatch(cursor: str) -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    with pytest.raises(ValueError, match="cursor"):
+        client.list_explorer_rwas(cursor=cursor)
+    assert session.calls == []
+
+
+def test_explorer_cursor_response_rejects_retired_or_inconsistent_fields() -> None:
+    with pytest.raises(TypeError, match="exactly"):
+        ExplorerCursorMeta.from_payload(
+            {"page": 1, "per_page": 25, "total_pages": 1, "total_items": 0}
+        )
+    with pytest.raises(ValueError, match="next_cursor"):
+        ExplorerCursorMeta.from_payload(
+            {"limit": 25, "next_cursor": None, "has_more": True}
+        )
+    with pytest.raises(TypeError, match="unknown"):
+        ExplorerRwasPage.from_payload(
+            {
+                "pagination": {"limit": 25, "next_cursor": None, "has_more": False},
+                "items": [],
+                "total_items": 0,
+            }
+        )
+
+
+def test_explorer_rwa_list_hard_cuts_retired_page_arguments() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        client.list_explorer_rwas(page=1, per_page=25)  # type: ignore[call-arg]
+
+
+def test_unshield_instruction_uses_exact_output_free_wire_shape() -> None:
+    instruction = Instruction.unshield_prepared(
+        "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+        account_address(0x62),
+        "3",
+        ["dd" * 32],
+        canonical_proof_attachment(vk_name="vk_unshield"),
+        root_hint="ff" * 32,
+    )
+    instruction_json = json.loads(instruction.to_json())
+    assert isinstance(instruction_json, dict), (
+        "ABI-21 native Instruction.to_json() must return decoded instruction fields"
+    )
+    unshield_payload = next(
+        nested["Unshield"]
+        for nested in instruction_json.values()
+        if isinstance(nested, dict) and "Unshield" in nested
+    )
+    assert set(unshield_payload) == {
+        "asset",
+        "to",
+        "public_amount",
+        "inputs",
+        "proof",
+        "root_hint",
+    }
+
+    roundtrip = Instruction.from_json(json.dumps(instruction_json))
+    assert roundtrip.to_norito_bytes() == instruction.to_norito_bytes()
+
+    unshield_payload["outputs"] = []
+    with pytest.raises(ValueError, match="invalid instruction JSON|unknown field.*outputs"):
+        Instruction.from_json(json.dumps(instruction_json))

@@ -1,10 +1,17 @@
 # Sumeragi v2 formal verification
 
-This directory is the formal corridor for the production Sumeragi v2
-consensus protocol. The authoritative protocol is revision 4. It admits only
-unit-vote committees with exact `n = 3f + 1` geometry, `1 <= f <= 10`, and
-therefore exactly 4, 7, ..., 31 validators with quorum `q = 2f + 1`. Stake may
-affect election or eligibility; it never weights a consensus or timeout vote.
+This directory is the first-release formal corridor for the production
+Sumeragi v2 consensus protocol. There is no legacy Sumeragi proof corridor.
+The model fixes protocol revision 4 and is parameterized over arbitrary finite
+frozen rosters; production separately enforces the release limit of 128
+validators. Mechanization status is recorded per obligation in the proof
+ledger. The first-release implementation likewise has one canonical decoder:
+an omitted `proposal_round` is invalid rather than interpreted as the vote or
+certificate round.
+The production protocol admits only unit-vote committees with exact
+`n = 3f + 1` geometry, `1 <= f <= 10`, and therefore exactly 4, 7, ..., 31
+validators with quorum `q = 2f + 1`. Stake may affect election or eligibility;
+it never weights a consensus or timeout vote.
 
 Revision 4 deterministically rotates a height-seeded roster permutation. Set A
 contains the first `q` members, with the leader first and proxy tail last; Set B
@@ -195,15 +202,18 @@ height-context state are not migrated in place.
   refinement; they are not independent ledger rows.
 - `SumeragiV2TypedRolloverHandoff.tla`,
   `SumeragiV2TypedRolloverHandoffProofs.tla`, the shared mutation module, and
+  `SumeragiV2TypedRolloverHandoffLivenessMutation.tla` plus
   `SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation.tla` isolate the
   move-only service/transport owner pair, final empty-corridor seal, exact
   predecessor and immediate-successor receipt, retry preservation, and
-  late-callback isolation. The source seal covers these four modules, one fixed
-  config, and 43 mutation configs (48 artifacts total). The shared matrix owns
-  42 mutations; the dedicated repeated-handoff mutant bypasses the one-shot
+  late-callback isolation. The source seal covers these five modules, three
+  repaired configs, and 45 mutation configs (53 artifacts total). The shared
+  safety/action matrix owns 42 mutations, the liveness module owns two fairness
+  mutations, and the dedicated repeated-handoff mutant bypasses the one-shot
   predecessor-transport gate after restart restore. The proof module contains
-  38 theorem declarations and all 38 retain proof bodies, including the two
-  conditional local-liveness theorems. Bootstrap root replacement now binds the selected
+  134 theorem declarations: 38 root model/safety theorems and 96 liveness
+  helpers, all with explicit proof directives. Bootstrap root replacement now
+  binds the selected
   durable snapshot to the exact initial snapshot for the current target roster;
   the existing wrong-bootstrap-projection mutant changes that target while
   publishing the old candidate and is rejected by this exact binding.
@@ -214,12 +224,12 @@ height-context state are not migrated in place.
   lifecycle journal; it commits the changed-roster generation and empty
   responder projection before clearing memory and never invents an
   authenticated close prefix. Same-roster rehydration preserves generation and
-  responder ownership. The earlier strict and bounded receipts predate this
+  responder ownership. The earlier strict TLAPS receipts predate this
   authority-gated relation, V3 bootstrap adoption, cleanup ordering, and root
-  trust boundary, so fresh validation remains pending. The proved typed
-  support stays transitively bound to its reviewed `specified_unproved`
-  top-level production-refinement consumer; no support row is promoted into
-  the ledger.
+  trust boundary, so fresh strict proof validation remains pending. These typed
+  proof-script claims stay transitively bound to their reviewed
+  `specified_unproved` top-level consumer; no support row is promoted into the
+  ledger.
   Neither the model nor historical bounded evidence proves eventual finality
   validation, network delivery, writer flush, recovery after failure, repeated
   rollover, or Rust-to-TLA refinement.
@@ -469,14 +479,16 @@ height-context state are not migrated in place.
   witness, not a release invariant or deductive proof.
 - `SumeragiV2AutoscaleLifecycle.tla`,
   `SumeragiV2NativeApplicationEvidence.tla`,
-  `SumeragiV2AutonomousReservationCarrier.tla`, and
-  `SumeragiV2QueuePlanAdmissionRegistry.tla` are the bounded multilane
+  `SumeragiV2AutonomousReservationCarrier.tla`,
+  `SumeragiV2QueuePlanAdmissionRegistry.tla`, and
+  `SumeragiV2KuraReplicaRetention.tla` are the bounded multilane
   closure kernels. Their fixed configurations check storage-before-activation,
   evidence-aware retirement, fresh incarnation reuse, durable Native
   publication/pruning order, same-route control-only treatment, unchanged
   reservation identity, single ownership, a control-only autonomous anchor,
   durable full-candidate authorization, ordered two-phase release, ABA-safe
-  recreation, at-most-once canonical application, exact global QueuePlan CAS,
+  recreation, exact pristine/post-block-pre-vote/finalized carrier metadata,
+  at-most-once canonical application, exact global QueuePlan CAS,
   certificate-before-acceptance durability, Exact-gated queue eligibility,
   immutable admission tombstones, and cancellation. The closure-ledger
   predicates additionally cover atomic route publication, quorum-bound drain
@@ -484,19 +496,92 @@ height-context state are not migrated in place.
   contiguous active routes, exact grouped application, authenticated
   manifests, startup repair/latest-index exactness, durable reservation
   ownership, route/incarnation-first merge prefixes, canonical re-execution,
-  restart ownership partitioning, and observer-only monotonic stage evidence
-  derived from durable State/Kura artifacts. Thirty-seven `_bug.cfg` controls
-  deliberately weaken one boundary each and must produce the named invariant
-  counterexample.
+  restart ownership partitioning, single-signer authenticated canonical-body
+  recovery, unified read-only ordinary/Native startup evidence planning,
+  coalesced generic body recovery, bidirectional merge-carrier validation,
+  post-cache carrier reconciliation, exact historical-context installation,
+  Queue-gated all-group application/readback, and observer-only monotonic stage
+  evidence derived from durable State/Kura artifacts. The autonomous kernel
+  also separates durable Pending lifecycle records from Queue terminal
+  authority, requires independent canonical-carrier cleanup or exact release
+  finalization authority, models move-only positive Queue terminal evidence
+  before Kura Complete, makes recovered carrier cleanup one complete
+  independently authenticated all-group preflight, and takes one immutable
+  Queue ownership snapshot before the startup sweep. The sweep completes only
+  all-empty units; if any member is Queue-owned it defers the whole carrier
+  unit into normal planning and application under the original receipt, with
+  publication remaining closed until both members complete and Pending
+  readback is empty. The separate Kura
+  retention kernel covers signed adverts arriving directly from their
+  advertised keeper, exact finality/wire identity, deterministic `f + 1`
+  keeper selection, local pinning, all-selected-remote freshness, TTL and
+  restart invalidation, checked registry capacity, bounded refresh, and the
+  final pre-stage recheck. The autonomous producer bindings additionally cover
+  the move-only Queue V4/V5 activation fence, frozen height-context slot-hash
+  recomputation, checked `ActivateKura`, and the Kura payload sink before
+  publication. The first autonomous execution-input append is bound to a
+  repair-disabled exact payload reconstruction, move-only authorization, and
+  checked `PersistExecutionInput` projection before its indexed data/index
+  sink; exact replay is a storage stutter. They also bind the first READY-QC write to an exact
+  payload/certificate authorization and checked `PersistReadyQc` projection
+  before the durable Kura view-state sink; exact replay is a stutter. The first
+  autonomous certified-session write similarly consumes an exact
+  payload/input/READY/Commit/source authorization and checked `LaneCommit`
+  projection before the durable latest-frontier sink; exact replay remains a
+  stutter. The first autonomous slot-retirement write consumes an exact
+  payload/group/retirement/path authorization and checked
+  `PersistKuraRetirement` projection before the validated atomic view-state
+  sink. Claim release preflights the complete ordered on-disk group before any
+  mutation, accepts only canonical crash prefixes, and consumes an exact
+  path/replacement authorization with checked `AdvanceReleasePendingPrefix` or
+  `AdvanceReleasedPrefix` immediately before each synced atomic replacement.
+  Invalid mixed-stage groups are tested to remain byte-identical; canonical
+  restart prefixes and exact released retries are tested as idempotent. This is
+  a newly source-bound production slice, not completion of the still-open
+  production trace-extraction theorem. Kura
+  replica production bindings include the exact durable
+  height/hash tip, body-free source token and complete-source revalidation,
+  configured two-millisecond TTL and one-millisecond refresh minima,
+  evictable-first window, fixed eight-probe/one-fanout turn,
+  retained retry, scan-start interval anchoring, active-window-bounded rollover
+  wake-up after durable handoff, guarded publication, and one process-lifetime
+  runner owner; no Kura source check remains pending. The source anchor
+  `durable_kura_replica_advert_rollover_claim_rejects_identity_and_recipient_drift`
+  spans actual Kura refresh, exact-output backpressure, durable-handoff urgent
+  wake-up, predecessor drop, successor retry, frozen recipients, and Kura
+  revalidation. Fresh isolated Rust 1.93.1 locked/offline slices passed the 18
+  exact Kura replica tests and four exact configuration tests; the complete
+  524-test `G-UNIT` run, formal-engine receipts, and network corridors remain
+  separate release obligations.
+  One hundred six `_bug.cfg` controls deliberately weaken one boundary each and
+  must produce the named invariant counterexample.
   `multilane_source_bindings.json` binds each kernel to current Rust items and
   semantic tokens; `check_sumeragi_v2_multilane_models.py` validates that
   structure before the default TLC matrix. The Native binding includes the
   QC-authenticated manifest builder, manifest-before-receipt publication,
-  atomic latest-index write/readback, bounded latest lookup, and the
+  atomic latest-index write/readback, authenticated crash-durable temporary
+  recovery, exact-object pruning through authenticated open handles plus
+  inode/metadata/namespace rechecks, bounded latest lookup, and the
   Kura-before-WSV application boundary. The autonomous binding includes
   exclusion-aware FIFO reservation, the durable Queue/Kura release barrier,
   route/incarnation-first canonical source ordering, startup ownership
-  reconciliation, and exact full-candidate signing authorization.
+  reconciliation, bounded canonical-body recovery whose complete-wire length
+  is Commit-QC-signed, durable historical-task installation before Queue
+  publication, Pending/authority/Queue-evidence/Complete terminal joins,
+  carrier-batch atomic catch-up, immutable-receipt empty-only startup sweeping,
+  mixed A-owned/B-absent whole-unit deferral, post-plan atomic terminal
+  completion before Queue publication, exact
+  local-producer Queue ownership before retained-attempt Crash/Recover while
+  permitting observer Kura-only recovery under the independent network-ingress
+  fence even when Queue's observed owner-quarantine bit is false, exact
+  full-candidate signing
+  authorization, and all three
+  autonomous carrier commit surfaces. The pre-vote surface retains the exact
+  encoded autonomous event prefix while separately binding the complete
+  deterministic carrier event vector. Final application byte-compares that
+  complete vector before publication, requires the live buffer to be drained,
+  and reconstructs the certified write-set root from the retained autonomous
+  bytes at metadata mint and State commit.
   The QueuePlan binding covers the shared V2 binding and coordinator quorum,
   Kura-before-wake-before-WSV public acceptance, immutable registry CAS,
   Exact-gated autonomous ownership, restart/TTL retention, and exact
@@ -504,17 +589,37 @@ height-context state are not migrated in place.
   It also binds the bounded autonomous stage projection, its durable-stage
   reducer, and the data-model stage geometry/order validation; diagnostics
   cannot advance beyond revalidated evidence or authorize consensus state.
-  The same version-3 ledger machine-maps every conceptual `ML-MUT-*` ID from
-  the closure ledger. `tla_counterexample` entries cover every and only the 37
+  The same schema-5 ledger machine-maps every conceptual `ML-MUT-*` ID from
+  the closure ledger. `tla_counterexample` entries cover every and only the 106
   production-refinement `_bug.cfg` files. Its separate
-  `layout_only_no_transition_refinement` contract binds the accepted payload
-  schema V2 in `LaneExecutablePayloadV1`, QueuePlan journal V4, reservation
-  journal V5, the 4096 entry ceiling, exact queue durability order, and Kura
-  execution-input persistence/recovery to
-  `SumeragiV2InFlightFirstRelease.tla` and its twenty mutation controls. That
-  structural contract detects layout drift but does not claim a total Rust
-  transition-refinement theorem. The release receipt requires the four
-  refinement rows plus a separately named fifth
+  `composed_state_action_relation_with_source_bound_trace_extraction` contract binds the
+  accepted payload schema V2 in `LaneExecutablePayloadV1`, QueuePlan journal
+  V4, reservation journal V5, the 4096 entry ceiling, exact queue durability
+  order, and Kura execution-input persistence/recovery to
+  `SumeragiV2InFlightFirstRelease.tla` and its twenty-two mutation controls. Its
+  three-validator TLA+ instance requires authenticated custody by its selected
+  producer and uses the canonical 3-of-3 strict count quorum; it does not infer
+  all-peer preimage knowledge. The fixed-width Rust/Verus relation generalizes
+  that geometry to canonical committees of 1 through 128 validators and
+  covers the named QueuePlan, reservation, Kura/input/READY-QC, volatile body,
+  lane-commit, WSV, per-key Commit/tombstone/ForgetCommit prefixes, and release
+  actions, including snapshot stutter and the direct-release terminal. The
+  retired lane-wide removal operation is absent from the schema-bound V5
+  journal and its old bytes fail closed without compatibility decoding. The
+  bounded production consumers now include QueuePlan selection/V5 fsync,
+  producer Kura activation, execution-input persistence, READY
+  authorization/signature/QC persistence,
+  autonomous lane-Commit persistence,
+  merge-source admission, canonical WSV application, post-carrier cleanup,
+  Kura slot retirement and ordered claim-prefix replacement, and the pre-Kura
+  direct-release path. The latter revalidates the exact V4/V5,
+  FIFO, group, and committee binding under the Queue transition and FIFO locks,
+  consumes a move-only checked projection immediately before the durable
+  release append, and publishes FIFO ownership afterward. These slices do not
+  cover every production linearization point and are not an end-to-end trace
+  extraction theorem. The
+  release receipt requires the five
+  refinement rows plus a separately named sixth
   `inflight-first-release-layout` row, preventing bounded layout evidence from
   being promoted into a refinement result. `MLDiagnosticsAreDerived`,
   `MLApiAuthoritySeparation`, `MLSdkAcceptSetEqualsRust`,
@@ -529,26 +634,30 @@ height-context state are not migrated in place.
   `run_sumeragi_v2_multilane_apalache.sh` is the second bounded positive
   checker. It accepts no length argument or environment length override,
   requires the exact source-binding check first, validates the pinned Apalache 0.52.2
-  launcher and jar hashes, typechecks the four complete refinement modules
+  launcher and jar hashes, typechecks the five refinement modules
   plus the layout-only in-flight carrier module, and
   requires one exact `NoError` result at these reviewed bounds:
 
   | Kernel | Fixed configuration | `Next` bound |
   | --- | --- | ---: |
   | autoscale lifecycle | `multilane_autoscale_lifecycle_fixed.cfg` | 8 |
-  | Native application evidence | `multilane_native_application_evidence_fixed.cfg` | 5 |
+  | Native application evidence | `multilane_native_application_evidence_fixed.cfg` | 8 |
   | autonomous reservation/carrier | `multilane_autonomous_reservation_carrier_fixed.cfg` | 10 |
   | QueuePlan admission registry | `multilane_queue_plan_admission_registry_fixed.cfg` | 8 |
+  | Kura replica retention | `kura_replica_retention_fixed.cfg` | 8 |
   | in-flight carrier (layout-only) | `inflight_first_release_fixed.cfg` | 18 |
 
-  Twelve runner-contract negative controls reject tool-version or checksum
+  Fourteen runner-contract negative controls reject tool-version or checksum
   drift, source-binding bypass, reduced autoscale or QueuePlan bounds, mutation
-  substitution, removal of a Native invariant, a reduced in-flight bound or
-  in-flight mutation substitution, a weakened success marker, and a length
-  override. The default
+  substitution, removal of a Native invariant, a reduced Kura bound or Kura
+  mutation substitution, a reduced in-flight bound or in-flight mutation
+  substitution, a weakened success marker, and a length override. The default
   `run_sumeragi_v2_tlc.sh` release matrix invokes this Apalache gate after the
-  thirty-seven exact refinement-kernel TLC mutation witnesses and the twenty
-  exact in-flight layout mutation witnesses. Apalache does not run those
+  seventy-three exact refinement-kernel TLC mutation witnesses and the twenty-two
+  exact in-flight layout mutation witnesses. Its default thirteen-config TLC
+  matrix includes `kura_replica_retention_fixed.cfg` and applies the same exact
+  successful-transcript contract as the other fixed positive kernels.
+  Apalache does not run those
   mutations: their named-counterexample contract is owned by the deterministic
   TLC runners, while the Apalache leg accepts positive `NoError` only.
 
@@ -569,7 +678,7 @@ height-context state are not migrated in place.
   ledger, and bound production source before and after checking, then records
   each model/config/log hash, bound length, and exact `NoError` result. A
   failed or source-drifting run removes or withholds the completion evidence.
-  These finite checks constrain four source-bound production-refinement
+  These finite checks constrain five source-bound production-refinement
   declarations consumed transitively by the top-level refinement debts and one
   explicitly layout-only carrier kernel. They are
   not independent ledger rows, TLAPS evidence, or cross-tool proof evidence,
@@ -1227,8 +1336,8 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 829 named tests
-across 38 Rust modules. The preceding 298-name inventory was produced from the
+Before network startup, the executable wrapper inventories 850 named tests
+across 40 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
 historical/current applied-height rollover; 2 bind peer-writer flush and
@@ -1331,9 +1440,18 @@ inventory to the 831-test checkpoint. Retiring five obsolete peer-genesis
 protocol regressions produces the 826-test checkpoint. Replacing one obsolete
 restart selector with its two distinct raw/coalesced crash boundaries and
 restoring two implemented certified-ingress regressions adds three real rows,
-bringing the current inventory to 829 tests across 38 modules.
+bringing the inventory to the 829-test checkpoint. Autonomous-lifecycle
+terminal-outcome and startup-recovery coverage plus final source reconciliation
+bring the 837-test checkpoint across 39 modules. Ten unignored deterministic
+network simulations now cover lossy/offline leaders, symmetric and asymmetric
+partitions, current-owner QC redelivery, leader crashes, bounded corrupted-chunk
+recovery, WAL-intent replay, and divergent Taira views, bringing the inventory
+to the 847-test checkpoint across 40 modules. The source-bound terminal-sweep
+partition regression brings the 848-test checkpoint. The late passive-Fetch
+completion and one-shot completed-Serve reopening regressions bring the current
+inventory to 850 tests across 40 modules.
 Together with the source-sealed command and tooling legs, the pre-network
-corridor contains 81 legs. The
+corridor contains 87 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
 The first-release sidecar keeps wire protocol version 1 and uses positive
 `NonZeroU64` responder generation, requester epoch, and per-stream semantic
@@ -1406,7 +1524,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`aade985a59315e4e94a0933d175065594e063cd041a2c5009b6d6ea03c4b0c0c`.
+`f853be7fd492348c79c1ab3f8f1a8fc43e7593be76d3af1536c3710dac3e17c5`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1443,14 +1561,16 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The five integration names execute under one module-filtered leg;
-the complete pre-network corridor now spans 81 legs, including separate exact
+the complete pre-network corridor now spans 87 legs, including the dedicated
+ten-test V2 core network-simulation leg, the autonomous
+lifecycle-recovery module and separate exact
 data-model status and atomic lane-certificate decode contracts, the two
 `iroha_config` geometry modules, three P2P geometry modules, and source-sealed
 command-success legs. Its finality, offline compact-QC,
 and height-context proposal-origin modules each use a dedicated
 `iroha_data_model` leg. The inventory executes the `iroha_p2p` library with its
 empty default feature set. It does not claim the feature-gated QUIC first-packet
-geometry tests as part of those thirty-eight modules or eighty-one legs. The
+geometry tests as part of those thirty-eight modules or eighty-five legs. The
 inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
@@ -1580,8 +1700,8 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 81 pre-network legs and the exact
-829-test inventory, the pinned harness lock and resolved toolchain, the formal
+binds original HEAD/tree/`Cargo.lock`, all 87 pre-network legs and the exact
+850-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and

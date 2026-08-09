@@ -36,7 +36,13 @@ def _write_executable(path: Path, payload: str) -> Path:
 def _fixture(tmp_path: Path) -> tuple[Path, Path, str, Path, str, Path]:
     binaries = tmp_path / "binaries"
     binaries.mkdir()
-    for name in ("irohad", "iroha", "kagami"):
+    for name in (
+        "irohad",
+        "sorafs_governance_dag",
+        "iroha",
+        "kagami",
+        "attachment_sanitizer",
+    ):
         _write_executable(
             binaries / name,
             f"#!/bin/sh\nprintf '%s\\n' {name}\n",
@@ -285,6 +291,7 @@ def test_image_replay_is_byte_identical_and_oci_archive_is_normalized(
         assert "tar=false" in output
         assert "rewrite-timestamp=true" in output
         assert "save" not in call
+        assert "BINARIES=irohad sorafs_governance_dag iroha kagami attachment_sanitizer" in call
 
 
 def test_image_refuses_stale_output_without_replacement(tmp_path: Path) -> None:

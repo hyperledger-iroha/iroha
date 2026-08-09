@@ -6,7 +6,7 @@ groups:
         expr: >
           histogram_quantile(
             0.99,
-            sum by (cluster, le) (
+            sum by (cluster, stream, le) (
               rate(taikai_ingest_live_edge_drift_ms_bucket[5m])
             )
           ) > 1500
@@ -20,7 +20,7 @@ groups:
             Cluster {{ $labels.cluster }} drift exceeded 1.5s at p99 for 10 minutes.
             Check ingest ladder health and confirm clocks are synchronized.
       - alert: TaikaiIngestFailure
-        expr: sum(rate(taikai_ingest_segment_errors_total{reason!="none"}[5m])) > 0
+        expr: sum by (cluster, stream) (rate(taikai_ingest_segment_errors_total{reason!="none"}[5m])) > 0
         for: 5m
         labels:
           severity: warn

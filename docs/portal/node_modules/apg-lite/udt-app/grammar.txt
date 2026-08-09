@@ -1,9 +1,0 @@
-;
-; Ref: Wikipedia, North American Numbering Plan
-;
-phone-number = "(" area-code ")" u_office "-" subscriber
-area-code = gt-2 not-9 digit
-subscriber = 4digit
-gt-2 = %d50-57
-not-9 = %d48-56
-digit = %d48-57

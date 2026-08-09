@@ -42,6 +42,23 @@ APPEAL_FINANCE_FIXTURE_PATHS = (
     "negative/cancel_asset_lock_zero_expected_v1.to",
 )
 
+APPEAL_FINANCE_SHARED_FIXTURE_TRIGGER_PATHS = {
+    f"fixtures/sorafs_manifest/appeal_finance/{relative}"
+    for relative in APPEAL_FINANCE_FIXTURE_PATHS
+}
+
+APPEAL_FINANCE_VALIDATION_PROFILE_TRIGGER_PATHS = {
+    (
+        "fixtures/sorafs_manifest/reference_sdk/"
+        "appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json"
+    ),
+    (
+        "fixtures/sorafs_manifest/reference_sdk/"
+        "appeal_finance_cancel_asset_lock_zero_expected_negative_"
+        "validation_outcome_v1.json"
+    ),
+}
+
 SDK_FIXTURE_READERS = {
     "IrohaSwift/Tests/IrohaSwiftTests/CancelAssetLockV1Tests.swift": (
         "testAppealFinanceReferenceFixturesAreByteExactAndFailClosed",
@@ -55,6 +72,8 @@ SDK_FIXTURE_READERS = {
         "REQUIRED_FIXTURE_NAMES.associateWith",
         "readMandatoryFixture(root, relative)",
         "check(Files.isRegularFile(path))",
+        "CancelAssetLockInstruction.fromCanonicalFields(",
+        "CancelAssetLockInstruction.fromWirePayload(",
     ),
     (
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/"
@@ -113,6 +132,63 @@ STRICT_NATIVE_PROFILE_MARKERS = {
     ),
 }
 
+MATERIAL_CLOSURE_PATHS_BY_WORKFLOW = {
+    "openapi.yml": {
+        "crates/iroha_torii_shared/src/sorafs_moderation_api.rs",
+        "crates/iroha_torii_shared/src/lib.rs",
+        "crates/iroha_torii_shared/src/route_catalog.rs",
+        "crates/iroha_torii/src/lib.rs",
+        "crates/iroha_torii/src/openapi.rs",
+        "crates/iroha_torii/src/sorafs/api.rs",
+    },
+    "mobile_sdk_artifacts.yml": {
+        "IrohaSwift/Package.swift",
+        "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/NativeBridgeLoaderTests.swift",
+        "fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.json",
+        (
+            "fixtures/sorafs_manifest/reference_sdk/"
+            "appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json"
+        ),
+        "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json",
+        "integration_tests/tests/native_escrow.rs",
+    },
+    "pr_csharp.yml": {
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/"
+            "SoraFsReferenceValidatorsTests.cs"
+        ),
+        "fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.json",
+        (
+            "fixtures/sorafs_manifest/reference_sdk/"
+            "appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json"
+        ),
+        "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json",
+        "integration_tests/tests/native_escrow.rs",
+    },
+    "sorafs-orchestrator-sdk.yml": {
+        "IrohaSwift/Package.swift",
+        "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/NativeBridgeLoaderTests.swift",
+        "fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.json",
+        (
+            "fixtures/sorafs_manifest/reference_sdk/"
+            "appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json"
+        ),
+        "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json",
+        "integration_tests/tests/native_escrow.rs",
+    },
+    "sorafs-fixtures-nightly.yml": {
+        "fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.json",
+        (
+            "fixtures/sorafs_manifest/reference_sdk/"
+            "appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json"
+        ),
+        "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json",
+        "integration_tests/tests/native_escrow.rs",
+    },
+}
+
 
 def read(relative: str) -> str:
     """Read one repository file as UTF-8."""
@@ -120,26 +196,83 @@ def read(relative: str) -> str:
     return (REPO_ROOT / relative).read_text(encoding="utf-8")
 
 
-def pull_request_paths(workflow_name: str) -> set[str]:
-    """Return the literal pull-request path filter from one workflow."""
+def workflow_event_paths(workflow_name: str, event: str) -> set[str]:
+    """Return one literal GitHub workflow event path filter."""
 
     source = (WORKFLOW_ROOT / workflow_name).read_text(encoding="utf-8")
     match = re.search(
-        r"(?ms)^  pull_request:\n"
-        r"(?P<body>(?:^    .*\n)*)",
+        rf"(?m)^  {re.escape(event)}:\n"
+        r"(?P<body>(?:^    [^\n]*\n)*)",
         source,
     )
-    assert match is not None, f"{workflow_name} must define pull_request"
+    assert match is not None, f"{workflow_name} must define {event}"
     body = match.group("body")
     paths = re.search(
-        r"(?ms)^    paths:\n(?P<paths>(?:^      - .*\n)+)",
+        r'(?m)^    paths:\n(?P<paths>(?:^      - "[^"\n]+"\n)+)',
         body,
     )
-    assert paths is not None, f"{workflow_name} must define pull_request.paths"
+    assert paths is not None, f"{workflow_name} must define {event}.paths"
     return {
         line.removeprefix("      - ").strip().strip('"')
         for line in paths.group("paths").splitlines()
     }
+
+
+def pull_request_paths(workflow_name: str) -> set[str]:
+    """Return the literal pull-request path filter from one workflow."""
+
+    return workflow_event_paths(workflow_name, "pull_request")
+
+
+def workflow_filter_covers(path: str, filters: set[str]) -> bool:
+    """Return whether literal GitHub path filters cover one repository path."""
+
+    for candidate in filters:
+        if candidate == path:
+            return True
+        if candidate.endswith("/**"):
+            prefix = candidate.removesuffix("/**")
+            if path == prefix or path.startswith(f"{prefix}/"):
+                return True
+    return False
+
+
+@pytest.mark.parametrize(
+    ("workflow_name", "material_paths"),
+    MATERIAL_CLOSURE_PATHS_BY_WORKFLOW.items(),
+)
+def test_material_closure_files_are_routed_to_relevant_workflows(
+    workflow_name: str,
+    material_paths: set[str],
+) -> None:
+    """Changed V1 closure inputs must start every workflow that consumes them."""
+
+    filters = pull_request_paths(workflow_name)
+    missing_files = sorted(
+        path for path in material_paths if not (REPO_ROOT / path).is_file()
+    )
+    assert not missing_files, f"closure inventory names missing files: {missing_files}"
+    uncovered = sorted(
+        path
+        for path in material_paths
+        if not workflow_filter_covers(path, filters)
+    )
+    assert not uncovered, f"{workflow_name} omits closure triggers: {uncovered}"
+
+
+def test_openapi_push_and_pull_request_filters_cover_moderation_sources() -> None:
+    """The canonical generator must run for moderation changes on both events."""
+
+    for event in ("pull_request", "push"):
+        filters = workflow_event_paths("openapi.yml", event)
+        uncovered = sorted(
+            path
+            for path in MATERIAL_CLOSURE_PATHS_BY_WORKFLOW["openapi.yml"]
+            if not workflow_filter_covers(path, filters)
+        )
+        assert not uncovered, (
+            f"openapi.yml {event} omits closure triggers: {uncovered}"
+        )
 
 
 @pytest.mark.parametrize(
@@ -156,9 +289,46 @@ def test_native_sdk_workflows_cover_appeal_finance_and_escrow_sources(
     """Every relevant SDK job reruns for all shared native-escrow inputs."""
 
     paths = pull_request_paths(workflow_name)
+    assert not any(
+        path.startswith(("jobs:", "name:", "run:", "runs-on:", "uses:"))
+        for path in paths
+    ), f"{workflow_name} path parser leaked workflow job fields"
     assert NATIVE_ESCROW_TRIGGER_PATHS <= paths
     assert "scripts/check_sorafs_reference_sdk_fixtures.py" in paths
     assert "scripts/tests/check_sorafs_fixture_workflow_contract_test.py" in paths
+
+
+@pytest.mark.parametrize(
+    "workflow_name",
+    [
+        "mobile_sdk_artifacts.yml",
+        "pr_csharp.yml",
+        "sorafs-orchestrator-sdk.yml",
+    ],
+)
+def test_native_sdk_workflows_cover_every_shared_appeal_finance_fixture(
+    workflow_name: str,
+) -> None:
+    """Each mandatory payload and outcome must independently rerun SDK parity."""
+
+    required = (
+        APPEAL_FINANCE_SHARED_FIXTURE_TRIGGER_PATHS
+        | APPEAL_FINANCE_VALIDATION_PROFILE_TRIGGER_PATHS
+    )
+    missing_files = sorted(
+        path for path in required if not (REPO_ROOT / path).is_file()
+    )
+    assert not missing_files, (
+        f"appeal-finance workflow inventory names missing files: {missing_files}"
+    )
+
+    filters = pull_request_paths(workflow_name)
+    uncovered = sorted(
+        path for path in required if not workflow_filter_covers(path, filters)
+    )
+    assert not uncovered, (
+        f"{workflow_name} omits appeal-finance fixture triggers: {uncovered}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -280,11 +450,12 @@ def test_fixture_workflow_requires_its_installed_toolchains() -> None:
 
     workflow = read(".github/workflows/sorafs-fixtures-nightly.yml")
     fixture_gate = read("ci/check_sorafs_fixtures.sh")
-    assert 'SORAFS_FIXTURE_REQUIRE_TOOLCHAIN: "1"' in workflow
-    assert 'if [[ "${require_fixture_toolchain}" == "1" ]]' in fixture_gate
-    assert "fixture_tool_available node" in fixture_gate
-    assert "fixture_tool_available go" in fixture_gate
+    assert "SORAFS_FIXTURE_REQUIRE_TOOLCHAIN" not in workflow
+    assert "SORAFS_FIXTURE_REQUIRE_TOOLCHAIN" not in fixture_gate
+    assert "require_fixture_tool node" in fixture_gate
+    assert "require_fixture_tool go" in fixture_gate
     assert "error: ${check_label} requires ${tool_name}" in fixture_gate
+    assert "skipping ${check_label}" not in fixture_gate
 
 
 def test_reference_sdk_regeneration_is_closed_and_double_run_stable() -> None:
@@ -364,8 +535,14 @@ def test_manifest_generator_enables_required_vrf_and_drand_crypto() -> None:
 def test_por_fixture_generator_has_a_strict_isolated_output_root() -> None:
     """The aggregate generator cannot ambiguously redirect fixture writes."""
 
-    generator = read(
-        "crates/sorafs_manifest/src/bin/generate_por_fixtures.rs"
+    generator = "\n".join(
+        (
+            read("crates/sorafs_manifest/src/bin/generate_por_fixtures.rs"),
+            read(
+                "crates/sorafs_manifest/src/bin/generate_por_fixtures/"
+                "output_transaction_tests.rs"
+            ),
+        )
     )
     assert "fn parse_args(" in generator
     assert 'Some("--output-dir")' in generator
@@ -424,7 +601,7 @@ def test_parity_fixture_snapshot_rejects_missing_inputs() -> None:
 
 
 def test_native_release_jobs_build_and_require_the_bridge() -> None:
-    """C# and both mobile jobs fail closed when the ABI-21 bridge is absent."""
+    """Native release jobs build optimized, fail-closed ABI-21 bridges."""
 
     csharp = read(".github/workflows/pr_csharp.yml")
     mobile = read(".github/workflows/mobile_sdk_artifacts.yml")
@@ -440,17 +617,86 @@ def test_native_release_jobs_build_and_require_the_bridge() -> None:
     assert "name: Build NoritoBridge XCFramework" in mobile
     assert "name: Build host SoraFS reference native bridge" in mobile
     parity_runner = read("ci/sdk_sorafs_orchestrator.sh")
-    assert "npm run build:native" in parity_runner
-    assert "test/cancelAssetLockV1.test.js" in parity_runner
-    assert "test/sorafsAppealFinanceValidation.test.js" in parity_runner
+    assert parity_runner.count("npm run build:native") == 1
+    assert parity_runner.count("IROHA_JS_NATIVE_BUILD_PROFILE=") == 1
+    assert (
+        "IROHA_JS_NATIVE_BUILD_PROFILE=release npm run build:native"
+        in parity_runner
+    )
+    assert 'mktemp -d "${TMPDIR:-/tmp}/iroha-sorafs-js-native-target.XXXXXX"' in parity_runner
+    assert "native_cargo=\"$(rustup which cargo)\"" in parity_runner
+    assert "native_rustc=\"$(rustup which rustc)\"" in parity_runner
+    assert "native_rustdoc=\"$(rustup which rustdoc)\"" in parity_runner
+    for build_binding in (
+        "CARGO_BUILD_JOBS=1",
+        "CARGO_INCREMENTAL=0",
+        "CARGO_NET_OFFLINE=true",
+        'CARGO_TARGET_DIR="${native_build_target}"',
+        'IROHA_JS_CARGO_LOCKFILE_PATH="${REPO_ROOT}/Cargo.lock"',
+        'IROHA_JS_CARGO_PATH="${native_cargo}"',
+        'RUSTC="${native_rustc}"',
+        "RUSTC_BOOTSTRAP=1",
+        'RUSTDOC="${native_rustdoc}"',
+    ):
+        assert build_binding in parity_runner
+    assert "node scripts/run-test-profile.mjs sorafs-native" in parity_runner
+    javascript_profile_runner = read("javascript/iroha_js/scripts/run-test-profile.mjs")
+    assert '"cancelAssetLockV1.test.js"' in javascript_profile_runner
+    assert '"sorafsAppealFinanceValidation.test.js"' in javascript_profile_runner
+    assert '"sorafsOrchestrator.parity.test.js"' in javascript_profile_runner
     assert "swift test --filter SorafsOrchestratorParityTests" in parity_runner
     assert "swift test --filter CancelAssetLockV1Tests" in parity_runner
     assert "swift test --filter SorafsReferenceValidatorsTests" in parity_runner
     assert "name: Build exact ABI-21 NoritoBridge XCFramework" in parity
     assert "check_mobile_sdk_artifacts.sh --apple-only" in parity
+    assert parity.count("IROHA_JS_NATIVE_BUILD_PROFILE:") == 1
+    assert 'IROHA_JS_NATIVE_BUILD_PROFILE: "release"' in parity
     assert 'IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"' in parity
     assert '"crates/iroha_js_host/**"' in parity
     assert "bash ci/sdk_sorafs_orchestrator.sh" in parity
+
+
+def test_swift_native_bridge_contract_requires_universal_macos_slice() -> None:
+    """Apple release lanes build and authenticate both macOS architectures."""
+
+    mobile = read(".github/workflows/mobile_sdk_artifacts.yml")
+    parity = read(".github/workflows/sorafs-orchestrator-sdk.yml")
+    for workflow in (mobile, parity):
+        assert (
+            "rustup target add aarch64-apple-ios aarch64-apple-ios-sim "
+            "x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin"
+            in workflow
+        )
+
+    builder = read("scripts/build_norito_xcframework.sh")
+    assert 'MACOS_ARM_TRIPLE="aarch64-apple-darwin"' in builder
+    assert 'MACOS_X64_TRIPLE="x86_64-apple-darwin"' in builder
+    assert (
+        '"$LIPO_BINARY" -create -output "$MAC_UNI" '
+        '"$LIB_MAC_ARM" "$LIB_MAC_X64"'
+        in builder
+    )
+    assert '"macos-arm64_x86_64"' in builder
+
+    checker = read("scripts/check_mobile_sdk_artifacts.sh")
+    assert (
+        "local slices=(ios-arm64 ios-arm64_x86_64-simulator "
+        "macos-arm64_x86_64)"
+        in checker
+    )
+    assert "ios-arm64_x86_64-simulator|macos-arm64_x86_64)" in checker
+    assert '"macos-arm64_x86_64": {' in checker
+    assert '"architectures": ["arm64", "x86_64"]' in checker
+    assert (
+        "NoritoBridge Info.plist does not declare the canonical universal "
+        "Apple slices"
+        in checker
+    )
+
+    loader = read("IrohaSwift/Sources/IrohaSwift/NativeBridge.swift")
+    assert 'return "macos-arm64_x86_64"' in loader
+    assert '"macos-arm64_x86_64":' in loader
+    assert '"macos-arm64":' not in loader
 
 
 def test_python_native_lane_covers_appeal_finance_and_provider_ingest_without_skips() -> None:
@@ -476,6 +722,8 @@ def test_python_native_lane_covers_appeal_finance_and_provider_ingest_without_sk
         in runner
     )
     assert "tests/cancel_asset_lock_v1_test.py" in runner
+    assert "tests/cancel_asset_lock_client_helpers_test.py" in runner
+    assert "tests/client_hard_cut_contract_test.py" in runner
     assert "tests/client_ledger_helpers_test.py" in runner
     assert "tests/sorafs_reference_validation_test.py" in runner
     assert "tests/sorafs_replication_instruction_test.py" in runner
@@ -487,7 +735,7 @@ def test_python_native_lane_covers_appeal_finance_and_provider_ingest_without_sk
 def test_python_cancel_builder_has_exact_archive_and_typed_two_argument_coverage() -> None:
     """The native Python lane must decode and pin the hard-cut cancellation archive."""
 
-    tests = read("python/iroha_python/tests/client_ledger_helpers_test.py")
+    tests = read("python/iroha_python/tests/cancel_asset_lock_client_helpers_test.py")
     crypto = read("python/iroha_python/src/iroha_python/crypto.py")
     assert "instruction_json_bytes = draft.instructions[0].to_json().encode(\"utf-8\")" in tests
     assert "instruction_archive = base64.b64decode(" in tests

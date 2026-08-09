@@ -12,10 +12,9 @@ import sys
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from html import unescape
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -29,6 +28,11 @@ from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_notice,
     render_and_write_checker_summary,
     validate_checker_preflight,
+)
+from sorafs_archive_path_components import (  # noqa: E402
+    decoded_text_variants,
+    path_component_has_uri_scheme_prefix,
+    path_component_has_windows_drive_prefix,
 )
 from sorafs_evidence_json import (  # noqa: E402
     load_evidence_json_with_sha256_or_record_error,
@@ -786,37 +790,6 @@ def require_threshold_map(
         if key_label is not None and value_is_valid and not key_is_sensitive:
             valid_thresholds[key_label] = value
     return valid_thresholds
-
-
-def decoded_text_variants(value: str) -> tuple[str, ...]:
-    """Return raw plus repeatedly percent/HTML-decoded text variants."""
-
-    variants = [value]
-    seen = {value}
-    current = value
-    for _ in range(4):
-        decoded = unescape(unquote(current))
-        if decoded == current or decoded in seen:
-            break
-        variants.append(decoded)
-        seen.add(decoded)
-        current = decoded
-    return tuple(variants)
-
-
-def path_component_has_windows_drive_prefix(component: str) -> bool:
-    """Return whether a path component starts with a Windows drive prefix."""
-
-    return len(component) >= 2 and component[1] == ":" and component[0].isalpha()
-
-
-def path_component_has_uri_scheme_prefix(component: str) -> bool:
-    """Return whether a path component starts with a URI-like scheme."""
-
-    head, separator, _tail = component.partition(":")
-    if not separator:
-        return False
-    return re.fullmatch(r"[A-Za-z][A-Za-z0-9+.-]*", head) is not None
 
 
 def path_component_has_sensitive_label(component: str) -> bool:

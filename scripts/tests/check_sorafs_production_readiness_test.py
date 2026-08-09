@@ -8,6 +8,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -26,6 +27,11 @@ from sorafs_resilience_test_support import (  # noqa: E402
     render_summary as render_resilience_summary,
     resilience_binding as build_resilience_binding,
     resilience_summary as build_resilience_summary,
+)
+from sorafs_rollout_runner_test_support import TopologyBoundChecker  # noqa: E402
+from sorafs_production_readiness_duplicate_test_support import (  # noqa: E402
+    assert_duplicate_and_unrequired_summaries_fail_closed,
+    assert_duplicate_gate_summary_fails,
 )
 
 NOW_UNIX = 1_800_800_000
@@ -139,6 +145,8 @@ def reference_sdk_supply_chain_fingerprint() -> dict[str, object]:
         "vulnerability-report.json",
         "provenance-bundle.json",
     )
+    source_kinds = MODULE.REFERENCE_SDK_SUPPLY_CHAIN_SOURCE_ARTIFACT_KINDS
+    assert len(source_kinds) == len(source_paths) == len(source_digests)
     return {
         "source_artifacts": [
             {
@@ -146,12 +154,7 @@ def reference_sdk_supply_chain_fingerprint() -> dict[str, object]:
                 "artifact_path": artifact_path,
                 "sha256": digest,
             }
-            for kind, artifact_path, digest in zip(
-                MODULE.REFERENCE_SDK_SUPPLY_CHAIN_SOURCE_ARTIFACT_KINDS,
-                source_paths,
-                source_digests,
-                strict=True,
-            )
+            for kind, artifact_path, digest in zip(source_kinds, source_paths, source_digests)
         ],
         "provenance_certificate_identity": (
             REFERENCE_SDK_PROVENANCE_CERTIFICATE_IDENTITY
@@ -1431,8 +1434,23 @@ def load_lane_fixture_module(gate_name: str):
     fixture_module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader  # pragma: no cover - defensive
     sys.modules[spec.name] = fixture_module
-    spec.loader.exec_module(fixture_module)
+    try:
+        spec.loader.exec_module(fixture_module)
+    except BaseException:
+        unload_lane_fixture_module(fixture_module)
+        raise
     return fixture_module
+
+
+def unload_lane_fixture_module(fixture_module: ModuleType) -> None:
+    """Close fixture-owned resources and remove its dynamic module entry."""
+
+    checker = getattr(fixture_module, "CHECKER", None)
+    try:
+        if isinstance(checker, TopologyBoundChecker):
+            checker.close()
+    finally:
+        sys.modules.pop(fixture_module.__name__, None)
 
 
 def normalize_fixture_evidence_context(
@@ -1451,6 +1469,17 @@ def write_complete_lane_fixture_summary(
     root: Path,
 ) -> tuple[dict, int]:
     fixture_module = load_lane_fixture_module(gate_name)
+    try:
+        return _write_complete_lane_fixture_summary(gate_name, root, fixture_module)
+    finally:
+        unload_lane_fixture_module(fixture_module)
+
+
+def _write_complete_lane_fixture_summary(
+    gate_name: str,
+    root: Path,
+    fixture_module: ModuleType,
+) -> tuple[dict, int]:
     if gate_name == "reference_sdk_release":
         # The source validator has its own end-to-end corpus. Dynamic imports
         # do not activate the lane module's pytest autouse fixture, so install
@@ -1543,7 +1572,54 @@ def write_complete_lane_fixture_summary(
         "NOW_UNIX",
         getattr(fixture_module, "NOW", NOW_UNIX),
     )
-    return json.loads(summary.read_text(encoding="utf-8")), now_unix
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    return payload, now_unix
+
+
+def test_topology_bound_checker_closes_fixture_directory() -> None:
+    observed_arguments: list[list[str] | None] = []
+    checker = TopologyBoundChecker(
+        lambda arguments: observed_arguments.append(arguments) or 0,
+        deployment_id=DEPLOYMENT_ID,
+        environment=ENVIRONMENT,
+        name="aggregate-close-test",
+    )
+    topology_directory = checker.topology_path.parent
+    assert topology_directory.is_dir()
+    assert checker([]) == 0
+    assert observed_arguments == [
+        ["--topology-qualification-summary", str(checker.topology_path)]
+    ]
+
+    checker.close()
+    assert not topology_directory.exists()
+    checker.close()
+
+
+def test_lane_fixture_module_is_unloaded_after_summary_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture_module = load_lane_fixture_module("orderbook")
+    checker = fixture_module.CHECKER
+    topology_directory = checker.topology_path.parent
+    module_name = fixture_module.__name__
+
+    def fail_to_write_evidence(_evidence_root: Path) -> None:
+        raise RuntimeError("injected evidence failure")
+
+    fixture_module.write_complete_evidence = fail_to_write_evidence
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "load_lane_fixture_module",
+        lambda _gate_name: fixture_module,
+    )
+
+    with pytest.raises(RuntimeError, match="injected evidence failure"):
+        write_complete_lane_fixture_summary("orderbook", tmp_path)
+
+    assert not topology_directory.exists()
+    assert module_name not in sys.modules
 
 
 def lane_summary_deployment_context(payload: dict) -> tuple[str, str]:
@@ -2007,12 +2083,12 @@ def test_response_file_arguments_pass(tmp_path: Path) -> None:
     write_gate(tmp_path, "gateway_load")
     write_foundational_summary(tmp_path)
     qualification_args = topology_cli_args(tmp_path)
+    assert len(qualification_args) % 2 == 0
     qualification_lines = [
         f"{flag} {value}"
         for flag, value in zip(
             qualification_args[::2],
             qualification_args[1::2],
-            strict=True,
         )
     ]
     args = tmp_path / "aggregate.args"
@@ -6194,6 +6270,21 @@ def test_hex_list_metadata_without_owner_kind_tether_fails_closed(
 def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
     tmp_path: Path,
 ) -> None:
+    governance_dag_publisher_cases = [
+        ("governance_dag", field, ("publisher_service",), binding)
+        for field, binding in (
+            ("valid_kubo_ingress_binding_digests", "kubo_ingress_binding_digest_hex"),
+            ("valid_policy_digests", "policy_digest_hex"),
+            ("valid_public_head_cids", "public_head_cid_hex"),
+            ("valid_receiver_policy_digests", "receiver_policy_digest_hex"),
+            ("valid_replay_namespace_digests", "replay_namespace_digest_hex"),
+            ("valid_replica_set_digests", "replica_set_digest_hex"),
+            (
+                "valid_signed_head_ingress_binding_digests",
+                "signed_head_ingress_binding_digest_hex",
+            ),
+        )
+    ]
     manual_cases = [
         (
             "ai_prescreen",
@@ -6257,23 +6348,10 @@ def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
             "suite_report_digest_hex",
         ),
         (
-            "governance_dag",
-            "valid_checkpoint_digests",
-            ("operator_recovery",),
-            "checkpoint_digest_hex",
+            "governance_dag", "valid_checkpoint_digests",
+            ("operator_recovery",), "checkpoint_digest_hex",
         ),
-        (
-            "governance_dag",
-            "valid_policy_digests",
-            ("publisher_service",),
-            "policy_digest_hex",
-        ),
-        (
-            "governance_dag",
-            "valid_public_head_cids",
-            ("publisher_service",),
-            "public_head_cid_hex",
-        ),
+        *governance_dag_publisher_cases,
         (
             "hedging_billing",
             "valid_policy_digests",
@@ -8678,10 +8756,10 @@ def test_reference_sdk_supply_chain_artifacts_share_trust_and_digest_inventory(
     second["sha256"] = "c1" * 32
     fingerprint = second["fingerprint"]
     second_source_digests = ("c2" * 32, "c3" * 32, "c4" * 32, "c5" * 32)
+    assert len(fingerprint["source_artifacts"]) == len(second_source_digests)
     for source, digest in zip(
         fingerprint["source_artifacts"],
         second_source_digests,
-        strict=True,
     ):
         source["artifact_path"] = f"second/{source['artifact_path']}"
         source["sha256"] = digest
@@ -17617,134 +17695,24 @@ def test_aggregate_required_row_output_shape_is_validated(tmp_path: Path) -> Non
 
 
 def test_duplicate_gate_summary_fails(tmp_path: Path) -> None:
-    first = write_gate(tmp_path, "gateway_load")
-    second = tmp_path / "gateway_load_duplicate.json"
-    second.write_text(first.read_text(encoding="utf-8"), encoding="utf-8")
-    third = tmp_path / "gateway_load_duplicate_2.json"
-    third.write_text(first.read_text(encoding="utf-8"), encoding="utf-8")
-    summary = tmp_path / "summary.json"
-
-    assert (
-        run_gate(
-            tmp_path,
-            "--require-gate",
-            "gateway_load",
-            "--summary-out",
-            str(summary),
-        )
-        == 1
-    )
-
-    result = json.loads(summary.read_text(encoding="utf-8"))
-    row_errors = result["required"]["gateway_load"]["errors"]
-    assert row_errors.count("duplicate gateway_load production readiness summary") == 1
-    assert (
-        result["errors"].count("duplicate gateway_load production readiness summary")
-        == 2
-    )
-
-    errors: list[str] = []
-    result["required"]["gateway_load"]["errors"] = [
-        "duplicate gateway_load production readiness summary",
-        "duplicate gateway_load production readiness summary",
-    ]
-    MODULE.validate_duplicate_summary_diagnostics(
-        result["required"],
-        {"gateway_load"},
-        2,
-        errors,
-    )
-    assert (
-        "gateway_load duplicate summary row errors must contain the deterministic duplicate summary diagnostic exactly once"
-        in "\n".join(errors)
-    )
-    errors = []
-    result["required"]["gateway_load"]["errors"] = [
-        "duplicate gateway_load production readiness summary"
-    ]
-    MODULE.validate_duplicate_summary_diagnostics(
-        result["required"],
-        {"gateway_load"},
-        3,
-        errors,
-    )
-    assert (
-        "aggregate summary duplicate-summary diagnostics must match duplicate summary inputs"
-        in "\n".join(errors)
+    assert_duplicate_gate_summary_fails(
+        tmp_path,
+        module=MODULE,
+        write_gate=write_gate,
+        run_gate=run_gate,
     )
 
 
 def test_duplicate_and_unrequired_summaries_fail_closed_from_config(
     tmp_path: Path,
 ) -> None:
-    gate_names = [gate.name for gate in MODULE.GATE_SUMMARY_KINDS]
-    assert len(gate_names) > 1
-
-    for index, gate_name in enumerate(gate_names):
-        root = tmp_path / f"{index}_{gate_name}_duplicate"
-        root.mkdir()
-        first = write_gate(root, gate_name)
-        for duplicate_index in (1, 2):
-            duplicate = root / f"{gate_name}_duplicate_{duplicate_index}.json"
-            duplicate.write_text(first.read_text(encoding="utf-8"), encoding="utf-8")
-        summary = root / "summary.json"
-
-        assert (
-            run_gate(
-                root,
-                "--require-gate",
-                gate_name,
-                "--summary-out",
-                str(summary),
-            )
-            == 1
-        )
-
-        result = json.loads(summary.read_text(encoding="utf-8"))
-        duplicate_error = f"duplicate {gate_name} production readiness summary"
-        row_errors = result["required"][gate_name]["errors"]
-        assert row_errors.count(duplicate_error) == 1
-        assert result["errors"].count(duplicate_error) == 2
-        assert f"{gate_name}_duplicate_" not in "\n".join(result["errors"])
-
-    for index, gate_name in enumerate(gate_names):
-        unrequired_gate = gate_names[(index + 1) % len(gate_names)]
-        root = tmp_path / f"{index}_{gate_name}_unrequired"
-        root.mkdir()
-        required_summary = write_gate(root, gate_name)
-        unrequired_summary = write_gate(root, unrequired_gate)
-        summary = root / "summary.json"
-
-        assert (
-            MODULE.main(
-                [
-                    "--evidence",
-                    str(required_summary),
-                    "--evidence",
-                    str(unrequired_summary),
-                    "--require-gate",
-                    gate_name,
-                    "--now-unix",
-                    str(NOW_UNIX),
-                    "--deployment-id",
-                    DEPLOYMENT_ID,
-                    "--environment",
-                    ENVIRONMENT,
-                    *topology_cli_args(tmp_path),
-                    "--summary-out",
-                    str(summary),
-                ]
-            )
-            == 1
-        )
-
-        result = json.loads(summary.read_text(encoding="utf-8"))
-        errors = "\n".join(result["errors"])
-        assert (
-            result["errors"].count(
-                "explicit production readiness summary belongs to unrequired gate"
-            )
-            == 1
-        )
-        assert MODULE.GATE_BY_NAME[unrequired_gate].schema not in errors
-        assert f"{unrequired_gate}` gate" not in errors
+    assert_duplicate_and_unrequired_summaries_fail_closed(
+        tmp_path,
+        module=MODULE,
+        write_gate=write_gate,
+        run_gate=run_gate,
+        now_unix=NOW_UNIX,
+        deployment_id=DEPLOYMENT_ID,
+        environment=ENVIRONMENT,
+        topology_cli_args=topology_cli_args,
+    )

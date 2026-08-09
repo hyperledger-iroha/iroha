@@ -234,6 +234,23 @@ const MERGE_EXECUTION_LANE_MARKER_PREFIX: &str = "merge_execution_lane_applied_"
 const MERGE_EXECUTION_LANE_FRONTIER_MARKER_PREFIX: &str = "merge_lane_frontier_v1_";
 const NATIVE_AMX_PARTICIPANT_FRONTIER_MARKER_PREFIX: &str = "native_amx_participant_frontier_v2_";
 const QUEUE_PLAN_ADMISSION_REGISTRY_MARKER_PREFIX: &str = "queue_plan_admission_v2_";
+const QUEUE_PLAN_PENDING_OBLIGATION_MARKER_PREFIX: &str = "queue_plan_pending_obligation_v1_";
+const QUEUE_PLAN_PENDING_ROUTE_MEMBER_MARKER_PREFIX: &str = "queue_plan_pending_route_member_v1_";
+const QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1: u16 = 1;
+const QUEUE_PLAN_PENDING_ROUTE_MEMBER_VERSION_V1: u16 = 1;
+const QUEUE_PLAN_PENDING_ROUTE_MEMBER_DOMAIN_V1: &[u8] =
+    b"iroha:queue-plan:pending-route-member:v1\0";
+// One bounded admission certificate supplies the embedded binding. A second
+// certificate-sized envelope conservatively covers fixed identity copies and
+// at most 256 compact, deduplicated route projections.
+const MAX_QUEUE_PLAN_PENDING_OBLIGATION_BYTES: usize =
+    iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES * 2;
+const MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES: usize = 1024;
+// One carrier can authenticate at most this many QueuePlan controls. Reusing
+// the same consensus ceiling for an exact route roster gives deterministic
+// backpressure and bounds every route-prefix scan.
+const MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS: usize =
+    iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSIONS;
 /// Maximum canonical drain-state bytes stored in one lane metadata value.
 const MAX_AUTOSCALE_DRAIN_STATE_BYTES: usize = 32 * 1024;
 /// Maximum canonical pinned-committee bytes stored in one lane metadata value.
@@ -247,276 +264,7 @@ const MAX_MERGE_EXECUTION_ROUTING_PLAN_BYTES: usize = 256 * 1024;
 /// Maximum number of settled VPN lease receipts retained in each account's read projection.
 pub const VPN_SETTLED_RECEIPT_HISTORY_LIMIT: usize = 24;
 
-fn validate_vpn_lease_quote_projection(record: &VpnLeaseRecordV1) -> Result<(), String> {
-    record
-        .signed_quote
-        .verify()
-        .map_err(|error| format!("VPN lease retains an invalid operator quote: {error}"))?;
-    let quote = &record.signed_quote.body;
-    if !record.address_slot.is_valid() {
-        return Err(format!(
-            "VPN lease {} carries an out-of-range address slot",
-            hex::encode(record.lease_id)
-        ));
-    }
-    let canonical_lease_id =
-        derive_vpn_lease_id_v1(&quote.chain_id, quote.quote_id, &quote.client_account_id);
-    if quote.lease_id != canonical_lease_id {
-        return Err(format!(
-            "VPN lease {} retains a non-canonical chain/client/quote id",
-            hex::encode(record.lease_id)
-        ));
-    }
-    let canonical_session_id = derive_vpn_session_id_v1(
-        &quote.chain_id,
-        quote.quote_id,
-        &quote.client_account_id,
-        quote.address_slot,
-    );
-    if quote.session_id != canonical_session_id {
-        return Err(format!(
-            "VPN lease {} retains a non-canonical chain/client/quote/slot session id",
-            hex::encode(record.lease_id)
-        ));
-    }
-    let canonical_addresses = derive_vpn_address_plan_v1(quote.address_slot);
-    if quote.policy.tunnel_addresses != canonical_addresses.client_tunnel_addresses {
-        return Err(format!(
-            "VPN lease {} retains addresses outside its typed slot",
-            hex::encode(record.lease_id)
-        ));
-    }
-    let lease_duration_ms = quote
-        .expires_at_ms
-        .checked_sub(quote.valid_after_ms)
-        .ok_or_else(|| {
-            format!(
-                "VPN lease {} expiry precedes quote validity",
-                hex::encode(record.lease_id)
-            )
-        })?;
-    let policy_duration_ms = quote.policy.lease_secs.checked_mul(1_000).ok_or_else(|| {
-        format!(
-            "VPN lease {} policy duration overflows milliseconds",
-            hex::encode(record.lease_id)
-        )
-    })?;
-    if quote.policy.lease_secs == 0 || lease_duration_ms != policy_duration_ms {
-        return Err(format!(
-            "VPN lease {} validity does not match its signed duration",
-            hex::encode(record.lease_id)
-        ));
-    }
-    if record.opened_at_ms < quote.valid_after_ms || record.opened_at_ms >= quote.expires_at_ms {
-        return Err(format!(
-            "VPN lease {} opened outside its signed quote validity interval",
-            hex::encode(record.lease_id)
-        ));
-    }
-    let refund_available_at_ms = quote
-        .expires_at_ms
-        .checked_add(quote.settlement_grace_ms)
-        .filter(|_| quote.settlement_grace_ms != 0)
-        .ok_or_else(|| {
-            format!(
-                "VPN lease {} has an invalid settlement grace window",
-                hex::encode(record.lease_id)
-            )
-        })?;
-    if quote.policy.relay_trust_valid_until_ms < quote.expires_at_ms {
-        return Err(format!(
-            "VPN lease {} outlives its signed relay trust",
-            hex::encode(record.lease_id)
-        ));
-    }
-    if quote.policy.relay_id == [0_u8; 32]
-        || quote.policy.descriptor_commit == [0_u8; 32]
-        || quote.policy.relay_tls_spki_sha256 == [0_u8; 32]
-        || quote.policy.relay_certificate_sha256 == [0_u8; 32]
-        || quote.policy.directory_snapshot_digest == [0_u8; 32]
-    {
-        return Err(format!(
-            "VPN lease {} retains an empty relay trust commitment",
-            hex::encode(record.lease_id)
-        ));
-    }
-    if quote.policy.fee_asset_id != quote.asset_definition.to_string() {
-        return Err(format!(
-            "VPN lease {} retains a mismatched fee asset label",
-            hex::encode(record.lease_id)
-        ));
-    }
-    let canonical_custody = crate::smartcontracts::isi::vpn::vpn_lease_custody_account_id(
-        &quote.chain_id,
-        &quote.lease_id,
-        &quote.asset_definition,
-    )
-    .map_err(|error| {
-        format!(
-            "VPN lease {} custody derivation failed: {error}",
-            hex::encode(record.lease_id)
-        )
-    })?;
-    if quote.policy.escrow_account_id != canonical_custody {
-        return Err(format!(
-            "VPN lease {} retains non-canonical protocol custody",
-            hex::encode(record.lease_id)
-        ));
-    }
-    if quote.metering_public_key.try_algorithm() != Ok(Algorithm::Ed25519) {
-        return Err(format!(
-            "VPN lease {} retains a non-Ed25519 V1 metering key",
-            hex::encode(record.lease_id)
-        ));
-    }
-    if record.lease_id != quote.lease_id
-        || record.session_id != quote.session_id
-        || record.quote_id != quote.quote_id
-        || record.client_account_id != quote.client_account_id
-        || record.operator_account_id != quote.operator_account_id
-        || record.metering_public_key != quote.metering_public_key
-        || record.asset_definition != quote.asset_definition
-        || record.lease_fee != quote.tariff.lease_fee
-        || record.relay_id != quote.policy.relay_id
-        || record.tariff != quote.tariff
-        || record.quote_policy != quote.policy
-        || record.custody_account_id != quote.policy.escrow_account_id
-        || record.address_slot != quote.address_slot
-        || record.expires_at_ms != quote.expires_at_ms
-        || record.settlement_grace_ms != quote.settlement_grace_ms
-    {
-        return Err(format!(
-            "VPN lease {} does not match its signed quote projection",
-            hex::encode(record.lease_id)
-        ));
-    }
-    match record.status {
-        VpnLeaseStatusV1::Active => {
-            if record.settled_at_ms.is_some()
-                || record.refunded_at_ms.is_some()
-                || record.highest_voucher_sequence != 0
-                || record.client_voucher_hash.is_some()
-                || record.relay_receipt_hash.is_some()
-                || record.settled_relay_receipt.is_some()
-                || !record.earned_fee.is_zero()
-                || !record.refunded_fee.is_zero()
-            {
-                return Err(format!(
-                    "active VPN lease {} carries terminal settlement state",
-                    hex::encode(record.lease_id)
-                ));
-            }
-        }
-        VpnLeaseStatusV1::Settled => {
-            let settled_at_ms = record.settled_at_ms.ok_or_else(|| {
-                format!(
-                    "settled VPN lease {} has no settlement timestamp",
-                    hex::encode(record.lease_id)
-                )
-            })?;
-            let receipt = record.settled_relay_receipt.as_ref().ok_or_else(|| {
-                format!(
-                    "settled VPN lease {} has no retained relay receipt",
-                    hex::encode(record.lease_id)
-                )
-            })?;
-            let receipt_hash = receipt.hash();
-            let expected_account_hash =
-                *blake3::hash(record.client_account_id.to_string().as_bytes()).as_bytes();
-            if record.refunded_at_ms.is_some()
-                || record.relay_receipt_hash != Some(receipt_hash)
-                || record.client_voucher_hash != Some(receipt.client_voucher_hash)
-                || record.highest_voucher_sequence != receipt.highest_voucher_sequence
-                || record.earned_fee != receipt.earned_fee
-                || receipt.session_id != record.session_id
-                || receipt.quote_id != record.quote_id
-                || receipt.relay_id != record.relay_id
-                || receipt.payment_tx_hash != record.open_tx_hash
-                || receipt.account_hash != expected_account_hash
-                || receipt.exit_class != record.quote_policy.exit_class
-                || receipt.started_at_ms < record.opened_at_ms
-                || receipt.ended_at_ms > record.expires_at_ms
-                || receipt.ended_at_ms < receipt.started_at_ms
-                || settled_at_ms < receipt.ended_at_ms
-                || settled_at_ms >= refund_available_at_ms
-            {
-                return Err(format!(
-                    "settled VPN lease {} does not match its retained receipt",
-                    hex::encode(record.lease_id)
-                ));
-            }
-            let accounted_fee = record
-                .earned_fee
-                .checked_add(&record.refunded_fee)
-                .map_err(|error| {
-                    format!(
-                        "settled VPN lease {} fee accounting overflows: {error}",
-                        hex::encode(record.lease_id)
-                    )
-                })?;
-            if accounted_fee != record.lease_fee {
-                return Err(format!(
-                    "settled VPN lease {} does not conserve escrowed fees",
-                    hex::encode(record.lease_id)
-                ));
-            }
-        }
-        VpnLeaseStatusV1::Refunded => {
-            let refunded_at_ms = record.refunded_at_ms.ok_or_else(|| {
-                format!(
-                    "refunded VPN lease {} has no refund timestamp",
-                    hex::encode(record.lease_id)
-                )
-            })?;
-            if refunded_at_ms < refund_available_at_ms
-                || record.settled_at_ms.is_some()
-                || record.highest_voucher_sequence != 0
-                || record.client_voucher_hash.is_some()
-                || record.relay_receipt_hash.is_some()
-                || record.settled_relay_receipt.is_some()
-                || !record.earned_fee.is_zero()
-                || record.refunded_fee != record.lease_fee
-            {
-                return Err(format!(
-                    "refunded VPN lease {} carries inconsistent terminal state",
-                    hex::encode(record.lease_id)
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_vpn_lease_transition(
-    previous: &VpnLeaseRecordV1,
-    next: &VpnLeaseRecordV1,
-) -> Result<(), String> {
-    if previous.signed_quote != next.signed_quote
-        || previous.open_tx_hash != next.open_tx_hash
-        || previous.opened_at_ms != next.opened_at_ms
-    {
-        return Err(format!(
-            "VPN lease {} cannot replace its immutable opening",
-            hex::encode(next.lease_id)
-        ));
-    }
-    match (previous.status, next.status) {
-        (VpnLeaseStatusV1::Active, VpnLeaseStatusV1::Settled | VpnLeaseStatusV1::Refunded) => {
-            Ok(())
-        }
-        (left, right) if left == right && previous == next => Ok(()),
-        (VpnLeaseStatusV1::Settled | VpnLeaseStatusV1::Refunded, VpnLeaseStatusV1::Active) => {
-            Err(format!(
-                "VPN lease {} cannot transition from a terminal status back to active",
-                hex::encode(next.lease_id)
-            ))
-        }
-        (left, right) => Err(format!(
-            "VPN lease {} has invalid lifecycle transition {left:?} -> {right:?}",
-            hex::encode(next.lease_id)
-        )),
-    }
-}
+include!("state/vpn_lease_validation.rs");
 // NRT0 + major + minor + schema. Norito does not expose header parsing outside
 // the crate, so inspect the documented compression byte through checked access.
 const MERGE_INNER_NORITO_COMPRESSION_OFFSET: usize = 4 + 1 + 1 + 16;
@@ -844,272 +592,303 @@ impl<T: MvValue> CellVecExt<T> for CellTransaction<'_, '_, Vec<T>> {
     }
 }
 
-macro_rules! build_world_block {
-    ($state:expr, $method:ident) => {
+// Keep the overlay field inventory centralized: constructors for block, transaction, and
+// read-only scopes must evolve together. Privacy ledger fields are available to mutable scopes;
+// the read-only view exposes only the commitment registry used by typed, validated lookups.
+macro_rules! with_world_overlay_fields {
+    ($callback:ident $(, $arg:tt)*) => {
+        $callback!(
+            $($arg),*;
+            [
+            parameters,
+            peers,
+            consensus_keys,
+            consensus_keys_by_pk,
+            domain_committees,
+            domain_endorsement_policies,
+            domain_endorsements,
+            domain_endorsements_by_domain,
+            domains,
+            domains_by_owner,
+            accounts,
+            uaid_accounts,
+            account_aliases,
+            account_aliases_by_account,
+            account_scope_directory,
+            account_scope_accounts,
+            opaque_uaids,
+            ram_lfe_program_policies,
+            identifier_policies,
+            fee_sponsor_programs,
+            fee_sponsor_program_revisions,
+            fee_sponsor_enrollments,
+            fee_sponsor_vaults,
+            fee_sponsor_budget_counters,
+            identifier_claims,
+            account_rekey_records,
+            account_recovery_policies,
+            account_recovery_requests,
+            asset_definitions,
+            asset_definition_aliases,
+            asset_definition_alias_bindings,
+            contract_aliases,
+            contract_alias_bindings,
+            asset_definition_domains,
+            domain_asset_definitions,
+            asset_definitions_by_owner,
+            asset_definition_holders,
+            asset_definition_assets,
+            assets_by_account,
+            assets_by_domain,
+            asset_definition_nonzero_holders,
+            assets,
+            asset_metadata,
+            nfts,
+            nfts_by_owner,
+            nfts_by_domain,
+            rwas,
+            rwas_by_owner,
+            rwas_by_status,
+            rwas_by_frozen,
+            roles,
+            account_permissions,
+            account_roles,
+            oracle_feeds,
+            oracle_observations,
+            oracle_history,
+            oracle_provider_stats,
+            oracle_disputes,
+            oracle_changes,
+            defi_oracle_attestations,
+            twitter_bindings,
+            twitter_bindings_by_uaid,
+            viral_reward_budget,
+            viral_campaign_budget,
+            viral_daily_counters,
+            viral_binding_claims,
+            viral_escrows,
+            viral_bonus_paid,
+            asset_escrows,
+            asset_escrows_by_seller,
+            asset_escrows_by_buyer,
+            asset_escrows_by_status,
+            vpn_leases,
+            vpn_active_lease_by_account,
+            vpn_active_lease_by_address_slot,
+            vpn_settled_leases_by_account,
+            uaid_dataspaces,
+            space_directory_manifests,
+            axt_policies,
+            axt_replay_ledger,
+            sccp_registry,
+            sccp_outbound_pending_usage,
+            sccp_outbound_pending_messages,
+            sccp_outbound_message_locator,
+            sccp_outbound_message_index,
+            sccp_outbound_proofs,
+            sccp_inbound_messages,
+            sccp_inbound_anchor_high_water,
+            tx_sequences,
+            triggers,
+            executor,
+            executor_data_model,
+            verifying_keys,
+            verifying_keys_by_circuit,
+            pedersen_params,
+            poseidon_params,
+            runtime_upgrades,
+            privacy_consensus_policy,
+            privacy_activations,
+            ]
+            [
+            privacy_pgc_accounts,
+            privacy_pgc_pool_invariants,
+            privacy_nullifiers,
+            privacy_commitments,
+            privacy_roots,
+            privacy_root_heads,
+            ]
+            [
+            proofs,
+            proofs_by_status,
+            proof_tags,
+            proofs_by_tag,
+            validation_fee_proposal_index,
+            commit_qcs,
+            consensus_evidence,
+            contract_manifests,
+            contract_code,
+            contract_code_uploads,
+            contract_code_upload_chunks,
+            contract_instances,
+            contract_subject_bindings,
+            contract_subject_addresses,
+            smart_contract_state,
+            musubi_packages,
+            musubi_package_metadata,
+            musubi_package_members,
+            musubi_package_invitations,
+            musubi_releases,
+            musubi_archives,
+            musubi_provider_bundle_attestations,
+            musubi_archive_locations,
+            musubi_archive_availability,
+            musubi_archive_reverse_references,
+            musubi_locations_by_provider,
+            musubi_locations_by_replication_order,
+            musubi_locations_by_pin,
+            musubi_replication_shortfall_releases,
+            musubi_namespace_bindings,
+            musubi_aliases,
+            musubi_alias_history,
+            musubi_resolver_index,
+            musubi_resolver_index_checkpoints,
+            musubi_resolver_index_revision,
+            musubi_domain_ownership_generations,
+            musubi_registry_policy,
+            musubi_maintainer_directory,
+            musubi_public_directory,
+            musubi_governance_decisions,
+            soracloud_service_revisions,
+            soracloud_service_deployments,
+            soracloud_app_infra_states,
+            soracloud_service_runtime,
+            soracloud_inrou_replica_runtime,
+            soracloud_service_audit_events,
+            soracloud_app_infra_audit_events,
+            soracloud_service_state_entries,
+            soracloud_decryption_request_records,
+            soracloud_agent_apartments,
+            soracloud_agent_apartment_audit_events,
+            soracloud_training_jobs,
+            soracloud_training_job_audit_events,
+            soracloud_model_registries,
+            soracloud_model_weight_versions,
+            soracloud_model_weight_audit_events,
+            soracloud_model_artifacts,
+            soracloud_model_artifact_audit_events,
+            soracloud_uploaded_model_bundles,
+            soracloud_model_host_capabilities,
+            soracloud_inrou_host_capabilities,
+            soracloud_hf_sources,
+            soracloud_hf_shared_lease_pools,
+            soracloud_hf_shared_lease_members,
+            soracloud_hf_shared_lease_audit_events,
+            soracloud_model_host_violation_evidence,
+            soracloud_hf_placements,
+            soracloud_inrou_service_placements,
+            soracloud_mailbox_messages,
+            soracloud_runtime_receipts,
+            soracloud_private_uploaded_model_execution_receipts,
+            capacity_declarations,
+            capacity_fee_ledger,
+            capacity_disputes,
+            sorafs_pricing,
+            provider_credit_ledger,
+            provider_owners,
+            provider_ingest_completion_authorities,
+            da_pin_intents_by_ticket,
+            da_pin_intents_by_alias,
+            da_pin_intents_by_manifest,
+            da_pin_intents_by_lane_epoch,
+            pin_manifests,
+            manifest_aliases,
+            replication_orders,
+            content_bundles,
+            content_chunks,
+            soradns_directory_records,
+            soradns_directory_pending,
+            soradns_directory_latest,
+            soradns_directory_history,
+            soradns_directory_prev_of,
+            soradns_directory_revocations,
+            soradns_release_signers,
+            soradns_rotation_policy,
+            soradns_last_publish_ms,
+            soradns_history_len,
+            repo_agreements,
+            repo_agreements_by_initiator,
+            repo_agreements_by_counterparty,
+            repo_agreements_by_custodian,
+            settlement_receipts,
+            kagemusha_replay_keys,
+            direct_lane_block_application_markers,
+            public_lane_validators,
+            public_lane_stake_shares,
+            public_lane_rewards,
+            public_lane_reward_claims,
+            lane_relay_emergency_validators,
+            zk_assets,
+            elections,
+            citizens,
+            ministry_agenda_proposals,
+            governance_proposals,
+            governance_referenda,
+            governance_stage_approvals,
+            governance_locks,
+            governance_lock_expiry_index,
+            governance_slashes,
+            governance_last_unlock_sweep_height,
+            governance_unlock_stats,
+            council,
+            parliament_bodies,
+            vrf_epochs,
+            merge_hint_roots,
+            merge_global_state_root,
+            ]
+        )
+    };
+}
+
+macro_rules! build_world_block_from_fields {
+    (
+        $state:expr,
+        $method:ident;
+        [$($prefix:ident,)*]
+        [$($privacy:ident,)*]
+        [$($suffix:ident,)*]
+    ) => {
         WorldBlock {
             dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
-            parameters: $state.parameters.$method(),
-            peers: $state.peers.$method(),
-            consensus_keys: $state.consensus_keys.$method(),
-            consensus_keys_by_pk: $state.consensus_keys_by_pk.$method(),
-            domain_committees: $state.domain_committees.$method(),
-            domain_endorsement_policies: $state.domain_endorsement_policies.$method(),
-            domain_endorsements: $state.domain_endorsements.$method(),
-            domain_endorsements_by_domain: $state.domain_endorsements_by_domain.$method(),
-            domains: $state.domains.$method(),
-            domains_by_owner: $state.domains_by_owner.$method(),
-            accounts: $state.accounts.$method(),
-            uaid_accounts: $state.uaid_accounts.$method(),
-            account_aliases: $state.account_aliases.$method(),
-            account_aliases_by_account: $state.account_aliases_by_account.$method(),
-            account_scope_directory: $state.account_scope_directory.$method(),
-            account_scope_accounts: $state.account_scope_accounts.$method(),
-            opaque_uaids: $state.opaque_uaids.$method(),
-            ram_lfe_program_policies: $state.ram_lfe_program_policies.$method(),
-            identifier_policies: $state.identifier_policies.$method(),
-            fee_sponsor_programs: $state.fee_sponsor_programs.$method(),
-            fee_sponsor_program_revisions: $state.fee_sponsor_program_revisions.$method(),
-            fee_sponsor_enrollments: $state.fee_sponsor_enrollments.$method(),
-            fee_sponsor_vaults: $state.fee_sponsor_vaults.$method(),
-            fee_sponsor_budget_counters: $state.fee_sponsor_budget_counters.$method(),
-            identifier_claims: $state.identifier_claims.$method(),
-            account_rekey_records: $state.account_rekey_records.$method(),
-            account_recovery_policies: $state.account_recovery_policies.$method(),
-            account_recovery_requests: $state.account_recovery_requests.$method(),
-            asset_definitions: $state.asset_definitions.$method(),
-            asset_definition_aliases: $state.asset_definition_aliases.$method(),
-            asset_definition_alias_bindings: $state.asset_definition_alias_bindings.$method(),
-            contract_aliases: $state.contract_aliases.$method(),
-            contract_alias_bindings: $state.contract_alias_bindings.$method(),
-            asset_definition_domains: $state.asset_definition_domains.$method(),
-            domain_asset_definitions: $state.domain_asset_definitions.$method(),
-            asset_definitions_by_owner: $state.asset_definitions_by_owner.$method(),
-            asset_definition_holders: $state.asset_definition_holders.$method(),
-            asset_definition_assets: $state.asset_definition_assets.$method(),
-            assets_by_account: $state.assets_by_account.$method(),
-            assets_by_domain: $state.assets_by_domain.$method(),
-            asset_definition_nonzero_holders: $state.asset_definition_nonzero_holders.$method(),
-            assets: $state.assets.$method(),
-            asset_metadata: $state.asset_metadata.$method(),
-            nfts: $state.nfts.$method(),
-            nfts_by_owner: $state.nfts_by_owner.$method(),
-            nfts_by_domain: $state.nfts_by_domain.$method(),
-            rwas: $state.rwas.$method(),
-            rwas_by_owner: $state.rwas_by_owner.$method(),
-            rwas_by_status: $state.rwas_by_status.$method(),
-            rwas_by_frozen: $state.rwas_by_frozen.$method(),
-            roles: $state.roles.$method(),
-            account_permissions: $state.account_permissions.$method(),
-            account_roles: $state.account_roles.$method(),
-            oracle_feeds: $state.oracle_feeds.$method(),
-            oracle_observations: $state.oracle_observations.$method(),
-            oracle_history: $state.oracle_history.$method(),
-            oracle_provider_stats: $state.oracle_provider_stats.$method(),
-            oracle_disputes: $state.oracle_disputes.$method(),
-            oracle_changes: $state.oracle_changes.$method(),
-            defi_oracle_attestations: $state.defi_oracle_attestations.$method(),
-            twitter_bindings: $state.twitter_bindings.$method(),
-            twitter_bindings_by_uaid: $state.twitter_bindings_by_uaid.$method(),
-            viral_reward_budget: $state.viral_reward_budget.$method(),
-            viral_campaign_budget: $state.viral_campaign_budget.$method(),
-            viral_daily_counters: $state.viral_daily_counters.$method(),
-            viral_binding_claims: $state.viral_binding_claims.$method(),
-            viral_escrows: $state.viral_escrows.$method(),
-            viral_bonus_paid: $state.viral_bonus_paid.$method(),
-            asset_escrows: $state.asset_escrows.$method(),
-            asset_escrows_by_seller: $state.asset_escrows_by_seller.$method(),
-            asset_escrows_by_buyer: $state.asset_escrows_by_buyer.$method(),
-            asset_escrows_by_status: $state.asset_escrows_by_status.$method(),
-            vpn_leases: $state.vpn_leases.$method(),
-            vpn_active_lease_by_account: $state.vpn_active_lease_by_account.$method(),
-            vpn_active_lease_by_address_slot: $state.vpn_active_lease_by_address_slot.$method(),
-            vpn_settled_leases_by_account: $state.vpn_settled_leases_by_account.$method(),
-            uaid_dataspaces: $state.uaid_dataspaces.$method(),
-            space_directory_manifests: $state.space_directory_manifests.$method(),
-            axt_policies: $state.axt_policies.$method(),
-            axt_replay_ledger: $state.axt_replay_ledger.$method(),
-            sccp_registry: $state.sccp_registry.$method(),
-            sccp_outbound_pending_usage: $state.sccp_outbound_pending_usage.$method(),
-            sccp_outbound_pending_messages: $state.sccp_outbound_pending_messages.$method(),
-            sccp_outbound_message_locator: $state.sccp_outbound_message_locator.$method(),
-            sccp_outbound_message_index: $state.sccp_outbound_message_index.$method(),
-            sccp_outbound_proofs: $state.sccp_outbound_proofs.$method(),
-            sccp_inbound_messages: $state.sccp_inbound_messages.$method(),
-            sccp_inbound_anchor_high_water: $state.sccp_inbound_anchor_high_water.$method(),
-            tx_sequences: $state.tx_sequences.$method(),
-            triggers: $state.triggers.$method(),
-            executor: $state.executor.$method(),
-            executor_data_model: $state.executor_data_model.$method(),
-            verifying_keys: $state.verifying_keys.$method(),
-            verifying_keys_by_circuit: $state.verifying_keys_by_circuit.$method(),
-            pedersen_params: $state.pedersen_params.$method(),
-            poseidon_params: $state.poseidon_params.$method(),
-            runtime_upgrades: $state.runtime_upgrades.$method(),
-            privacy_consensus_policy: $state.privacy_consensus_policy.$method(),
-            privacy_activations: $state.privacy_activations.$method(),
-            privacy_pgc_accounts: $state.privacy_pgc_accounts.$method(),
-            privacy_pgc_pool_invariants: $state.privacy_pgc_pool_invariants.$method(),
-            privacy_nullifiers: $state.privacy_nullifiers.$method(),
-            privacy_commitments: $state.privacy_commitments.$method(),
-            privacy_roots: $state.privacy_roots.$method(),
-            privacy_root_heads: $state.privacy_root_heads.$method(),
-            proofs: $state.proofs.$method(),
-            proofs_by_status: $state.proofs_by_status.$method(),
-            proof_tags: $state.proof_tags.$method(),
-            proofs_by_tag: $state.proofs_by_tag.$method(),
-            commit_qcs: $state.commit_qcs.$method(),
-            consensus_evidence: $state.consensus_evidence.$method(),
-            contract_manifests: $state.contract_manifests.$method(),
-            contract_code: $state.contract_code.$method(),
-            contract_code_uploads: $state.contract_code_uploads.$method(),
-            contract_code_upload_chunks: $state.contract_code_upload_chunks.$method(),
-            contract_instances: $state.contract_instances.$method(),
-            contract_subject_bindings: $state.contract_subject_bindings.$method(),
-            contract_subject_addresses: $state.contract_subject_addresses.$method(),
-            smart_contract_state: $state.smart_contract_state.$method(),
-            musubi_namespace_bindings: $state.musubi_namespace_bindings.$method(),
-            musubi_domain_ownership_generations: $state
-                .musubi_domain_ownership_generations
-                .$method(),
-            musubi_packages: $state.musubi_packages.$method(),
-            musubi_package_metadata: $state.musubi_package_metadata.$method(),
-            musubi_package_members: $state.musubi_package_members.$method(),
-            musubi_package_invitations: $state.musubi_package_invitations.$method(),
-            musubi_maintainer_directory: $state.musubi_maintainer_directory.$method(),
-            musubi_releases: $state.musubi_releases.$method(),
-            musubi_archives: $state.musubi_archives.$method(),
-            musubi_provider_bundle_attestations: $state
-                .musubi_provider_bundle_attestations
-                .$method(),
-            musubi_archive_locations: $state.musubi_archive_locations.$method(),
-            musubi_locations_by_pin: $state.musubi_locations_by_pin.$method(),
-            musubi_locations_by_replication_order: $state
-                .musubi_locations_by_replication_order
-                .$method(),
-            musubi_locations_by_provider: $state.musubi_locations_by_provider.$method(),
-            musubi_archive_availability: $state.musubi_archive_availability.$method(),
-            musubi_archive_reverse_references: $state.musubi_archive_reverse_references.$method(),
-            musubi_resolver_index: $state.musubi_resolver_index.$method(),
-            musubi_resolver_index_checkpoints: $state.musubi_resolver_index_checkpoints.$method(),
-            musubi_public_directory: $state.musubi_public_directory.$method(),
-            musubi_aliases: $state.musubi_aliases.$method(),
-            musubi_alias_history: $state.musubi_alias_history.$method(),
-            musubi_governance_decisions: $state.musubi_governance_decisions.$method(),
-            musubi_registry_policy: $state.musubi_registry_policy.$method(),
-            musubi_resolver_index_revision: $state.musubi_resolver_index_revision.$method(),
-            musubi_replication_shortfall_releases: $state
-                .musubi_replication_shortfall_releases
-                .$method(),
-            soracloud_service_revisions: $state.soracloud_service_revisions.$method(),
-            soracloud_service_deployments: $state.soracloud_service_deployments.$method(),
-            soracloud_app_infra_states: $state.soracloud_app_infra_states.$method(),
-            soracloud_service_runtime: $state.soracloud_service_runtime.$method(),
-            soracloud_inrou_replica_runtime: $state.soracloud_inrou_replica_runtime.$method(),
-            soracloud_service_audit_events: $state.soracloud_service_audit_events.$method(),
-            soracloud_app_infra_audit_events: $state.soracloud_app_infra_audit_events.$method(),
-            soracloud_service_state_entries: $state.soracloud_service_state_entries.$method(),
-            soracloud_decryption_request_records: $state
-                .soracloud_decryption_request_records
-                .$method(),
-            soracloud_agent_apartments: $state.soracloud_agent_apartments.$method(),
-            soracloud_agent_apartment_audit_events: $state
-                .soracloud_agent_apartment_audit_events
-                .$method(),
-            soracloud_training_jobs: $state.soracloud_training_jobs.$method(),
-            soracloud_training_job_audit_events: $state
-                .soracloud_training_job_audit_events
-                .$method(),
-            soracloud_model_registries: $state.soracloud_model_registries.$method(),
-            soracloud_model_weight_versions: $state.soracloud_model_weight_versions.$method(),
-            soracloud_model_weight_audit_events: $state
-                .soracloud_model_weight_audit_events
-                .$method(),
-            soracloud_model_artifacts: $state.soracloud_model_artifacts.$method(),
-            soracloud_model_artifact_audit_events: $state
-                .soracloud_model_artifact_audit_events
-                .$method(),
-            soracloud_uploaded_model_bundles: $state.soracloud_uploaded_model_bundles.$method(),
-            soracloud_model_host_capabilities: $state.soracloud_model_host_capabilities.$method(),
-            soracloud_inrou_host_capabilities: $state.soracloud_inrou_host_capabilities.$method(),
-            soracloud_hf_sources: $state.soracloud_hf_sources.$method(),
-            soracloud_hf_shared_lease_pools: $state.soracloud_hf_shared_lease_pools.$method(),
-            soracloud_hf_shared_lease_members: $state.soracloud_hf_shared_lease_members.$method(),
-            soracloud_hf_shared_lease_audit_events: $state
-                .soracloud_hf_shared_lease_audit_events
-                .$method(),
-            soracloud_model_host_violation_evidence: $state
-                .soracloud_model_host_violation_evidence
-                .$method(),
-            soracloud_hf_placements: $state.soracloud_hf_placements.$method(),
-            soracloud_inrou_service_placements: $state.soracloud_inrou_service_placements.$method(),
-            soracloud_mailbox_messages: $state.soracloud_mailbox_messages.$method(),
-            soracloud_runtime_receipts: $state.soracloud_runtime_receipts.$method(),
-            soracloud_private_uploaded_model_execution_receipts: $state
-                .soracloud_private_uploaded_model_execution_receipts
-                .$method(),
-            capacity_declarations: $state.capacity_declarations.$method(),
-            capacity_fee_ledger: $state.capacity_fee_ledger.$method(),
-            capacity_disputes: $state.capacity_disputes.$method(),
-            sorafs_pricing: $state.sorafs_pricing.$method(),
-            provider_credit_ledger: $state.provider_credit_ledger.$method(),
-            provider_owners: $state.provider_owners.$method(),
-            provider_ingest_completion_authorities: $state
-                .provider_ingest_completion_authorities
-                .$method(),
-            da_pin_intents_by_ticket: $state.da_pin_intents_by_ticket.$method(),
-            da_pin_intents_by_alias: $state.da_pin_intents_by_alias.$method(),
-            da_pin_intents_by_manifest: $state.da_pin_intents_by_manifest.$method(),
-            da_pin_intents_by_lane_epoch: $state.da_pin_intents_by_lane_epoch.$method(),
-            pin_manifests: $state.pin_manifests.$method(),
-            manifest_aliases: $state.manifest_aliases.$method(),
-            replication_orders: $state.replication_orders.$method(),
-            content_bundles: $state.content_bundles.$method(),
-            content_chunks: $state.content_chunks.$method(),
-            soradns_directory_records: $state.soradns_directory_records.$method(),
-            soradns_directory_pending: $state.soradns_directory_pending.$method(),
-            soradns_directory_latest: $state.soradns_directory_latest.$method(),
-            soradns_directory_history: $state.soradns_directory_history.$method(),
-            soradns_directory_prev_of: $state.soradns_directory_prev_of.$method(),
-            soradns_directory_revocations: $state.soradns_directory_revocations.$method(),
-            soradns_release_signers: $state.soradns_release_signers.$method(),
-            soradns_rotation_policy: $state.soradns_rotation_policy.$method(),
-            soradns_last_publish_ms: $state.soradns_last_publish_ms.$method(),
-            soradns_history_len: $state.soradns_history_len.$method(),
-            repo_agreements: $state.repo_agreements.$method(),
-            repo_agreements_by_initiator: $state.repo_agreements_by_initiator.$method(),
-            repo_agreements_by_counterparty: $state.repo_agreements_by_counterparty.$method(),
-            repo_agreements_by_custodian: $state.repo_agreements_by_custodian.$method(),
-            settlement_receipts: $state.settlement_receipts.$method(),
-            kagemusha_replay_keys: $state.kagemusha_replay_keys.$method(),
-            direct_lane_block_application_markers: $state
-                .direct_lane_block_application_markers
-                .$method(),
-            public_lane_validators: $state.public_lane_validators.$method(),
-            public_lane_stake_shares: $state.public_lane_stake_shares.$method(),
-            public_lane_rewards: $state.public_lane_rewards.$method(),
-            public_lane_reward_claims: $state.public_lane_reward_claims.$method(),
-            lane_relay_emergency_validators: $state.lane_relay_emergency_validators.$method(),
-            zk_assets: $state.zk_assets.$method(),
-            elections: $state.elections.$method(),
-            citizens: $state.citizens.$method(),
-            ministry_agenda_proposals: $state.ministry_agenda_proposals.$method(),
-            governance_proposals: $state.governance_proposals.$method(),
-            governance_referenda: $state.governance_referenda.$method(),
-            governance_stage_approvals: $state.governance_stage_approvals.$method(),
-            governance_locks: $state.governance_locks.$method(),
-            governance_lock_expiry_index: $state.governance_lock_expiry_index.$method(),
-            validation_fee_proposal_index: $state.validation_fee_proposal_index.$method(),
-            governance_slashes: $state.governance_slashes.$method(),
-            governance_last_unlock_sweep_height: $state
-                .governance_last_unlock_sweep_height
-                .$method(),
-            governance_unlock_stats: $state.governance_unlock_stats.$method(),
-            council: $state.council.$method(),
-            parliament_bodies: $state.parliament_bodies.$method(),
-            vrf_epochs: $state.vrf_epochs.$method(),
-            merge_hint_roots: $state.merge_hint_roots.$method(),
-            merge_global_state_root: $state.merge_global_state_root.$method(),
+            $($prefix: $state.$prefix.$method(),)*
+            $($privacy: $state.$privacy.$method(),)*
+            $($suffix: $state.$suffix.$method(),)*
             external_event_buf: Vec::new(),
+        }
+    };
+}
+
+macro_rules! build_world_block {
+    ($state:expr, $method:ident) => {
+        with_world_overlay_fields!(build_world_block_from_fields, $state, $method)
+    };
+}
+
+macro_rules! build_world_transaction_from_fields {
+    (
+        $state:expr,
+        $telemetry:expr,
+        $axt_lane_config:expr,
+        $axt_current_slot:expr,
+        $axt_lane_map:expr;
+        [$($prefix:ident,)*]
+        [$($privacy:ident,)*]
+        [$($suffix:ident,)*]
+    ) => {
+        WorldTransaction {
+            dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
+            $($prefix: $state.$prefix.transaction(),)*
+            $($privacy: $state.$privacy.transaction(),)*
+            $($suffix: $state.$suffix.transaction(),)*
+            axt_lane_config: $axt_lane_config,
+            axt_current_slot: $axt_current_slot,
+            axt_lane_map: $axt_lane_map,
+            current_dataspace_id: None,
+            external_event_sink: &mut $state.external_event_buf,
+            external_event_buf: Vec::new(),
+            #[cfg(feature = "telemetry")]
+            telemetry: $telemetry,
+            internal_event_buf: Vec::new(),
         }
     };
 }
@@ -1122,291 +901,36 @@ macro_rules! build_world_transaction {
         $axt_current_slot:expr,
         $axt_lane_map:expr
     ) => {
-        WorldTransaction {
+        with_world_overlay_fields!(
+            build_world_transaction_from_fields,
+            $state,
+            $telemetry,
+            $axt_lane_config,
+            $axt_current_slot,
+            $axt_lane_map
+        )
+    };
+}
+
+macro_rules! build_world_view_from_fields {
+    (
+        $state:expr;
+        [$($prefix:ident,)*]
+        [$($_privacy:ident,)*]
+        [$($suffix:ident,)*]
+    ) => {
+        WorldView {
             dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
-            parameters: $state.parameters.transaction(),
-            peers: $state.peers.transaction(),
-            consensus_keys: $state.consensus_keys.transaction(),
-            consensus_keys_by_pk: $state.consensus_keys_by_pk.transaction(),
-            domain_committees: $state.domain_committees.transaction(),
-            domain_endorsement_policies: $state.domain_endorsement_policies.transaction(),
-            domain_endorsements: $state.domain_endorsements.transaction(),
-            domain_endorsements_by_domain: $state.domain_endorsements_by_domain.transaction(),
-            domains: $state.domains.transaction(),
-            domains_by_owner: $state.domains_by_owner.transaction(),
-            accounts: $state.accounts.transaction(),
-            uaid_accounts: $state.uaid_accounts.transaction(),
-            account_aliases: $state.account_aliases.transaction(),
-            account_aliases_by_account: $state.account_aliases_by_account.transaction(),
-            account_scope_directory: $state.account_scope_directory.transaction(),
-            account_scope_accounts: $state.account_scope_accounts.transaction(),
-            opaque_uaids: $state.opaque_uaids.transaction(),
-            ram_lfe_program_policies: $state.ram_lfe_program_policies.transaction(),
-            identifier_policies: $state.identifier_policies.transaction(),
-            fee_sponsor_programs: $state.fee_sponsor_programs.transaction(),
-            fee_sponsor_program_revisions: $state.fee_sponsor_program_revisions.transaction(),
-            fee_sponsor_enrollments: $state.fee_sponsor_enrollments.transaction(),
-            fee_sponsor_vaults: $state.fee_sponsor_vaults.transaction(),
-            fee_sponsor_budget_counters: $state.fee_sponsor_budget_counters.transaction(),
-            identifier_claims: $state.identifier_claims.transaction(),
-            account_rekey_records: $state.account_rekey_records.transaction(),
-            account_recovery_policies: $state.account_recovery_policies.transaction(),
-            account_recovery_requests: $state.account_recovery_requests.transaction(),
-            asset_definitions: $state.asset_definitions.transaction(),
-            asset_definition_aliases: $state.asset_definition_aliases.transaction(),
-            asset_definition_alias_bindings: $state.asset_definition_alias_bindings.transaction(),
-            contract_aliases: $state.contract_aliases.transaction(),
-            contract_alias_bindings: $state.contract_alias_bindings.transaction(),
-            asset_definition_domains: $state.asset_definition_domains.transaction(),
-            domain_asset_definitions: $state.domain_asset_definitions.transaction(),
-            asset_definitions_by_owner: $state.asset_definitions_by_owner.transaction(),
-            asset_definition_holders: $state.asset_definition_holders.transaction(),
-            asset_definition_assets: $state.asset_definition_assets.transaction(),
-            assets_by_account: $state.assets_by_account.transaction(),
-            assets_by_domain: $state.assets_by_domain.transaction(),
-            asset_definition_nonzero_holders: $state.asset_definition_nonzero_holders.transaction(),
-            assets: $state.assets.transaction(),
-            asset_metadata: $state.asset_metadata.transaction(),
-            nfts: $state.nfts.transaction(),
-            nfts_by_owner: $state.nfts_by_owner.transaction(),
-            nfts_by_domain: $state.nfts_by_domain.transaction(),
-            rwas: $state.rwas.transaction(),
-            rwas_by_owner: $state.rwas_by_owner.transaction(),
-            rwas_by_status: $state.rwas_by_status.transaction(),
-            rwas_by_frozen: $state.rwas_by_frozen.transaction(),
-            roles: $state.roles.transaction(),
-            account_permissions: $state.account_permissions.transaction(),
-            account_roles: $state.account_roles.transaction(),
-            oracle_feeds: $state.oracle_feeds.transaction(),
-            oracle_observations: $state.oracle_observations.transaction(),
-            oracle_history: $state.oracle_history.transaction(),
-            oracle_provider_stats: $state.oracle_provider_stats.transaction(),
-            oracle_disputes: $state.oracle_disputes.transaction(),
-            oracle_changes: $state.oracle_changes.transaction(),
-            defi_oracle_attestations: $state.defi_oracle_attestations.transaction(),
-            twitter_bindings: $state.twitter_bindings.transaction(),
-            twitter_bindings_by_uaid: $state.twitter_bindings_by_uaid.transaction(),
-            viral_reward_budget: $state.viral_reward_budget.transaction(),
-            viral_campaign_budget: $state.viral_campaign_budget.transaction(),
-            viral_daily_counters: $state.viral_daily_counters.transaction(),
-            viral_binding_claims: $state.viral_binding_claims.transaction(),
-            viral_escrows: $state.viral_escrows.transaction(),
-            viral_bonus_paid: $state.viral_bonus_paid.transaction(),
-            asset_escrows: $state.asset_escrows.transaction(),
-            asset_escrows_by_seller: $state.asset_escrows_by_seller.transaction(),
-            asset_escrows_by_buyer: $state.asset_escrows_by_buyer.transaction(),
-            asset_escrows_by_status: $state.asset_escrows_by_status.transaction(),
-            vpn_leases: $state.vpn_leases.transaction(),
-            vpn_active_lease_by_account: $state.vpn_active_lease_by_account.transaction(),
-            vpn_active_lease_by_address_slot: $state.vpn_active_lease_by_address_slot.transaction(),
-            vpn_settled_leases_by_account: $state.vpn_settled_leases_by_account.transaction(),
-            uaid_dataspaces: $state.uaid_dataspaces.transaction(),
-            space_directory_manifests: $state.space_directory_manifests.transaction(),
-            axt_policies: $state.axt_policies.transaction(),
-            axt_replay_ledger: $state.axt_replay_ledger.transaction(),
-            sccp_registry: $state.sccp_registry.transaction(),
-            sccp_outbound_pending_usage: $state.sccp_outbound_pending_usage.transaction(),
-            sccp_outbound_pending_messages: $state.sccp_outbound_pending_messages.transaction(),
-            sccp_outbound_message_locator: $state.sccp_outbound_message_locator.transaction(),
-            sccp_outbound_message_index: $state.sccp_outbound_message_index.transaction(),
-            sccp_outbound_proofs: $state.sccp_outbound_proofs.transaction(),
-            sccp_inbound_messages: $state.sccp_inbound_messages.transaction(),
-            sccp_inbound_anchor_high_water: $state.sccp_inbound_anchor_high_water.transaction(),
-            tx_sequences: $state.tx_sequences.transaction(),
-            triggers: $state.triggers.transaction(),
-            executor: $state.executor.transaction(),
-            executor_data_model: $state.executor_data_model.transaction(),
-            verifying_keys: $state.verifying_keys.transaction(),
-            verifying_keys_by_circuit: $state.verifying_keys_by_circuit.transaction(),
-            pedersen_params: $state.pedersen_params.transaction(),
-            poseidon_params: $state.poseidon_params.transaction(),
-            runtime_upgrades: $state.runtime_upgrades.transaction(),
-            privacy_consensus_policy: $state.privacy_consensus_policy.transaction(),
-            privacy_activations: $state.privacy_activations.transaction(),
-            privacy_pgc_accounts: $state.privacy_pgc_accounts.transaction(),
-            privacy_pgc_pool_invariants: $state.privacy_pgc_pool_invariants.transaction(),
-            privacy_nullifiers: $state.privacy_nullifiers.transaction(),
-            privacy_commitments: $state.privacy_commitments.transaction(),
-            privacy_roots: $state.privacy_roots.transaction(),
-            privacy_root_heads: $state.privacy_root_heads.transaction(),
-            proofs: $state.proofs.transaction(),
-            proofs_by_status: $state.proofs_by_status.transaction(),
-            proof_tags: $state.proof_tags.transaction(),
-            proofs_by_tag: $state.proofs_by_tag.transaction(),
-            commit_qcs: $state.commit_qcs.transaction(),
-            consensus_evidence: $state.consensus_evidence.transaction(),
-            contract_manifests: $state.contract_manifests.transaction(),
-            contract_code: $state.contract_code.transaction(),
-            contract_code_uploads: $state.contract_code_uploads.transaction(),
-            contract_code_upload_chunks: $state.contract_code_upload_chunks.transaction(),
-            contract_instances: $state.contract_instances.transaction(),
-            contract_subject_bindings: $state.contract_subject_bindings.transaction(),
-            contract_subject_addresses: $state.contract_subject_addresses.transaction(),
-            smart_contract_state: $state.smart_contract_state.transaction(),
-            musubi_namespace_bindings: $state.musubi_namespace_bindings.transaction(),
-            musubi_domain_ownership_generations: $state
-                .musubi_domain_ownership_generations
-                .transaction(),
-            musubi_packages: $state.musubi_packages.transaction(),
-            musubi_package_metadata: $state.musubi_package_metadata.transaction(),
-            musubi_package_members: $state.musubi_package_members.transaction(),
-            musubi_package_invitations: $state.musubi_package_invitations.transaction(),
-            musubi_maintainer_directory: $state.musubi_maintainer_directory.transaction(),
-            musubi_releases: $state.musubi_releases.transaction(),
-            musubi_archives: $state.musubi_archives.transaction(),
-            musubi_provider_bundle_attestations: $state
-                .musubi_provider_bundle_attestations
-                .transaction(),
-            musubi_archive_locations: $state.musubi_archive_locations.transaction(),
-            musubi_locations_by_pin: $state.musubi_locations_by_pin.transaction(),
-            musubi_locations_by_replication_order: $state
-                .musubi_locations_by_replication_order
-                .transaction(),
-            musubi_locations_by_provider: $state.musubi_locations_by_provider.transaction(),
-            musubi_archive_availability: $state.musubi_archive_availability.transaction(),
-            musubi_archive_reverse_references: $state
-                .musubi_archive_reverse_references
-                .transaction(),
-            musubi_resolver_index: $state.musubi_resolver_index.transaction(),
-            musubi_resolver_index_checkpoints: $state
-                .musubi_resolver_index_checkpoints
-                .transaction(),
-            musubi_public_directory: $state.musubi_public_directory.transaction(),
-            musubi_aliases: $state.musubi_aliases.transaction(),
-            musubi_alias_history: $state.musubi_alias_history.transaction(),
-            musubi_governance_decisions: $state.musubi_governance_decisions.transaction(),
-            musubi_registry_policy: $state.musubi_registry_policy.transaction(),
-            musubi_resolver_index_revision: $state.musubi_resolver_index_revision.transaction(),
-            musubi_replication_shortfall_releases: $state
-                .musubi_replication_shortfall_releases
-                .transaction(),
-            soracloud_service_revisions: $state.soracloud_service_revisions.transaction(),
-            soracloud_service_deployments: $state.soracloud_service_deployments.transaction(),
-            soracloud_app_infra_states: $state.soracloud_app_infra_states.transaction(),
-            soracloud_service_runtime: $state.soracloud_service_runtime.transaction(),
-            soracloud_inrou_replica_runtime: $state.soracloud_inrou_replica_runtime.transaction(),
-            soracloud_service_audit_events: $state.soracloud_service_audit_events.transaction(),
-            soracloud_app_infra_audit_events: $state.soracloud_app_infra_audit_events.transaction(),
-            soracloud_service_state_entries: $state.soracloud_service_state_entries.transaction(),
-            soracloud_decryption_request_records: $state
-                .soracloud_decryption_request_records
-                .transaction(),
-            soracloud_agent_apartments: $state.soracloud_agent_apartments.transaction(),
-            soracloud_agent_apartment_audit_events: $state
-                .soracloud_agent_apartment_audit_events
-                .transaction(),
-            soracloud_training_jobs: $state.soracloud_training_jobs.transaction(),
-            soracloud_training_job_audit_events: $state
-                .soracloud_training_job_audit_events
-                .transaction(),
-            soracloud_model_registries: $state.soracloud_model_registries.transaction(),
-            soracloud_model_weight_versions: $state.soracloud_model_weight_versions.transaction(),
-            soracloud_model_weight_audit_events: $state
-                .soracloud_model_weight_audit_events
-                .transaction(),
-            soracloud_model_artifacts: $state.soracloud_model_artifacts.transaction(),
-            soracloud_model_artifact_audit_events: $state
-                .soracloud_model_artifact_audit_events
-                .transaction(),
-            soracloud_uploaded_model_bundles: $state.soracloud_uploaded_model_bundles.transaction(),
-            soracloud_model_host_capabilities: $state
-                .soracloud_model_host_capabilities
-                .transaction(),
-            soracloud_inrou_host_capabilities: $state
-                .soracloud_inrou_host_capabilities
-                .transaction(),
-            soracloud_hf_sources: $state.soracloud_hf_sources.transaction(),
-            soracloud_hf_shared_lease_pools: $state.soracloud_hf_shared_lease_pools.transaction(),
-            soracloud_hf_shared_lease_members: $state
-                .soracloud_hf_shared_lease_members
-                .transaction(),
-            soracloud_hf_shared_lease_audit_events: $state
-                .soracloud_hf_shared_lease_audit_events
-                .transaction(),
-            soracloud_model_host_violation_evidence: $state
-                .soracloud_model_host_violation_evidence
-                .transaction(),
-            soracloud_hf_placements: $state.soracloud_hf_placements.transaction(),
-            soracloud_inrou_service_placements: $state
-                .soracloud_inrou_service_placements
-                .transaction(),
-            soracloud_mailbox_messages: $state.soracloud_mailbox_messages.transaction(),
-            soracloud_runtime_receipts: $state.soracloud_runtime_receipts.transaction(),
-            soracloud_private_uploaded_model_execution_receipts: $state
-                .soracloud_private_uploaded_model_execution_receipts
-                .transaction(),
-            capacity_declarations: $state.capacity_declarations.transaction(),
-            capacity_fee_ledger: $state.capacity_fee_ledger.transaction(),
-            capacity_disputes: $state.capacity_disputes.transaction(),
-            sorafs_pricing: $state.sorafs_pricing.transaction(),
-            provider_credit_ledger: $state.provider_credit_ledger.transaction(),
-            provider_owners: $state.provider_owners.transaction(),
-            provider_ingest_completion_authorities: $state
-                .provider_ingest_completion_authorities
-                .transaction(),
-            da_pin_intents_by_ticket: $state.da_pin_intents_by_ticket.transaction(),
-            da_pin_intents_by_alias: $state.da_pin_intents_by_alias.transaction(),
-            da_pin_intents_by_manifest: $state.da_pin_intents_by_manifest.transaction(),
-            da_pin_intents_by_lane_epoch: $state.da_pin_intents_by_lane_epoch.transaction(),
-            pin_manifests: $state.pin_manifests.transaction(),
-            manifest_aliases: $state.manifest_aliases.transaction(),
-            replication_orders: $state.replication_orders.transaction(),
-            content_bundles: $state.content_bundles.transaction(),
-            content_chunks: $state.content_chunks.transaction(),
-            soradns_directory_records: $state.soradns_directory_records.transaction(),
-            soradns_directory_pending: $state.soradns_directory_pending.transaction(),
-            soradns_directory_latest: $state.soradns_directory_latest.transaction(),
-            soradns_directory_history: $state.soradns_directory_history.transaction(),
-            soradns_directory_prev_of: $state.soradns_directory_prev_of.transaction(),
-            soradns_directory_revocations: $state.soradns_directory_revocations.transaction(),
-            soradns_release_signers: $state.soradns_release_signers.transaction(),
-            soradns_rotation_policy: $state.soradns_rotation_policy.transaction(),
-            soradns_last_publish_ms: $state.soradns_last_publish_ms.transaction(),
-            soradns_history_len: $state.soradns_history_len.transaction(),
-            repo_agreements: $state.repo_agreements.transaction(),
-            repo_agreements_by_initiator: $state.repo_agreements_by_initiator.transaction(),
-            repo_agreements_by_counterparty: $state.repo_agreements_by_counterparty.transaction(),
-            repo_agreements_by_custodian: $state.repo_agreements_by_custodian.transaction(),
-            settlement_receipts: $state.settlement_receipts.transaction(),
-            kagemusha_replay_keys: $state.kagemusha_replay_keys.transaction(),
-            direct_lane_block_application_markers: $state
-                .direct_lane_block_application_markers
-                .transaction(),
-            public_lane_validators: $state.public_lane_validators.transaction(),
-            public_lane_stake_shares: $state.public_lane_stake_shares.transaction(),
-            public_lane_rewards: $state.public_lane_rewards.transaction(),
-            public_lane_reward_claims: $state.public_lane_reward_claims.transaction(),
-            lane_relay_emergency_validators: $state.lane_relay_emergency_validators.transaction(),
-            zk_assets: $state.zk_assets.transaction(),
-            elections: $state.elections.transaction(),
-            citizens: $state.citizens.transaction(),
-            ministry_agenda_proposals: $state.ministry_agenda_proposals.transaction(),
-            governance_proposals: $state.governance_proposals.transaction(),
-            governance_referenda: $state.governance_referenda.transaction(),
-            governance_stage_approvals: $state.governance_stage_approvals.transaction(),
-            governance_locks: $state.governance_locks.transaction(),
-            governance_lock_expiry_index: $state.governance_lock_expiry_index.transaction(),
-            validation_fee_proposal_index: $state.validation_fee_proposal_index.transaction(),
-            governance_slashes: $state.governance_slashes.transaction(),
-            governance_last_unlock_sweep_height: $state
-                .governance_last_unlock_sweep_height
-                .transaction(),
-            governance_unlock_stats: $state.governance_unlock_stats.transaction(),
-            council: $state.council.transaction(),
-            parliament_bodies: $state.parliament_bodies.transaction(),
-            vrf_epochs: $state.vrf_epochs.transaction(),
-            merge_hint_roots: $state.merge_hint_roots.transaction(),
-            merge_global_state_root: $state.merge_global_state_root.transaction(),
-            axt_lane_config: $axt_lane_config,
-            axt_current_slot: $axt_current_slot,
-            axt_lane_map: $axt_lane_map,
-            current_dataspace_id: None,
-            external_event_sink: &mut $state.external_event_buf,
-            external_event_buf: Vec::new(),
-            #[cfg(feature = "telemetry")]
-            telemetry: $telemetry,
-            internal_event_buf: Vec::new(),
+            $($prefix: $state.$prefix.view(),)*
+            privacy_commitments: $state.privacy_commitments.view(),
+            $($suffix: $state.$suffix.view(),)*
         }
+    };
+}
+
+macro_rules! build_world_view {
+    ($state:expr) => {
+        with_world_overlay_fields!(build_world_view_from_fields, $state)
     };
 }
 
@@ -2129,6 +1653,77 @@ struct AppliedMergeLaneFrontierMarker {
     lane_block_descriptor_hash: Hash,
 }
 
+/// One exact lane incarnation that remains responsible for globally admitted
+/// QueuePlan work until its canonical carrier commits the entrypoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct QueuePlanPendingObligationRouteV1 {
+    version: u16,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+}
+
+/// Replicated pending application obligation for one immutable QueuePlan
+/// admission. The optional signed identity covers the legacy all-external
+/// transaction index while the typed entrypoint identity covers heterogeneous
+/// and authority-free carriers. Every compact identity and deduplicated route
+/// is checked against the embedded, registry-hash-authenticated admission
+/// binding whenever the marker is decoded.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct QueuePlanPendingObligationV1 {
+    version: u16,
+    chain_id_digest: Hash,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    signed_transaction_hash: Option<HashOf<SignedTransaction>>,
+    binding_hash: Hash,
+    binding: crate::torii_proxy::QueuePlanAdmissionBindingV2,
+    routes: Vec<QueuePlanPendingObligationRouteV1>,
+}
+
+/// Exact replicated membership witness for one pending QueuePlan obligation
+/// on one deduplicated route. Route-prefixed keys form the authoritative,
+/// canonically ordered roster; bounded prefix enumeration replaces the lossy
+/// count/XOR summary and keeps drain/removal exact.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct QueuePlanPendingRouteMemberV1 {
+    version: u16,
+    route: QueuePlanPendingObligationRouteV1,
+    chain_id_digest: Hash,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    binding_hash: Hash,
+    member_identity: [u8; Hash::LENGTH],
+}
+
+/// Mutable QueuePlan marker storage used by both block overlays and their
+/// nested failure-atomic transactions.
+trait QueuePlanMarkerStorage: StorageReadOnly<StatePath, Vec<u8>> {
+    fn insert_queue_plan_marker(&mut self, key: StatePath, payload: Vec<u8>);
+    fn remove_queue_plan_marker(&mut self, key: StatePath);
+}
+
+impl QueuePlanMarkerStorage for StorageBlock<'_, StatePath, Vec<u8>> {
+    fn insert_queue_plan_marker(&mut self, key: StatePath, payload: Vec<u8>) {
+        let _ = self.insert(key, payload);
+    }
+
+    fn remove_queue_plan_marker(&mut self, key: StatePath) {
+        let _ = self.remove(key);
+    }
+}
+
+impl QueuePlanMarkerStorage for StorageTransaction<'_, '_, StatePath, Vec<u8>> {
+    fn insert_queue_plan_marker(&mut self, key: StatePath, payload: Vec<u8>) {
+        let _ = self.insert(key, payload);
+    }
+
+    fn remove_queue_plan_marker(&mut self, key: StatePath) {
+        let _ = self.remove(key);
+    }
+}
+
 /// Replicated Native AMX participant-control frontier. Presence certifies that
 /// the global block committed the exact control QCs; the independently durable
 /// Kura application receipt determines whether its effects are published.
@@ -2230,6 +1825,25 @@ struct MergeExecutionSource {
     origin_proposal: iroha_data_model::block::consensus::LaneBlockProposalV1,
     certified: crate::kura::CertifiedLaneBlockArtifact,
     input: crate::kura::LaneBlockExecutionInputArtifact,
+}
+
+impl MergeExecutionSource {
+    fn from_durable(source: crate::kura::DurableAutonomousLaneMergeSource) -> Self {
+        let crate::kura::DurableAutonomousLaneMergeSource {
+            bundle,
+            source_bundle,
+            bundle_hash,
+            input,
+        } = source;
+        let origin_proposal = bundle.executable_payload().origin_proposal.clone();
+        Self {
+            bundle_hash,
+            source_bundle,
+            origin_proposal,
+            certified: bundle.certified,
+            input,
+        }
+    }
 }
 
 type MergeExecutionCanonicalOrderKey = (LaneId, DataSpaceId, Hash, u64, u64, u64, Hash, Hash);
@@ -2402,18 +2016,22 @@ pub(crate) fn committed_transaction_hashes_for_entrypoints(
         .collect()
 }
 
-/// Decode the exact queue reservations finalized by a certified merge entry.
+/// Decode the exact queue-reservation groups finalized by a certified merge entry.
 ///
-/// Returned pairs are in canonical lane/entrypoint order. Canonical decoding,
-/// transaction binding, and cross-lane uniqueness are rechecked so queue
-/// finalization never falls back to coordinates or a hash-only approximation.
-pub(crate) fn certified_merge_queue_reservations(
+/// The outer vector retains canonical lane order and every inner vector retains
+/// exact entrypoint/FIFO order. Canonical decoding, transaction binding, and
+/// cross-lane uniqueness are rechecked before any caller can begin Queue
+/// cleanup, so a malformed later group cannot partially consume an earlier
+/// group.
+pub(crate) fn certified_merge_queue_reservation_groups(
     entry: &MergeLedgerEntry,
 ) -> Result<
-    Vec<(
-        HashOf<SignedTransaction>,
-        crate::queue::LaneQueueReservationKeyV2,
-    )>,
+    Vec<
+        Vec<(
+            HashOf<SignedTransaction>,
+            crate::queue::LaneQueueReservationKeyV2,
+        )>,
+    >,
     MergeLedgerCommitError,
 > {
     let Some(batch) = entry.execution_batch.as_ref() else {
@@ -2421,7 +2039,7 @@ pub(crate) fn certified_merge_queue_reservations(
     };
     let mut seen_transactions = BTreeSet::new();
     let mut seen_reservations = BTreeSet::new();
-    let mut reservations = Vec::new();
+    let mut groups = Vec::with_capacity(batch.lanes.len());
     for execution in &batch.lanes {
         let transaction_hashes =
             committed_transaction_hashes_for_entrypoints(&execution.entrypoints);
@@ -2430,6 +2048,7 @@ pub(crate) fn certified_merge_queue_reservations(
                 "merge queue reservation vector is not aligned with entrypoints".to_owned(),
             ));
         }
+        let mut reservations = Vec::with_capacity(execution.reservation_keys.len());
         for (transaction_hash, encoded) in transaction_hashes
             .into_iter()
             .zip(&execution.reservation_keys)
@@ -2446,8 +2065,33 @@ pub(crate) fn certified_merge_queue_reservations(
             }
             reservations.push((transaction_hash, reservation));
         }
+        crate::queue::lane_queue_reservation_group_binding_from_ordered_keys(
+            reservations.iter().map(|(_, key)| key),
+        )
+        .map_err(|reason| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                "merge queue reservation group is invalid: {reason}"
+            ))
+        })?;
+        groups.push(reservations);
     }
-    Ok(reservations)
+    Ok(groups)
+}
+
+/// Decode exact queue reservations in canonical lane/entrypoint order.
+pub(crate) fn certified_merge_queue_reservations(
+    entry: &MergeLedgerEntry,
+) -> Result<
+    Vec<(
+        HashOf<SignedTransaction>,
+        crate::queue::LaneQueueReservationKeyV2,
+    )>,
+    MergeLedgerCommitError,
+> {
+    Ok(certified_merge_queue_reservation_groups(entry)?
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
 /// Errors surfaced when committing merge-ledger entries into state.
@@ -2758,6 +2402,21 @@ pub(crate) enum MergeLedgerPublicationMode {
     Replay,
 }
 
+/// Bounds which pending merge-entry shapes may be selected for one carrier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PendingCertifiedMergeSelection {
+    /// Execution and control-only entries are eligible.
+    Any,
+    /// Only entries without an autonomous execution batch are eligible.
+    ControlOnly,
+}
+
+impl PendingCertifiedMergeSelection {
+    const fn allows_execution(self) -> bool {
+        matches!(self, Self::Any)
+    }
+}
+
 /// Result of comparing one expected QueuePlan admission binding with WSV.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QueuePlanAdmissionRegistryMatch {
@@ -2767,6 +2426,16 @@ pub enum QueuePlanAdmissionRegistryMatch {
     Exact,
     /// WSV binds the source identity to another well-formed claim.
     Conflict,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueuePlanAdmissionApplicationState {
+    /// The obligation is pending on every currently active bound incarnation.
+    Pending,
+    /// The obligation is coherent but names a retired/recreated incarnation.
+    PendingStale,
+    /// Canonical transaction membership proves global application.
+    Applied,
 }
 
 /// Durable disposition of one authenticated pending QueuePlan certificate.
@@ -2792,15 +2461,25 @@ pub enum PendingQueuePlanAdmissionDisposition {
 /// transition. Malformed keys or values return an error so callers retain the
 /// only durable queue owner while failing closed.
 pub(crate) fn queue_plan_admission_registry_match(
-    state_view: &impl StateReadOnly,
+    state_view: &impl StateReadOnlyWithTransactions,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     expected_binding_hash: Hash,
 ) -> Result<QueuePlanAdmissionRegistryMatch, String> {
-    State::queue_plan_admission_registry_match_in_view(
-        state_view,
-        entrypoint_hash,
-        expected_binding_hash,
-    )
+    let (registry_match, application_state) =
+        State::queue_plan_admission_registry_match_with_application_state_in_view(
+            state_view,
+            entrypoint_hash,
+            expected_binding_hash,
+        )?;
+    if registry_match == QueuePlanAdmissionRegistryMatch::Exact
+        && application_state != Some(QueuePlanAdmissionApplicationState::Pending)
+    {
+        return Err(
+            "QueuePlan registry owner is already applied and cannot authorize new Queue ownership"
+                .to_owned(),
+        );
+    }
+    Ok(registry_match)
 }
 
 impl MergeLedgerPublicationMode {
@@ -7863,7 +7542,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     }
 
     /// Remove a repo agreement and keep derived indexes consistent.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn remove_repo_agreement_entry(
         &mut self,
         agreement_id: &RepoAgreementId,
@@ -8768,773 +8447,10 @@ impl ConfidentialTreeProfile {
     }
 }
 
-/// Policy and state for a shielded asset.
-#[derive(
-    Copy, Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
-)]
-pub struct FrontierCheckpoint {
-    /// Block height when the checkpoint was recorded.
-    pub height: u64,
-    /// Number of commitments present when the checkpoint was recorded.
-    pub commitment_count: u64,
-    /// Merkle root associated with the checkpoint.
-    pub root: [u8; 32],
-}
-
-/// Summary of how a frontier checkpoint update changed the rolling history.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-pub struct FrontierCheckpointUpdate {
-    /// Whether a new checkpoint was recorded.
-    pub recorded: bool,
-    /// How many checkpoints were evicted to satisfy depth/interval constraints.
-    pub evicted: u64,
-}
-
-mod zk_asset_tree_frontier_json {
-    pub(super) fn serialize(
-        frontier: &crate::zk::confidential_v2::ConfidentialTreeFrontierV2,
-        out: &mut String,
-    ) {
-        out.push('[');
-        for (index, node) in frontier.iter().enumerate() {
-            if index != 0 {
-                out.push(',');
-            }
-            norito::json::JsonSerialize::json_serialize(node, out);
-        }
-        out.push(']');
-    }
-}
-
-/// Canonical shielded asset ledger snapshot persisted within the world state.
-#[derive(Clone, Debug, JsonSerialize, NoritoSerialize, NoritoDeserialize)]
-pub struct ZkAssetState {
-    /// Authenticated commitment-tree construction for this asset.
-    pub tree_profile: ConfidentialTreeProfile,
-    /// Fixed-size incremental frontier authenticated by `commitments`.
-    #[norito(with = "zk_asset_tree_frontier_json")]
-    pub tree_frontier: crate::zk::confidential_v2::ConfidentialTreeFrontierV2,
-    /// Current root authenticated by the incremental frontier and retained history.
-    pub persisted_root: [u8; 32],
-    /// First-release public-plus-confidential asset mode.
-    pub mode: iroha_data_model::isi::zk::ZkAssetMode,
-    /// Whether authenticated public-to-confidential top-ups are permitted.
-    pub allow_shield: bool,
-    /// Whether authenticated confidential-to-public redemption is permitted for this asset.
-    pub allow_unshield: bool,
-    /// Append‑only list of note commitments (leaves of the Merkle tree).
-    pub commitments: Vec<[u8; 32]>,
-    /// Historical Merkle roots for recent states (for light clients/proofs).
-    pub root_history: Vec<[u8; 32]>,
-    /// Set of consumed nullifiers to prevent double spends.
-    pub nullifiers: std::collections::BTreeSet<[u8; 32]>,
-    /// Required verifying key for unshield proofs (if configured).
-    pub vk_unshield: Option<ZkAssetVerifierBinding>,
-    /// Required canonical Kagemusha top-up shield verifying key (if configured).
-    pub vk_shield: Option<ZkAssetVerifierBinding>,
-    /// Rolling set of frontier checkpoints (height, commitment count, root).
-    pub frontier_checkpoints: Vec<FrontierCheckpoint>,
-}
-
-impl Default for ZkAssetState {
-    fn default() -> Self {
-        let tree_profile = ConfidentialTreeProfile::default();
-        Self {
-            tree_profile,
-            tree_frontier: [None; crate::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2],
-            persisted_root: tree_profile.empty_root(),
-            mode: iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-            allow_shield: false,
-            allow_unshield: false,
-            commitments: Vec::new(),
-            root_history: Vec::new(),
-            nullifiers: std::collections::BTreeSet::new(),
-            vk_unshield: None,
-            vk_shield: None,
-            frontier_checkpoints: Vec::new(),
-        }
-    }
-}
-
-impl ZkAssetState {
-    /// Read the persisted current root after checking constant-size tree metadata.
-    pub fn current_root(&self) -> Result<[u8; 32], String> {
-        self.validate_tree_metadata()?;
-        Ok(self.persisted_root)
-    }
-
-    /// Validate the constant-size metadata needed by hot mutation and root reads.
-    ///
-    /// Complete retained-history and checkpoint validation belongs to
-    /// [`Self::validate_tree_integrity`] at decode, recovery, or admitted audit
-    /// boundaries. Previously validated history is append-only, so hot writes
-    /// need only recheck its current authenticated tail.
-    pub fn validate_tree_metadata(&self) -> Result<(), String> {
-        if self.frontier_checkpoints.len()
-            > crate::zk::confidential_v2::CONFIDENTIAL_TREE_CAPACITY_V2
-        {
-            return Err(
-                "confidential frontier checkpoint history exceeds its fixed bound".to_owned(),
-            );
-        }
-        crate::zk::confidential_v2::validate_confidential_tree_frontier_v2(
-            self.commitments.len(),
-            &self.tree_frontier,
-            self.persisted_root,
-        )?;
-        if self.commitments.is_empty() {
-            if !self.root_history.is_empty() {
-                return Err(
-                    "empty confidential tree must not contain commitment root history".to_owned(),
-                );
-            }
-            if self.persisted_root != self.tree_profile.empty_root() {
-                return Err(
-                    "empty confidential tree must retain its profile-defined root".to_owned(),
-                );
-            }
-        } else if self.root_history.is_empty() {
-            return Err("non-empty confidential tree must retain its current root".to_owned());
-        } else if self.root_history.len() > self.commitments.len() {
-            return Err("confidential root history cannot exceed the commitment count".to_owned());
-        } else if self.root_history.last().copied() != Some(self.persisted_root) {
-            return Err(
-                "confidential root history tail does not match the persisted current root"
-                    .to_owned(),
-            );
-        }
-
-        if let Some(checkpoint) = self.frontier_checkpoints.last() {
-            let commitment_count = usize::try_from(checkpoint.commitment_count).map_err(|_| {
-                "frontier checkpoint commitment count does not fit usize".to_owned()
-            })?;
-            if commitment_count > self.commitments.len() {
-                return Err("frontier checkpoint exceeds the persisted commitment count".to_owned());
-            }
-            if !crate::zk::confidential_v2::confidential_tree_node_is_canonical_v2(checkpoint.root)
-            {
-                return Err("frontier checkpoint root is not canonical".to_owned());
-            }
-            if commitment_count == 0 && checkpoint.root != self.tree_profile.empty_root() {
-                return Err(
-                    "empty frontier checkpoint root does not match the tree profile".to_owned(),
-                );
-            }
-            if commitment_count == self.commitments.len() && checkpoint.root != self.persisted_root
-            {
-                return Err(
-                    "current frontier checkpoint root does not match the persisted current root"
-                        .to_owned(),
-                );
-            }
-        }
-        Ok(())
-    }
-
-    /// Fully rebuild and validate persisted roots, frontier, and checkpoints.
-    ///
-    /// This linear audit is intentionally reserved for decode, recovery, and
-    /// explicitly admitted audit paths. Hot appends use
-    /// [`Self::validate_tree_metadata`] and the persisted incremental frontier.
-    pub fn validate_tree_integrity(&self) -> Result<(), String> {
-        self.validate_tree_metadata()?;
-        let projection =
-            crate::zk::confidential_v2::ConfidentialTreeProjectionV2::build(&self.commitments)?;
-        if projection.root() != self.persisted_root {
-            return Err(
-                "persisted confidential current root does not match the commitment projection"
-                    .to_owned(),
-            );
-        }
-        if projection.frontier()? != self.tree_frontier {
-            return Err(
-                "persisted confidential frontier does not match the commitment projection"
-                    .to_owned(),
-            );
-        }
-
-        let prefix_roots = self.tree_profile.compute_prefix_roots(&self.commitments)?;
-        if !self.commitments.is_empty() {
-            let retained_start = self.commitments.len() - self.root_history.len();
-            let expected_history = prefix_roots
-                .get(retained_start..)
-                .ok_or_else(|| "confidential prefix-root computation truncated state".to_owned())?;
-            if self.root_history.as_slice() != expected_history {
-                return Err(
-                    "confidential root history does not match the persisted tree profile"
-                        .to_owned(),
-                );
-            }
-        }
-
-        let mut previous_height = None;
-        let mut previous_commitment_count = None;
-        for checkpoint in &self.frontier_checkpoints {
-            if previous_height.is_some_and(|height| checkpoint.height <= height) {
-                return Err("frontier checkpoint heights must be strictly increasing".to_owned());
-            }
-            previous_height = Some(checkpoint.height);
-            if previous_commitment_count.is_some_and(|count| checkpoint.commitment_count < count) {
-                return Err(
-                    "frontier checkpoint commitment counts must be non-decreasing".to_owned(),
-                );
-            }
-            previous_commitment_count = Some(checkpoint.commitment_count);
-            let commitment_count = usize::try_from(checkpoint.commitment_count).map_err(|_| {
-                "frontier checkpoint commitment count does not fit usize".to_owned()
-            })?;
-            if commitment_count > self.commitments.len() {
-                return Err("frontier checkpoint exceeds the persisted commitment count".to_owned());
-            }
-            let expected = if commitment_count == 0 {
-                self.tree_profile.empty_root()
-            } else {
-                *prefix_roots.get(commitment_count - 1).ok_or_else(|| {
-                    "confidential prefix-root computation truncated checkpoint state".to_owned()
-                })?
-            };
-            if checkpoint.root != expected {
-                return Err(
-                    "frontier checkpoint root does not match the persisted tree profile".to_owned(),
-                );
-            }
-        }
-        Ok(())
-    }
-
-    /// Append a 32-byte note commitment to the shielded ledger and update the root.
-    /// Enforces a cap on the number of recent roots kept (`cap`, minimum 1).
-    /// Returns the new Merkle root.
-    pub fn push_commitment(&mut self, c: [u8; 32], cap: NonZeroUsize) -> Result<[u8; 32], String> {
-        self.push_commitments(&[c], cap)?
-            .into_iter()
-            .next()
-            .ok_or_else(|| "single commitment append produced no root".to_owned())
-    }
-
-    /// Atomically append an ordered commitment batch and return each resulting root.
-    ///
-    /// The complete batch is validated before either commitments or retained roots
-    /// are changed, so a malformed leaf or capacity overflow leaves all persisted
-    /// values unchanged.
-    pub fn push_commitments(
-        &mut self,
-        commitments: &[[u8; 32]],
-        cap: NonZeroUsize,
-    ) -> Result<Vec<[u8; 32]>, String> {
-        let previous_len = self.commitments.len();
-        let next_len = previous_len
-            .checked_add(commitments.len())
-            .ok_or_else(|| "confidential commitment count overflow".to_owned())?;
-        if next_len > self.tree_profile.capacity() {
-            return Err(format!(
-                "confidential tree capacity {} exceeded by {next_len} commitments",
-                self.tree_profile.capacity(),
-            ));
-        }
-        self.validate_tree_metadata()?;
-        if commitments.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let append = crate::zk::confidential_v2::append_confidential_tree_frontier_v2(
-            previous_len,
-            self.tree_frontier,
-            self.persisted_root,
-            commitments,
-        )?;
-        self.commitments
-            .try_reserve(commitments.len())
-            .map_err(|error| {
-                format!("failed to reserve confidential commitment storage: {error}")
-            })?;
-        self.root_history
-            .try_reserve(append.appended_roots.len())
-            .map_err(|error| format!("failed to reserve confidential root history: {error}"))?;
-
-        self.commitments.extend_from_slice(commitments);
-        self.root_history.extend_from_slice(&append.appended_roots);
-        // Bound retained roots by the sole confidential tree-history policy.
-        let max_keep = cap.get();
-        let len = self.root_history.len();
-        if len > max_keep {
-            let surplus = len - max_keep;
-            self.root_history.drain(0..surplus);
-        }
-        self.tree_frontier = append.frontier;
-        self.persisted_root = append.current_root;
-        Ok(append.appended_roots)
-    }
-
-    /// Record a frontier checkpoint for reorg recovery, enforcing interval and depth bounds.
-    pub fn record_frontier_checkpoint(
-        &mut self,
-        height: u64,
-        interval: u64,
-        depth_bound: u64,
-    ) -> Result<FrontierCheckpointUpdate, String> {
-        self.validate_tree_metadata()?;
-        let mut update = FrontierCheckpointUpdate::default();
-        if interval == 0 {
-            return Ok(update);
-        }
-
-        let should_record = self
-            .frontier_checkpoints
-            .last()
-            .is_none_or(|last| height.saturating_sub(last.height) >= interval);
-        if should_record {
-            self.frontier_checkpoints.push(FrontierCheckpoint {
-                height,
-                commitment_count: self.commitments.len() as u64,
-                root: self.persisted_root,
-            });
-            update.recorded = true;
-        }
-
-        if depth_bound == 0 {
-            if self.frontier_checkpoints.len() > 1 {
-                let evicted = (self.frontier_checkpoints.len() - 1) as u64;
-                let keep = self.frontier_checkpoints.pop();
-                self.frontier_checkpoints.clear();
-                if let Some(last) = keep {
-                    self.frontier_checkpoints.push(last);
-                }
-                update.evicted += evicted;
-            }
-            return Ok(update);
-        }
-
-        let evict = self
-            .frontier_checkpoints
-            .iter()
-            .take(self.frontier_checkpoints.len().saturating_sub(1))
-            .take_while(|checkpoint| height.saturating_sub(checkpoint.height) > depth_bound)
-            .count();
-        if evict != 0 {
-            self.frontier_checkpoints.drain(..evict);
-            update.evicted = update
-                .evicted
-                .saturating_add(u64::try_from(evict).unwrap_or(u64::MAX));
-        }
-        let hard_excess = self
-            .frontier_checkpoints
-            .len()
-            .saturating_sub(crate::zk::confidential_v2::CONFIDENTIAL_TREE_CAPACITY_V2);
-        if hard_excess != 0 {
-            self.frontier_checkpoints.drain(..hard_excess);
-            update.evicted = update
-                .evicted
-                .saturating_add(u64::try_from(hard_excess).unwrap_or(u64::MAX));
-        }
-        Ok(update)
-    }
-}
-
-#[cfg(feature = "telemetry")]
-impl ZkAssetState {
-    /// Build [`ConfidentialTreeStats`] for the current tree snapshot.
-    pub fn telemetry_stats(
-        &self,
-        root_evictions: u64,
-        frontier_evictions: u64,
-    ) -> ConfidentialTreeStats {
-        let last_checkpoint = self.frontier_checkpoints.last().copied();
-        let tree_depth = if self.commitments.is_empty() {
-            0
-        } else {
-            u64::try_from(self.tree_profile.depth()).unwrap_or(u64::MAX)
-        };
-        ConfidentialTreeStats {
-            commitments: saturating_len_to_u64(self.commitments.len()),
-            tree_depth,
-            root_history: saturating_len_to_u64(self.root_history.len()),
-            frontier_checkpoints: saturating_len_to_u64(self.frontier_checkpoints.len()),
-            last_checkpoint_height: last_checkpoint.as_ref().map_or(0, |cp| cp.height),
-            last_checkpoint_commitments: last_checkpoint.map_or(0, |cp| cp.commitment_count),
-            root_evictions,
-            frontier_evictions,
-        }
-    }
-}
-
-#[cfg(feature = "telemetry")]
-fn saturating_len_to_u64(len: usize) -> u64 {
-    u64::try_from(len).unwrap_or(u64::MAX)
-}
+include!("state/zk_asset_state.rs");
 
 #[cfg(test)]
-mod zk_asset_state_tests {
-    use super::*;
-
-    fn push_dummy_root(state: &mut ZkAssetState, seed: u8) {
-        state
-            .push_commitment(
-                [seed; 32],
-                NonZeroUsize::new(64).expect("non-zero root history cap"),
-            )
-            .expect("canonical test commitment");
-    }
-
-    #[test]
-    fn record_frontier_checkpoint_reports_evictions() {
-        let mut state = ZkAssetState::default();
-        push_dummy_root(&mut state, 1);
-        let first = state
-            .record_frontier_checkpoint(1, 1, 5)
-            .expect("canonical empty root");
-        assert!(first.recorded);
-        assert_eq!(first.evicted, 0);
-        push_dummy_root(&mut state, 2);
-        let second = state
-            .record_frontier_checkpoint(2, 1, 5)
-            .expect("canonical empty root");
-        assert!(second.recorded);
-        assert_eq!(second.evicted, 0);
-
-        // Exceed depth bound so the oldest checkpoint is dropped.
-        push_dummy_root(&mut state, 10);
-        let third = state
-            .record_frontier_checkpoint(10, 1, 1)
-            .expect("canonical empty root");
-        assert!(third.recorded);
-        assert!(
-            third.evicted >= 1,
-            "expected an eviction once the depth bound is exceeded"
-        );
-
-        // When depth bound is zero, keep only the latest checkpoint.
-        push_dummy_root(&mut state, 20);
-        let before_cp = state.frontier_checkpoints.len();
-        let fourth = state
-            .record_frontier_checkpoint(20, 1, 0)
-            .expect("canonical empty root");
-        assert!(fourth.recorded);
-        assert!(
-            fourth.evicted >= before_cp.saturating_sub(1) as u64,
-            "expected at least one eviction when depth bound is zero"
-        );
-        assert!(
-            !state.frontier_checkpoints.is_empty(),
-            "frontier checkpoints should retain the newest entry"
-        );
-        assert_eq!(
-            state
-                .frontier_checkpoints
-                .last()
-                .expect("checkpoint present")
-                .height,
-            20
-        );
-    }
-
-    #[test]
-    fn empty_checkpoint_uses_profile_root() {
-        let mut state = ZkAssetState::default();
-        let update = state
-            .record_frontier_checkpoint(1, 1, 4)
-            .expect("canonical empty tree");
-        assert!(update.recorded);
-        assert_eq!(state.frontier_checkpoints.len(), 1);
-        assert_eq!(
-            state.frontier_checkpoints[0].root,
-            ConfidentialTreeProfile::PoseidonPastaV1.empty_root()
-        );
-        state
-            .validate_tree_integrity()
-            .expect("empty checkpoint follows the profile");
-    }
-
-    #[test]
-    fn hot_append_rejects_tampered_current_root_history_tail() {
-        let mut state = ZkAssetState::default();
-        push_dummy_root(&mut state, 1);
-        push_dummy_root(&mut state, 2);
-        state
-            .root_history
-            .last_mut()
-            .expect("retained current root")[0] ^= 0x80;
-        let before = state.commitments.clone();
-
-        let error = state
-            .push_commitment(
-                [3; 32],
-                NonZeroUsize::new(64).expect("non-zero root history cap"),
-            )
-            .expect_err("tampered retained roots must fail closed");
-        assert!(error.contains("root history"));
-        assert_eq!(state.commitments, before);
-    }
-
-    #[test]
-    fn full_integrity_rejects_tampered_older_retained_root() {
-        let mut state = ZkAssetState::default();
-        push_dummy_root(&mut state, 1);
-        push_dummy_root(&mut state, 2);
-        state.root_history[0][0] ^= 0x01;
-
-        let error = state
-            .validate_tree_integrity()
-            .expect_err("recovery audit must reject an older retained-root mismatch");
-        assert!(error.contains("root history"));
-    }
-
-    #[test]
-    fn hot_append_rejects_tampered_incremental_frontier() {
-        let mut state = ZkAssetState::default();
-        push_dummy_root(&mut state, 1);
-        state.tree_frontier[0]
-            .as_mut()
-            .expect("one-leaf frontier slot")[0] ^= 0x01;
-        let before = state.commitments.clone();
-
-        let error = state
-            .push_commitment(
-                [2; 32],
-                NonZeroUsize::new(64).expect("non-zero root history cap"),
-            )
-            .expect_err("tampered incremental frontier must fail closed");
-        assert!(error.contains("frontier") || error.contains("current root"));
-        assert_eq!(state.commitments, before);
-    }
-
-    #[test]
-    fn tree_integrity_rejects_tampered_checkpoint() {
-        let mut state = ZkAssetState::default();
-        push_dummy_root(&mut state, 1);
-        state
-            .record_frontier_checkpoint(1, 1, 4)
-            .expect("canonical checkpoint");
-        state.frontier_checkpoints[0].root[0] ^= 0x80;
-
-        let error = state
-            .validate_tree_integrity()
-            .expect_err("tampered checkpoint must fail closed");
-        assert!(error.contains("checkpoint root"));
-    }
-
-    #[test]
-    fn invalid_commitment_is_rolled_back() {
-        let mut state = ZkAssetState::default();
-        let error = state
-            .push_commitment(
-                [0; 32],
-                NonZeroUsize::new(64).expect("non-zero root history cap"),
-            )
-            .expect_err("zero is not a canonical confidential commitment");
-        assert!(error.contains("non-zero and canonical"));
-        assert!(state.commitments.is_empty());
-        assert!(state.root_history.is_empty());
-    }
-
-    #[test]
-    fn commitment_batch_is_atomic() {
-        let mut state = ZkAssetState::default();
-        push_dummy_root(&mut state, 1);
-        let before_commitments = state.commitments.clone();
-        let before_roots = state.root_history.clone();
-        let before_frontier = state.tree_frontier;
-        let before_current_root = state.persisted_root;
-
-        let error = state
-            .push_commitments(
-                &[[2; 32], [0; 32], [3; 32]],
-                NonZeroUsize::new(64).expect("non-zero root history cap"),
-            )
-            .expect_err("one malformed commitment rejects the complete batch");
-        assert!(error.contains("non-zero and canonical"));
-        assert_eq!(state.commitments, before_commitments);
-        assert_eq!(state.root_history, before_roots);
-        assert_eq!(state.tree_frontier, before_frontier);
-        assert_eq!(state.persisted_root, before_current_root);
-    }
-
-    #[test]
-    fn capacity_overflow_rejects_the_complete_batch_without_residue() {
-        let mut state = ZkAssetState::default();
-        state.commitments = vec![[1; 32]; state.tree_profile.capacity() - 1];
-        let before_commitments = state.commitments.clone();
-        let before_roots = state.root_history.clone();
-
-        let error = state
-            .push_commitments(
-                &[[2; 32], [3; 32]],
-                NonZeroUsize::new(64).expect("non-zero root history cap"),
-            )
-            .expect_err("two outputs cannot partially consume the final tree slot");
-        assert!(error.contains("tree capacity"));
-        assert_eq!(state.commitments, before_commitments);
-        assert_eq!(state.root_history, before_roots);
-    }
-
-    #[test]
-    fn tree_frontier_json_roundtrips_and_rejects_wrong_cardinality() {
-        let mut state = ZkAssetState::default();
-        push_dummy_root(&mut state, 1);
-
-        let encoded = norito::json::to_json(&state).expect("encode ZK asset JSON state");
-        let decoded: ZkAssetState =
-            norito::json::from_str(&encoded).expect("decode ZK asset JSON state");
-        assert_eq!(decoded.tree_frontier, state.tree_frontier);
-
-        let value = norito::json::to_value(&state).expect("encode ZK asset JSON value");
-        let frontier = value
-            .as_object()
-            .and_then(|object| object.get("tree_frontier"))
-            .and_then(norito::json::Value::as_array)
-            .expect("tree frontier JSON array");
-        assert_eq!(
-            frontier.len(),
-            crate::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2
-        );
-        assert!(
-            frontier[0].as_str().is_some(),
-            "present frontier nodes use canonical hex strings"
-        );
-        assert!(
-            frontier.iter().any(norito::json::Value::is_null),
-            "unused frontier slots remain explicit null values"
-        );
-
-        let mut short = value.clone();
-        short
-            .as_object_mut()
-            .and_then(|object| object.get_mut("tree_frontier"))
-            .and_then(norito::json::Value::as_array_mut)
-            .expect("mutable tree frontier JSON array")
-            .pop();
-        let error = norito::json::from_value::<ZkAssetState>(short)
-            .expect_err("a 15-entry tree frontier must be rejected");
-        assert!(error.to_string().contains("expected exactly 16"));
-
-        let mut malformed = value.clone();
-        malformed
-            .as_object_mut()
-            .and_then(|object| object.get_mut("tree_frontier"))
-            .and_then(norito::json::Value::as_array_mut)
-            .expect("mutable tree frontier JSON array")[0] =
-            norito::json::Value::String("GG".repeat(32));
-        let error = norito::json::from_value::<ZkAssetState>(malformed)
-            .expect_err("a malformed frontier digest must be rejected");
-        assert!(error.to_string().contains("invalid hex digit"));
-
-        let mut long = value;
-        long.as_object_mut()
-            .and_then(|object| object.get_mut("tree_frontier"))
-            .and_then(norito::json::Value::as_array_mut)
-            .expect("mutable tree frontier JSON array")
-            .push(norito::json::Value::Null);
-        let error = norito::json::from_value::<ZkAssetState>(long)
-            .expect_err("a 17-entry tree frontier must be rejected");
-        assert!(error.to_string().contains("expected exactly 16"));
-    }
-
-    #[test]
-    fn persisted_tree_profile_roundtrips_and_is_required() {
-        for circuit_id in [
-            crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
-            crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
-            crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
-            crate::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
-        ] {
-            assert_eq!(
-                ConfidentialTreeProfile::for_circuit_id(circuit_id),
-                Some(ConfidentialTreeProfile::PoseidonPastaV1)
-            );
-        }
-        assert_eq!(
-            ConfidentialTreeProfile::for_circuit_id("unsupported/confidential-tree"),
-            None
-        );
-
-        let mut state = ZkAssetState::default();
-        push_dummy_root(&mut state, 1);
-        let encoded = norito::to_bytes(&state).expect("encode ZK asset state");
-        let decoded =
-            norito::decode_from_bytes::<ZkAssetState>(&encoded).expect("decode ZK asset state");
-        assert_eq!(
-            decoded.tree_profile,
-            ConfidentialTreeProfile::PoseidonPastaV1
-        );
-        assert_eq!(decoded.tree_frontier, state.tree_frontier);
-        assert_eq!(decoded.persisted_root, state.persisted_root);
-        decoded
-            .validate_tree_integrity()
-            .expect("decoded profile state remains canonical");
-
-        let mut missing_profile =
-            norito::json::to_value(&state).expect("encode ZK asset JSON state");
-        missing_profile
-            .as_object_mut()
-            .expect("ZK asset state object")
-            .remove("tree_profile");
-        assert!(
-            norito::json::from_value::<ZkAssetState>(missing_profile).is_err(),
-            "first-release snapshots must explicitly persist the tree profile"
-        );
-
-        let mut missing_frontier =
-            norito::json::to_value(&state).expect("encode ZK asset JSON state");
-        missing_frontier
-            .as_object_mut()
-            .expect("ZK asset state object")
-            .remove("tree_frontier");
-        assert!(
-            norito::json::from_value::<ZkAssetState>(missing_frontier).is_err(),
-            "first-release snapshots must explicitly persist the incremental frontier"
-        );
-
-        let mut missing_current_root =
-            norito::json::to_value(&state).expect("encode ZK asset JSON state");
-        missing_current_root
-            .as_object_mut()
-            .expect("ZK asset state object")
-            .remove("persisted_root");
-        assert!(
-            norito::json::from_value::<ZkAssetState>(missing_current_root).is_err(),
-            "first-release snapshots must explicitly persist the current root"
-        );
-
-        let mut unknown_profile_field =
-            norito::json::to_value(&state).expect("encode ZK asset JSON state");
-        unknown_profile_field
-            .as_object_mut()
-            .expect("ZK asset state object")
-            .insert("legacy_tree".to_owned(), norito::json::Value::Null);
-        assert!(
-            norito::json::from_value::<ZkAssetState>(unknown_profile_field).is_err(),
-            "unknown tree encodings must not be ignored"
-        );
-    }
-
-    #[cfg(feature = "telemetry")]
-    #[test]
-    fn telemetry_stats_reflect_tree_state() {
-        let mut state = ZkAssetState::default();
-        state
-            .push_commitment(
-                [1; 32],
-                NonZeroUsize::new(4).expect("non-zero root history cap"),
-            )
-            .expect("canonical commitment");
-        push_dummy_root(&mut state, 2);
-        state
-            .record_frontier_checkpoint(10, 1, 4)
-            .expect("canonical checkpoint");
-        let telemetry_snapshot = state.telemetry_stats(3, 1);
-        assert_eq!(telemetry_snapshot.commitments, 2);
-        assert!(
-            telemetry_snapshot.tree_depth >= 1,
-            "tree depth should reflect inserted commitment"
-        );
-        assert_eq!(telemetry_snapshot.root_history, 2);
-        assert_eq!(telemetry_snapshot.frontier_checkpoints, 1);
-        assert_eq!(telemetry_snapshot.last_checkpoint_height, 10);
-        assert_eq!(telemetry_snapshot.last_checkpoint_commitments, 2);
-        assert_eq!(telemetry_snapshot.root_evictions, 3);
-        assert_eq!(telemetry_snapshot.frontier_evictions, 1);
-    }
-}
+mod zk_asset_state_tests;
 
 impl json::JsonDeserialize for ZkAssetState {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -11679,27 +10595,7 @@ impl PipelineParallelism {
 }
 
 #[cfg(test)]
-mod pipeline_parallelism_tests {
-    use super::{
-        PIPELINE_AUTO_WORKER_MAX, PIPELINE_AUTO_WORKER_MIN, resolve_pipeline_worker_threads,
-    };
-
-    #[test]
-    fn pipeline_parallelism_auto_is_bounded() {
-        let expected = std::thread::available_parallelism()
-            .map(|count| count.get())
-            .unwrap_or(1)
-            .clamp(PIPELINE_AUTO_WORKER_MIN, PIPELINE_AUTO_WORKER_MAX);
-
-        assert_eq!(resolve_pipeline_worker_threads(0), expected);
-        assert!(resolve_pipeline_worker_threads(0) <= PIPELINE_AUTO_WORKER_MAX);
-    }
-
-    #[test]
-    fn pipeline_parallelism_preserves_explicit_workers() {
-        assert_eq!(resolve_pipeline_worker_threads(32), 32);
-    }
-}
+mod pipeline_parallelism_tests;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StatelessValidationContext {
@@ -12196,6 +11092,7 @@ impl Drop for TieredSnapshotWorker {
 }
 
 const STATE_VIEW_LOCK_CONTENTION_WARN_COOLDOWN: Duration = Duration::from_secs(5);
+const DIAGNOSTIC_STABLE_STATE_GENERATION_ATTEMPTS: usize = 4;
 
 struct StateViewGenerationWriteGuard<'a> {
     generation: &'a AtomicU64,
@@ -12429,12 +11326,13 @@ struct ReplayMergeCarrier {
     entry: MergeLedgerEntry,
 }
 
-type AutonomousLaneDiagnosticKey = (LaneId, DataSpaceId, Hash, u64, u64, u64, u64, Hash);
+type AutonomousLaneDiagnosticKey = (LaneId, DataSpaceId, Hash, u64, u64, u64, Hash);
 
 #[derive(Clone)]
 struct AutonomousLaneDiagnosticEvidence {
     row: SumeragiAutonomousLaneExecution,
     reservation_keys: Option<Vec<crate::queue::LaneQueueReservationKeyV2>>,
+    reservations_durable: bool,
     payload_durable: bool,
     availability_certified: bool,
     lane_certified: bool,
@@ -12447,41 +11345,37 @@ struct AutonomousLaneDiagnosticEvidence {
 }
 
 impl AutonomousLaneDiagnosticEvidence {
-    fn from_proposal(
-        proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
-    ) -> Option<Self> {
-        let descriptor = &proposal.descriptor;
-        let transaction_count = u64::try_from(descriptor.accepted_transaction_hashes.len()).ok()?;
-        if transaction_count == 0
-            || descriptor.accepted_candidate_indices.len()
-                != descriptor.accepted_transaction_hashes.len()
-        {
-            return None;
-        }
-        Some(Self {
+    fn from_reservation_group(
+        summary: crate::queue::LaneQueueReservationDiagnosticGroupV1,
+    ) -> Self {
+        let binding = summary.binding;
+        let identity = binding.identity;
+        Self {
             row: SumeragiAutonomousLaneExecution {
-                lane_id: descriptor.lane_id,
-                dataspace_id: descriptor.dataspace_id,
-                lane_incarnation: descriptor.lane_incarnation,
-                lane_block_height: descriptor.lane_block_height,
-                lane_block_view: descriptor.lane_block_view,
-                proposal_height: descriptor.proposal_height,
-                proposal_view: proposal
-                    .payload_block_hint
-                    .map_or(0, |hint| hint.proposal_view),
-                proposal_hash: proposal.proposal_hash,
-                descriptor_hash: descriptor.descriptor_hash,
+                lane_id: identity.lane_id,
+                dataspace_id: identity.dataspace_id,
+                lane_incarnation: identity.lane_incarnation,
+                lane_block_height: identity.lane_block_height,
+                lane_block_view: identity.lane_block_view,
+                proposal_height: identity.proposal_height,
+                proposal_view: None,
+                reservation_owner_hash: identity.reservation_owner_hash,
+                proposal_identity_hash: identity.proposal_identity_hash,
+                reservation_group_hash: binding.reservation_group_hash,
+                proposal_hash: None,
+                descriptor_hash: None,
                 executable_payload_hash: None,
                 source_bundle_hash: None,
                 merge_entry_hash: None,
                 application_block_height: None,
                 application_block_hash: None,
-                reservation_count: 0,
-                transaction_count,
-                highest_durable_stage: SumeragiAutonomousLaneExecutionStage::LaneCertified,
+                reservation_count: binding.reservation_count,
+                transaction_count: binding.reservation_count,
+                highest_durable_stage: SumeragiAutonomousLaneExecutionStage::ReservationsDurable,
                 stuck_reason: None,
             },
             reservation_keys: None,
+            reservations_durable: true,
             payload_durable: false,
             availability_certified: false,
             lane_certified: false,
@@ -12490,7 +11384,73 @@ impl AutonomousLaneDiagnosticEvidence {
             globally_committed: false,
             application_receipt: false,
             queue_finalized: false,
-            conflict: false,
+            conflict: summary.conflict,
+        }
+    }
+
+    fn from_proposal_and_reservations(
+        proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
+        reservation_keys: &[crate::queue::LaneQueueReservationKeyV2],
+    ) -> Result<Self> {
+        let descriptor = &proposal.descriptor;
+        let transaction_count = u64::try_from(descriptor.accepted_transaction_hashes.len())
+            .map_err(|_| eyre!("autonomous proposal transaction count does not fit u64"))?;
+        let binding = crate::queue::lane_queue_reservation_group_binding_from_ordered_keys(
+            reservation_keys.iter(),
+        )
+        .map_err(|reason| eyre!(reason))?;
+        let identity = binding.identity;
+        let reservation_count = binding.reservation_count;
+        let conflict = transaction_count == 0
+            || descriptor.accepted_candidate_indices.len()
+                != descriptor.accepted_transaction_hashes.len()
+            || transaction_count != reservation_count
+            || descriptor.lane_id != identity.lane_id
+            || descriptor.dataspace_id != identity.dataspace_id
+            || descriptor.lane_incarnation != identity.lane_incarnation
+            || descriptor.proposal_height != identity.proposal_height
+            || descriptor.lane_block_height != identity.lane_block_height
+            || descriptor.lane_block_view != identity.lane_block_view
+            || descriptor
+                .accepted_transaction_hashes
+                .iter()
+                .zip(reservation_keys)
+                .any(|(accepted, key)| *accepted != Hash::from(key.entrypoint_hash));
+        Ok(Self {
+            row: SumeragiAutonomousLaneExecution {
+                lane_id: identity.lane_id,
+                dataspace_id: identity.dataspace_id,
+                lane_incarnation: identity.lane_incarnation,
+                lane_block_height: identity.lane_block_height,
+                lane_block_view: identity.lane_block_view,
+                proposal_height: identity.proposal_height,
+                proposal_view: proposal.payload_block_hint.map(|hint| hint.proposal_view),
+                reservation_owner_hash: identity.reservation_owner_hash,
+                proposal_identity_hash: identity.proposal_identity_hash,
+                reservation_group_hash: binding.reservation_group_hash,
+                proposal_hash: Some(proposal.proposal_hash),
+                descriptor_hash: Some(descriptor.descriptor_hash),
+                executable_payload_hash: None,
+                source_bundle_hash: None,
+                merge_entry_hash: None,
+                application_block_height: None,
+                application_block_hash: None,
+                reservation_count,
+                transaction_count,
+                highest_durable_stage: SumeragiAutonomousLaneExecutionStage::LaneCertified,
+                stuck_reason: None,
+            },
+            reservation_keys: Some(reservation_keys.to_vec()),
+            reservations_durable: false,
+            payload_durable: false,
+            availability_certified: false,
+            lane_certified: false,
+            bundle_durable: false,
+            merge_candidate: false,
+            globally_committed: false,
+            application_receipt: false,
+            queue_finalized: false,
+            conflict,
         })
     }
 
@@ -12501,16 +11461,20 @@ impl AutonomousLaneDiagnosticEvidence {
     fn exact_reservation_keys(&self) -> Option<&[crate::queue::LaneQueueReservationKeyV2]> {
         let keys = self.reservation_keys.as_deref()?;
         let count = u64::try_from(keys.len()).ok()?;
+        let binding =
+            crate::queue::lane_queue_reservation_group_binding_from_ordered_keys(keys.iter())
+                .ok()?;
         if count != self.row.reservation_count
             || count != self.row.transaction_count
-            || keys.iter().any(|key| {
-                key.lane_id != self.row.lane_id
-                    || key.dataspace_id != self.row.dataspace_id
-                    || key.lane_incarnation != self.row.lane_incarnation
-                    || key.proposal_height != self.row.proposal_height
-                    || key.lane_block_height != self.row.lane_block_height
-                    || key.lane_block_view != self.row.lane_block_view
-            })
+            || binding.reservation_group_hash != self.row.reservation_group_hash
+            || binding.identity.lane_id != self.row.lane_id
+            || binding.identity.dataspace_id != self.row.dataspace_id
+            || binding.identity.lane_incarnation != self.row.lane_incarnation
+            || binding.identity.proposal_height != self.row.proposal_height
+            || binding.identity.lane_block_height != self.row.lane_block_height
+            || binding.identity.lane_block_view != self.row.lane_block_view
+            || binding.identity.reservation_owner_hash != self.row.reservation_owner_hash
+            || binding.identity.proposal_identity_hash != self.row.proposal_identity_hash
         {
             return None;
         }
@@ -12518,10 +11482,48 @@ impl AutonomousLaneDiagnosticEvidence {
     }
 
     fn merge(&mut self, other: Self) {
-        if self.row.descriptor_hash != other.row.descriptor_hash
-            || self.row.transaction_count != other.row.transaction_count
-        {
+        if self.row.transaction_count != other.row.transaction_count {
             self.conflict = true;
+        }
+        match (self.row.proposal_view, other.row.proposal_view) {
+            (Some(current), Some(incoming)) if current != incoming => self.conflict = true,
+            (None, incoming) => self.row.proposal_view = incoming,
+            _ => {}
+        }
+        if self.row.reservation_owner_hash != other.row.reservation_owner_hash {
+            self.conflict = true;
+            self.row.reservation_owner_hash = self
+                .row
+                .reservation_owner_hash
+                .min(other.row.reservation_owner_hash);
+        }
+        if self.row.reservation_group_hash != other.row.reservation_group_hash {
+            self.conflict = true;
+            self.row.reservation_group_hash = self
+                .row
+                .reservation_group_hash
+                .min(other.row.reservation_group_hash);
+        }
+        match (
+            (self.row.proposal_hash, self.row.descriptor_hash),
+            (other.row.proposal_hash, other.row.descriptor_hash),
+        ) {
+            (
+                (Some(current_proposal), Some(current_descriptor)),
+                (Some(incoming_proposal), Some(incoming_descriptor)),
+            ) => {
+                if current_proposal != incoming_proposal
+                    || current_descriptor != incoming_descriptor
+                {
+                    self.conflict = true;
+                }
+            }
+            ((None, None), (Some(proposal_hash), Some(descriptor_hash))) => {
+                self.row.proposal_hash = Some(proposal_hash);
+                self.row.descriptor_hash = Some(descriptor_hash);
+            }
+            ((Some(_), Some(_)), (None, None)) | ((None, None), (None, None)) => {}
+            _ => self.conflict = true,
         }
         for (current, incoming) in [
             (
@@ -12575,6 +11577,7 @@ impl AutonomousLaneDiagnosticEvidence {
             }
             _ => {}
         }
+        self.reservations_durable |= other.reservations_durable;
         self.payload_durable |= other.payload_durable;
         self.availability_certified |= other.availability_certified;
         self.lane_certified |= other.lane_certified;
@@ -12629,13 +11632,12 @@ impl AutonomousLaneDiagnosticEvidence {
                 SumeragiAutonomousLaneExecutionStage::ExecutablePayloadDurable,
                 Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingPayloadAvailability),
             )
-        } else if self.row.reservation_count == self.row.transaction_count {
-            // Reserved for a future State-owned durable Queue witness. The
-            // current projection never reaches this branch because Queue is
-            // deliberately outside State/Kura diagnostics authority.
+        } else if self.reservations_durable
+            && self.row.reservation_count == self.row.transaction_count
+        {
             (
                 SumeragiAutonomousLaneExecutionStage::ReservationsDurable,
-                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingPayloadAvailability),
+                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingExecutablePayload),
             )
         } else {
             (
@@ -12795,6 +11797,89 @@ enum CommitRosterAuthority<'a> {
     V2Finality,
 }
 
+/// Move-only proof that this block overlay is the exact canonical WSV transition
+/// re-executed from one certified autonomous merge batch.
+#[derive(Debug)]
+struct CanonicalWsvMergeCommitAuthorization {
+    entry_hash: HashOf<MergeLedgerEntry>,
+    carrier_height: u64,
+    carrier_hash: HashOf<BlockHeader>,
+    base_state_height: u64,
+    base_state_hash: HashOf<BlockHeader>,
+    batch_hash: Hash,
+    write_set_root: Hash,
+    expected_post_state_hash: HashOf<BlockHeader>,
+    /// Exact autonomous execution events committed by `write_set_root`.
+    ///
+    /// Block application drains these transient events for publication before
+    /// the State commit boundary. Retaining their exact encoding lets the
+    /// final authorization reconstruct the certified write-set without either
+    /// suppressing observable events or accepting a different event surface.
+    external_event_bytes: Option<Vec<u8>>,
+    /// Number of leading block events produced by the autonomous execution.
+    ///
+    /// Ordinary deterministic carrier processing may append events (most
+    /// notably the canonical time event). The prefix length keeps those events
+    /// outside the merge write-set while proving that the QC-bound autonomous
+    /// events were neither removed nor reordered.
+    external_event_count: usize,
+    /// Exact complete event surface observed after deterministic carrier
+    /// processing and before consensus may vote.
+    ///
+    /// `None` means the post-block surface has not been authorized yet. Once
+    /// present, final application must observe these bytes unchanged before it
+    /// appends the ordinary Applied block event and publishes the buffer.
+    validated_publication_event_bytes: Option<Vec<u8>>,
+}
+
+/// Exact carrier metadata permitted at each autonomous merge execution boundary.
+///
+/// Candidate construction and certified-entry staging run before the canonical
+/// transaction-height index is touched. Full block validation must then stage
+/// one exact empty carrier row before voting, and final application must bind
+/// both that row and the finalized carrier hash. This transient validation-only
+/// view is never persisted or serialized; keeping the phases distinct prevents
+/// rejection of valid carriers or acceptance of arbitrary block metadata.
+#[derive(Debug, Clone, Copy)]
+enum MergeExecutionCommitSurface<'carrier> {
+    Pristine,
+    PostBlockPreVote {
+        carrier_height: u64,
+    },
+    FinalizedCarrier {
+        carrier_height: u64,
+        carrier_hash: &'carrier HashOf<BlockHeader>,
+    },
+}
+
+/// Move-only proof that the exact finalized carrier metadata was derived for
+/// an authorized autonomous execution without adding another WSV effect.
+#[derive(Debug)]
+struct CanonicalCarrierCommitMetadataAuthorization {
+    entry_hash: HashOf<MergeLedgerEntry>,
+    carrier_height: u64,
+    carrier_hash: HashOf<BlockHeader>,
+    previous_commit_topology: Vec<PeerId>,
+    next_commit_topology: Vec<PeerId>,
+    autoscale_sample: AutoscaleSampleRecord,
+}
+
+/// Move-only authorization consumed at the canonical State commit boundary.
+///
+/// Implementations must bind the finalized carrier identity to the exact
+/// autonomous merge entry staged in this [`StateBlock`]. State consumes the
+/// authorization while holding `state_commit_lock`, after the final lane
+/// retirement veto and before any lane geometry or WSV storage is published.
+pub(crate) trait StateBlockCommitAuthorization {
+    /// Consume and validate this authorization against State's exact commit
+    /// identity.
+    fn consume_for_state_commit(
+        self: Box<Self>,
+        carrier_block_hash: HashOf<BlockHeader>,
+        staged_merge_entry: Option<&MergeLedgerEntry>,
+    ) -> Result<(), String>;
+}
+
 /// Struct for block's aggregated changes
 pub struct StateBlock<'state> {
     state_ref: &'state State,
@@ -12933,6 +12018,11 @@ pub struct StateBlock<'state> {
     direct_committed_transactions: HashSet<HashOf<SignedTransaction>>,
     /// Resolved certified merge entry staged before ordinary carrier-block effects.
     staged_merge_entry: Option<MergeLedgerEntry>,
+    /// Single-use canonical WSV publication authority for an autonomous execution batch.
+    canonical_wsv_merge_commit_authorization: Option<CanonicalWsvMergeCommitAuthorization>,
+    /// Single-use authority for exact post-finality carrier metadata.
+    canonical_carrier_commit_metadata_authorization:
+        Option<CanonicalCarrierCommitMetadataAuthorization>,
     /// Nexus fee receipt ids whose marker writes become committed with this block.
     pending_nexus_fee_receipt_source_ids: BTreeSet<[u8; 32]>,
     /// Whether deterministic start-of-block effects have already been applied.
@@ -12966,6 +12056,21 @@ impl<'state> StateBlock<'state> {
     /// Return the block-local autoscale history exactly as commit would publish it.
     pub(crate) fn autoscale_sample_history_for_snapshot(&self) -> &VecDeque<AutoscaleSampleRecord> {
         &self.autoscale_sample_history
+    }
+
+    /// Return the exact pending scale-in identity, when this block carries one.
+    ///
+    /// Callers use this read-only projection to acquire the Queue retirement
+    /// observer only for a real scale-in. State re-derives and checks the same
+    /// binding under its lifecycle fence during commit.
+    pub(crate) fn pending_autoscale_retirement_binding(
+        &self,
+    ) -> Result<Option<(LaneId, DataSpaceId, Hash)>, LaneLifecycleError> {
+        self.pending_autoscale_lifecycle
+            .as_ref()
+            .map(PendingAutoscaleLaneLifecycle::exact_scale_in_binding)
+            .transpose()
+            .map(Option::flatten)
     }
 
     /// Serialize transaction membership exactly as this block commit would publish it.
@@ -13336,6 +12441,11 @@ impl<'state> StateBlock<'state> {
         snapshot: &AxtPolicySnapshot,
     ) -> Result<(), AxtPolicySnapshotValidationError> {
         snapshot.validate()?;
+        if self.axt_policy_snapshot() == *snapshot {
+            #[cfg(feature = "telemetry")]
+            self.telemetry.set_axt_policy_snapshot_version(snapshot);
+            return Ok(());
+        }
         let stale: Vec<_> = self
             .world
             .axt_policies
@@ -17126,56 +16236,7 @@ mod stake_snapshot_tests {
 }
 
 #[cfg(test)]
-mod accounts_snapshot_tests {
-    use core::num::NonZeroU64;
-
-    use iroha_test_samples::ALICE_ID;
-
-    use super::*;
-
-    fn test_state_with_account() -> (State, AccountId) {
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut world = World::default();
-        let account_id = (*ALICE_ID).clone();
-        world.accounts.insert(
-            account_id.clone(),
-            AccountValue::new(iroha_data_model::account::AccountDetails::default()),
-        );
-        let state = State::new_for_testing(world, Arc::clone(&kura), query);
-        (state, account_id)
-    }
-
-    #[test]
-    fn state_block_accounts_snapshot_is_cached() {
-        let (state, account_id) = test_state_with_account();
-        let header = BlockHeader::new(
-            NonZeroU64::new(1).expect("nonzero height"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        let block = state.block(header);
-        let first = block.accounts_snapshot();
-        let second = block.accounts_snapshot();
-        assert!(Arc::ptr_eq(&first, &second));
-        assert_eq!(first.len(), 1);
-        assert_eq!(&first[0], &account_id);
-    }
-
-    #[test]
-    fn state_view_accounts_snapshot_is_cached() {
-        let (state, account_id) = test_state_with_account();
-        let view = state.view();
-        let first = view.accounts_snapshot();
-        let second = view.accounts_snapshot();
-        assert!(Arc::ptr_eq(&first, &second));
-        assert_eq!(first.len(), 1);
-        assert_eq!(&first[0], &account_id);
-    }
-}
+mod accounts_snapshot_tests;
 
 #[cfg(test)]
 mod sumeragi_timing_tests {
@@ -17198,71 +16259,7 @@ mod sumeragi_timing_tests {
 }
 
 #[cfg(test)]
-mod state_lock_order_tests {
-    use std::{
-        sync::{Arc, mpsc},
-        thread,
-        time::Duration,
-    };
-
-    use core::num::NonZeroU64;
-
-    use super::*;
-
-    fn test_state() -> State {
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        State::new_for_testing(World::default(), Arc::clone(&kura), query)
-    }
-
-    #[test]
-    fn state_block_orders_block_hashes_before_world() {
-        let state = Arc::new(test_state());
-        let header = BlockHeader::new(
-            NonZeroU64::new(1).expect("nonzero height"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-
-        let block_hashes_view = state.block_hashes.view();
-
-        let (start_tx, start_rx) = mpsc::channel();
-        let (block_tx, block_rx) = mpsc::channel();
-        let state_for_block = Arc::clone(&state);
-        let block_thread = thread::spawn(move || {
-            let _ = start_tx.send(());
-            let _block = state_for_block.block(header);
-            let _ = block_tx.send(());
-        });
-
-        start_rx
-            .recv_timeout(Duration::from_millis(200))
-            .expect("block thread did not start");
-        thread::sleep(Duration::from_millis(10));
-
-        let (world_tx, world_rx) = mpsc::channel();
-        let state_for_world = Arc::clone(&state);
-        let world_thread = thread::spawn(move || {
-            let _view = state_for_world.world.view();
-            let _ = world_tx.send(());
-        });
-
-        let world_ready = world_rx.recv_timeout(Duration::from_millis(500)).is_ok();
-        drop(block_hashes_view);
-
-        let _ = block_rx.recv_timeout(Duration::from_secs(1));
-        let _ = block_thread.join();
-        let _ = world_thread.join();
-
-        assert!(
-            world_ready,
-            "world view blocked while block hashes read lock held; lock order may be inverted"
-        );
-    }
-}
+mod state_lock_order_tests;
 
 #[cfg(test)]
 mod storage_migration_tests {
@@ -18190,23 +17187,25 @@ mod custom_parameter_tests {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 struct SortedUniqueVec<T> {
     inner: Vec<T>,
 }
 
+#[cfg(test)]
 impl<T> Default for SortedUniqueVec<T> {
     fn default() -> Self {
         Self { inner: Vec::new() }
     }
 }
 
+#[cfg(test)]
 impl<T: Ord> SortedUniqueVec<T> {
     fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     fn insert(&mut self, value: T) -> bool {
         match self.inner.binary_search(&value) {
             Ok(_) => false,
@@ -18218,6 +17217,7 @@ impl<T: Ord> SortedUniqueVec<T> {
     }
 }
 
+#[cfg(test)]
 impl<T> IntoIterator for SortedUniqueVec<T> {
     type Item = T;
     type IntoIter = std::vec::IntoIter<T>;
@@ -18227,6 +17227,7 @@ impl<T> IntoIterator for SortedUniqueVec<T> {
     }
 }
 
+#[cfg(test)]
 impl<'a, T> IntoIterator for &'a SortedUniqueVec<T> {
     type Item = &'a T;
     type IntoIter = std::slice::Iter<'a, T>;
@@ -18236,25 +17237,22 @@ impl<'a, T> IntoIterator for &'a SortedUniqueVec<T> {
     }
 }
 
-/// Detached, per-transaction delta suitable for parallel execution outside of
-/// a live `StateBlock` borrow. Initially supports only side-effect-free ISIs
-/// like `Log`. Future extensions will record map mutations and merge them back
-/// deterministically.
 /// Compact identifier assigned to a metadata key within a detached transaction.
+#[cfg(test)]
 type NameId = u32;
 
 /// Interns metadata key names for a single detached transaction delta so that
 /// downstream aggregation can compare inexpensive integer handles instead of
 /// cloning `Name` values repeatedly.
+#[cfg(test)]
 #[derive(Default, Debug, Clone)]
 struct NameIntern {
     entries: Vec<iroha_data_model::name::Name>,
-    #[cfg_attr(not(test), allow(dead_code))]
     index: std::collections::BTreeMap<iroha_data_model::name::Name, NameId>,
 }
 
+#[cfg(test)]
 impl NameIntern {
-    #[cfg_attr(not(test), allow(dead_code))]
     fn intern(&mut self, name: iroha_data_model::name::Name) -> NameId {
         if let Some(&id) = self.index.get(&name) {
             return id;
@@ -18276,22 +17274,22 @@ impl NameIntern {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
 enum PermissionDeltaOp {
     Grant,
     Revoke,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
 enum RoleDeltaOp {
     Grant,
     Revoke,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
-#[cfg_attr(not(test), allow(dead_code))]
 enum DetachedPermissionOp {
     AccountPermission {
         account: AccountId,
@@ -18321,24 +17319,38 @@ pub(crate) struct DetachedStateTransactionDelta {
     asset_transfer_destination_accounts: Vec<iroha_data_model::account::AccountId>,
     asset_transfer_amounts: Vec<Quantity>,
     // Intern pool shared by metadata operations
+    #[cfg(test)]
     name_intern: NameIntern,
     // Account key-value deltas (SoA + interned keys)
+    #[cfg(test)]
     account_kv_set_accounts: Vec<iroha_data_model::account::AccountId>,
+    #[cfg(test)]
     account_kv_set_key_ids: Vec<NameId>,
+    #[cfg(test)]
     account_kv_set_vals: Vec<iroha_primitives::json::Json>,
+    #[cfg(test)]
     account_kv_del_accounts: Vec<iroha_data_model::account::AccountId>,
+    #[cfg(test)]
     account_kv_del_key_ids: Vec<NameId>,
     // Domain key-value deltas
+    #[cfg(test)]
     domain_kv_set_domains: Vec<iroha_data_model::domain::DomainId>,
+    #[cfg(test)]
     domain_kv_set_key_ids: Vec<NameId>,
+    #[cfg(test)]
     domain_kv_set_vals: Vec<iroha_primitives::json::Json>,
     // NFT deltas
+    #[cfg(test)]
     nft_delete: std::collections::BTreeSet<iroha_data_model::nft::NftId>,
     // AssetDefinition metadata
+    #[cfg(test)]
     asset_def_kv_set_ids: Vec<iroha_data_model::asset::AssetDefinitionId>,
+    #[cfg(test)]
     asset_def_kv_set_key_ids: Vec<NameId>,
+    #[cfg(test)]
     asset_def_kv_set_vals: Vec<iroha_primitives::json::Json>,
     // Account permissions and roles (maps for last-write checks)
+    #[cfg(test)]
     perm_ops: std::collections::BTreeMap<
         (
             iroha_data_model::account::AccountId,
@@ -18346,6 +17358,7 @@ pub(crate) struct DetachedStateTransactionDelta {
         ),
         PermissionDeltaOp,
     >,
+    #[cfg(test)]
     role_ops: std::collections::BTreeMap<
         (
             iroha_data_model::account::AccountId,
@@ -18354,6 +17367,7 @@ pub(crate) struct DetachedStateTransactionDelta {
         RoleDeltaOp,
     >,
     // Role permission changes
+    #[cfg(test)]
     role_perm_ops: std::collections::BTreeMap<
         (
             iroha_data_model::role::RoleId,
@@ -18362,11 +17376,19 @@ pub(crate) struct DetachedStateTransactionDelta {
         PermissionDeltaOp,
     >,
     // Ordered permission/role operations for deterministic replay.
+    #[cfg(test)]
     permission_ops: Vec<DetachedPermissionOp>,
     // Peer registrations
+    #[cfg(test)]
     peer_adds: SortedUniqueVec<iroha_data_model::peer::PeerId>,
+    #[cfg(test)]
+    peer_removes: SortedUniqueVec<iroha_data_model::peer::PeerId>,
     // Parameter updates (applied in order)
+    #[cfg(test)]
     param_updates: Vec<iroha_data_model::parameter::Parameter>,
+    // By‑call trigger executions to apply at merge time
+    #[cfg(test)]
+    exec_by_call: Vec<iroha_data_model::events::execute_trigger::ExecuteTriggerEvent>,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -18383,6 +17405,7 @@ pub(crate) struct DetachedMergeContext {
     pub(crate) current_dataspace_id: Option<iroha_data_model::nexus::DataSpaceId>,
 }
 
+#[cfg(test)]
 fn gather_last_wins_keyed<E, V>(
     entities: &[E],
     key_ids: &[NameId],
@@ -18409,6 +17432,7 @@ where
     ordered
 }
 
+#[cfg(test)]
 fn gather_set_keyed<E: Ord + Clone>(entities: &[E], key_ids: &[NameId]) -> Vec<(E, NameId)> {
     debug_assert_eq!(entities.len(), key_ids.len());
     let mut ordered = Vec::with_capacity(entities.len());
@@ -18438,8 +17462,21 @@ impl DetachedStateTransactionDelta {
     )> {
         let transfer_only = self.asset_transfer_source_ids.len() == 1
             && self.asset_transfer_destination_accounts.len() == 1
-            && self.asset_transfer_amounts.len() == 1
-            && self.account_kv_set_accounts.is_empty()
+            && self.asset_transfer_amounts.len() == 1;
+        #[cfg(test)]
+        let transfer_only = transfer_only && self.extended_delta_is_empty();
+        transfer_only.then(|| {
+            (
+                self.asset_transfer_source_ids[0].clone(),
+                self.asset_transfer_destination_accounts[0].clone(),
+                self.asset_transfer_amounts[0].clone(),
+            )
+        })
+    }
+
+    #[cfg(test)]
+    fn extended_delta_is_empty(&self) -> bool {
+        self.account_kv_set_accounts.is_empty()
             && self.account_kv_set_key_ids.is_empty()
             && self.account_kv_set_vals.is_empty()
             && self.account_kv_del_accounts.is_empty()
@@ -18456,14 +17493,9 @@ impl DetachedStateTransactionDelta {
             && self.role_perm_ops.is_empty()
             && self.permission_ops.is_empty()
             && self.peer_adds.is_empty()
-            && self.param_updates.is_empty();
-        transfer_only.then(|| {
-            (
-                self.asset_transfer_source_ids[0].clone(),
-                self.asset_transfer_destination_accounts[0].clone(),
-                self.asset_transfer_amounts[0].clone(),
-            )
-        })
+            && self.peer_removes.is_empty()
+            && self.param_updates.is_empty()
+            && self.exec_by_call.is_empty()
     }
 
     /// Return true when this transfer can use the simple batch merge path.
@@ -18541,7 +17573,7 @@ impl DetachedStateTransactionDelta {
         self.asset_transfer_amounts.push(amount);
     }
     /// Record a key-value insertion/update on an account.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn set_account_kv(
         &mut self,
         id: iroha_data_model::account::AccountId,
@@ -18554,7 +17586,7 @@ impl DetachedStateTransactionDelta {
         self.account_kv_set_vals.push(val);
     }
     /// Record a key-value removal on an account.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn remove_account_kv(
         &mut self,
         id: iroha_data_model::account::AccountId,
@@ -18565,7 +17597,7 @@ impl DetachedStateTransactionDelta {
         self.account_kv_del_key_ids.push(key_id);
     }
     /// Record a key-value insertion/update on a domain.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn set_domain_kv(
         &mut self,
         id: iroha_data_model::domain::DomainId,
@@ -18578,12 +17610,12 @@ impl DetachedStateTransactionDelta {
         self.domain_kv_set_vals.push(val);
     }
     /// Record an NFT deletion.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn unregister_nft(&mut self, id: iroha_data_model::nft::NftId) {
         self.nft_delete.insert(id);
     }
     /// Record a key-value insertion/update on an asset definition.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn set_asset_def_kv(
         &mut self,
         id: iroha_data_model::asset::AssetDefinitionId,
@@ -18596,7 +17628,7 @@ impl DetachedStateTransactionDelta {
         self.asset_def_kv_set_vals.push(val);
     }
     /// Record a permission grant to an account.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn grant_permission(
         &mut self,
         account: iroha_data_model::account::AccountId,
@@ -18612,7 +17644,7 @@ impl DetachedStateTransactionDelta {
             });
     }
     /// Record a permission revoke from an account.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn revoke_permission(
         &mut self,
         account: iroha_data_model::account::AccountId,
@@ -18628,7 +17660,7 @@ impl DetachedStateTransactionDelta {
             });
     }
     /// Record a role grant to an account.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn grant_role(
         &mut self,
         account: iroha_data_model::account::AccountId,
@@ -18640,7 +17672,7 @@ impl DetachedStateTransactionDelta {
             .push(DetachedPermissionOp::RoleAssignment { account, role, op });
     }
     /// Record a role revoke from an account.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn revoke_role(
         &mut self,
         account: iroha_data_model::account::AccountId,
@@ -18652,7 +17684,7 @@ impl DetachedStateTransactionDelta {
             .push(DetachedPermissionOp::RoleAssignment { account, role, op });
     }
     /// Record a role-permission grant.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn grant_role_permission(
         &mut self,
         role: iroha_data_model::role::RoleId,
@@ -18668,7 +17700,7 @@ impl DetachedStateTransactionDelta {
             });
     }
     /// Record a role-permission revoke.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn revoke_role_permission(
         &mut self,
         role: iroha_data_model::role::RoleId,
@@ -18684,11 +17716,10 @@ impl DetachedStateTransactionDelta {
             });
     }
     /// Record a peer registration.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn register_peer(&mut self, id: iroha_data_model::peer::PeerId) {
         self.peer_adds.insert(id);
     }
-
     /// Check whether `authority` may modify metadata for `nft_id` under the current delta.
     pub(crate) fn can_modify_nft_metadata(
         &self,
@@ -18709,11 +17740,13 @@ impl DetachedStateTransactionDelta {
             nft: nft_id.clone(),
         }
         .into();
+        #[cfg(test)]
         let direct_op = self
             .perm_ops
             .get(&(authority.clone(), target_perm.clone()))
             .copied();
 
+        #[cfg(test)]
         match direct_op {
             Some(PermissionDeltaOp::Grant) => return Ok(true),
             Some(PermissionDeltaOp::Revoke) => {}
@@ -18726,8 +17759,21 @@ impl DetachedStateTransactionDelta {
                 }
             }
         }
+        #[cfg(not(test))]
+        {
+            let permissions = world
+                .account_permissions_iter(authority)
+                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?;
+            if permissions.into_iter().any(|perm| perm == &target_perm) {
+                return Ok(true);
+            }
+        }
 
+        #[cfg(test)]
         let mut roles: BTreeSet<RoleId> = world.account_roles_iter(authority).cloned().collect();
+        #[cfg(not(test))]
+        let roles: BTreeSet<RoleId> = world.account_roles_iter(authority).cloned().collect();
+        #[cfg(test)]
         for ((acc, role), op) in &self.role_ops {
             if acc != authority {
                 continue;
@@ -18743,6 +17789,7 @@ impl DetachedStateTransactionDelta {
         }
 
         for role in roles {
+            #[cfg(test)]
             match self
                 .role_perm_ops
                 .get(&(role.clone(), target_perm.clone()))
@@ -18807,11 +17854,13 @@ impl DetachedStateTransactionDelta {
                 account: account_id.clone(),
             }
             .into();
+        #[cfg(test)]
         let direct_op = self
             .perm_ops
             .get(&(authority.clone(), target_perm.clone()))
             .copied();
 
+        #[cfg(test)]
         match direct_op {
             Some(PermissionDeltaOp::Grant) => return Ok(true),
             Some(PermissionDeltaOp::Revoke) => {}
@@ -18824,8 +17873,21 @@ impl DetachedStateTransactionDelta {
                 }
             }
         }
+        #[cfg(not(test))]
+        {
+            let permissions = world
+                .account_permissions_iter(authority)
+                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?;
+            if permissions.into_iter().any(|perm| perm == &target_perm) {
+                return Ok(true);
+            }
+        }
 
+        #[cfg(test)]
         let mut roles: BTreeSet<RoleId> = world.account_roles_iter(authority).cloned().collect();
+        #[cfg(not(test))]
+        let roles: BTreeSet<RoleId> = world.account_roles_iter(authority).cloned().collect();
+        #[cfg(test)]
         for ((acc, role), op) in &self.role_ops {
             if acc != authority {
                 continue;
@@ -18841,6 +17903,7 @@ impl DetachedStateTransactionDelta {
         }
 
         for role in roles {
+            #[cfg(test)]
             match self
                 .role_perm_ops
                 .get(&(role.clone(), target_perm.clone()))
@@ -18861,9 +17924,17 @@ impl DetachedStateTransactionDelta {
     }
 
     /// Record a parameter update to be applied at merge.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn set_parameter(&mut self, param: iroha_data_model::parameter::Parameter) {
         self.param_updates.push(param);
+    }
+    /// Record an `ExecuteTrigger` (by‑call) to be executed at merge.
+    #[cfg(test)]
+    pub(crate) fn execute_trigger_by_call(
+        &mut self,
+        evt: iroha_data_model::events::execute_trigger::ExecuteTriggerEvent,
+    ) {
+        self.exec_by_call.push(evt);
     }
 
     /// Merge the recorded changes into the live `StateBlock` using a per-transaction
@@ -18871,8 +17942,8 @@ impl DetachedStateTransactionDelta {
     ///
     /// # Errors
     /// Returns a `ValidationFail` when applying an instruction fails validation or invariants.
+    #[cfg(test)]
     #[allow(clippy::too_many_lines)]
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn merge_into(
         self,
         state_block: &mut StateBlock<'_>,
@@ -18965,53 +18036,67 @@ impl DetachedStateTransactionDelta {
     ///
     /// # Errors
     /// Returns a `ValidationFail` when applying an instruction fails validation or invariants.
-    #[allow(clippy::too_many_lines)]
     pub(crate) fn merge_into_with_context(
         self,
         state_block: &mut StateBlock<'_>,
         authority: &iroha_data_model::account::AccountId,
         context: DetachedMergeContext,
     ) -> TransactionResultInner {
-        // Parallel-apply relies on this merge path to mirror sequential semantics for
-        // supported ISIs. Tests exercise the same operations through both paths to
-        // guarantee identical validation and event emission; extend cautiously and keep
-        // the merge logic deterministic to avoid shared mutable state across workers.
-        use crate::smartcontracts::Execute as _;
-        use iroha_data_model::isi::{Grant, Revoke, SetParameter};
-        use iroha_data_model::{
-            events::data::prelude::{
-                AccountEvent, AssetDefinitionEvent, ConfigurationEvent, DomainEvent,
-                MetadataChanged, NftEvent, ParameterChanged, PeerEvent,
-            },
-            transaction::error::TransactionRejectionReason,
-        };
+        use iroha_data_model::transaction::error::TransactionRejectionReason;
 
-        if let Some((source_id, destination, amount)) = self.single_transfer_delta() {
-            let mut stx = state_block.transaction();
-            stx.tx_call_hash = context.tx_call_hash;
-            stx.current_tx_hash = context.current_tx_hash;
-            stx.current_lane_id = context.current_lane_id;
-            stx.current_dataspace_id = context.current_dataspace_id;
-            if let Some(dataspace_id) = context.current_dataspace_id {
-                stx.world.current_dataspace_id = Some(dataspace_id);
-            }
-            let trigger_sequence =
-                crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
-                    &mut stx,
-                    authority,
-                    source_id,
-                    destination,
-                    amount,
-                )
-                .map_err(ValidationFail::InstructionFailed)
-                .map_err(TransactionRejectionReason::Validation)
-                .and_then(|()| {
-                    let trigger_sequence = stx.execute_data_triggers_dfs(authority)?;
-                    stx.apply();
-                    Ok(trigger_sequence)
-                })?;
-            return Ok(trigger_sequence);
+        #[cfg(test)]
+        if !self.extended_delta_is_empty() {
+            return self.merge_test_only_into_with_context(state_block, authority, context);
         }
+
+        let mut stx = state_block.transaction();
+        stx.tx_call_hash = context.tx_call_hash;
+        stx.current_tx_hash = context.current_tx_hash;
+        stx.current_lane_id = context.current_lane_id;
+        stx.current_dataspace_id = context.current_dataspace_id;
+        if let Some(dataspace_id) = context.current_dataspace_id {
+            stx.world.current_dataspace_id = Some(dataspace_id);
+        }
+        for ((source_id, destination), amount) in self
+            .asset_transfer_source_ids
+            .iter()
+            .zip(self.asset_transfer_destination_accounts.iter())
+            .zip(self.asset_transfer_amounts.iter())
+        {
+            crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
+                &mut stx,
+                authority,
+                source_id.clone(),
+                destination.clone(),
+                amount.clone(),
+            )
+            .map_err(ValidationFail::InstructionFailed)
+            .map_err(TransactionRejectionReason::Validation)?;
+        }
+        let trigger_sequence = stx.execute_data_triggers_dfs(authority)?;
+        stx.apply();
+        Ok(trigger_sequence)
+    }
+
+    /// Merge the recorded test-only extended delta into the live block.
+    ///
+    /// # Errors
+    /// Returns a `ValidationFail` when applying an instruction fails validation or invariants.
+    #[cfg(test)]
+    #[allow(clippy::too_many_lines)]
+    fn merge_test_only_into_with_context(
+        self,
+        state_block: &mut StateBlock<'_>,
+        authority: &iroha_data_model::account::AccountId,
+        context: DetachedMergeContext,
+    ) -> TransactionResultInner {
+        use crate::smartcontracts::Execute as _;
+        use iroha_data_model::events::data::prelude::{
+            AccountEvent, AssetDefinitionEvent, ConfigurationEvent, DomainEvent, MetadataChanged,
+            NftEvent, ParameterChanged, PeerEvent,
+        };
+        use iroha_data_model::isi::{Grant, Revoke, SetParameter};
+        use iroha_data_model::transaction::error::TransactionRejectionReason;
 
         let mut stx = state_block.transaction();
         stx.tx_call_hash = context.tx_call_hash;
@@ -20869,256 +19954,9 @@ impl World {
         build_world_block!(self, block_and_revert)
     }
 
-    /// Create point in time view of the [`Self`]
-    #[allow(clippy::too_many_lines)]
+    /// Create a point-in-time view of this world.
     pub fn view(&self) -> WorldView<'_> {
-        WorldView {
-            dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
-            parameters: self.parameters.view(),
-            peers: self.peers.view(),
-            consensus_keys: self.consensus_keys.view(),
-            consensus_keys_by_pk: self.consensus_keys_by_pk.view(),
-            domain_committees: self.domain_committees.view(),
-            domain_endorsement_policies: self.domain_endorsement_policies.view(),
-            domain_endorsements: self.domain_endorsements.view(),
-            domain_endorsements_by_domain: self.domain_endorsements_by_domain.view(),
-            domains: self.domains.view(),
-            domains_by_owner: self.domains_by_owner.view(),
-            accounts: self.accounts.view(),
-            uaid_accounts: self.uaid_accounts.view(),
-            account_aliases: self.account_aliases.view(),
-            account_aliases_by_account: self.account_aliases_by_account.view(),
-            account_scope_directory: self.account_scope_directory.view(),
-            account_scope_accounts: self.account_scope_accounts.view(),
-            opaque_uaids: self.opaque_uaids.view(),
-            ram_lfe_program_policies: self.ram_lfe_program_policies.view(),
-            identifier_policies: self.identifier_policies.view(),
-            fee_sponsor_programs: self.fee_sponsor_programs.view(),
-            fee_sponsor_program_revisions: self.fee_sponsor_program_revisions.view(),
-            fee_sponsor_enrollments: self.fee_sponsor_enrollments.view(),
-            fee_sponsor_vaults: self.fee_sponsor_vaults.view(),
-            fee_sponsor_budget_counters: self.fee_sponsor_budget_counters.view(),
-            identifier_claims: self.identifier_claims.view(),
-            account_rekey_records: self.account_rekey_records.view(),
-            account_recovery_policies: self.account_recovery_policies.view(),
-            account_recovery_requests: self.account_recovery_requests.view(),
-            asset_definitions: self.asset_definitions.view(),
-            asset_definition_aliases: self.asset_definition_aliases.view(),
-            asset_definition_alias_bindings: self.asset_definition_alias_bindings.view(),
-            contract_aliases: self.contract_aliases.view(),
-            contract_alias_bindings: self.contract_alias_bindings.view(),
-            asset_definition_domains: self.asset_definition_domains.view(),
-            domain_asset_definitions: self.domain_asset_definitions.view(),
-            asset_definitions_by_owner: self.asset_definitions_by_owner.view(),
-            asset_definition_holders: self.asset_definition_holders.view(),
-            asset_definition_assets: self.asset_definition_assets.view(),
-            assets_by_account: self.assets_by_account.view(),
-            assets_by_domain: self.assets_by_domain.view(),
-            asset_definition_nonzero_holders: self.asset_definition_nonzero_holders.view(),
-            assets: self.assets.view(),
-            asset_metadata: self.asset_metadata.view(),
-            nfts: self.nfts.view(),
-            nfts_by_owner: self.nfts_by_owner.view(),
-            nfts_by_domain: self.nfts_by_domain.view(),
-            rwas: self.rwas.view(),
-            rwas_by_owner: self.rwas_by_owner.view(),
-            rwas_by_status: self.rwas_by_status.view(),
-            rwas_by_frozen: self.rwas_by_frozen.view(),
-            roles: self.roles.view(),
-            account_permissions: self.account_permissions.view(),
-            account_roles: self.account_roles.view(),
-            oracle_feeds: self.oracle_feeds.view(),
-            oracle_observations: self.oracle_observations.view(),
-            oracle_history: self.oracle_history.view(),
-            oracle_provider_stats: self.oracle_provider_stats.view(),
-            oracle_disputes: self.oracle_disputes.view(),
-            oracle_changes: self.oracle_changes.view(),
-            defi_oracle_attestations: self.defi_oracle_attestations.view(),
-            twitter_bindings: self.twitter_bindings.view(),
-            twitter_bindings_by_uaid: self.twitter_bindings_by_uaid.view(),
-            viral_reward_budget: self.viral_reward_budget.view(),
-            viral_campaign_budget: self.viral_campaign_budget.view(),
-            viral_daily_counters: self.viral_daily_counters.view(),
-            viral_binding_claims: self.viral_binding_claims.view(),
-            viral_escrows: self.viral_escrows.view(),
-            viral_bonus_paid: self.viral_bonus_paid.view(),
-            asset_escrows: self.asset_escrows.view(),
-            asset_escrows_by_seller: self.asset_escrows_by_seller.view(),
-            asset_escrows_by_buyer: self.asset_escrows_by_buyer.view(),
-            asset_escrows_by_status: self.asset_escrows_by_status.view(),
-            vpn_leases: self.vpn_leases.view(),
-            vpn_active_lease_by_account: self.vpn_active_lease_by_account.view(),
-            vpn_active_lease_by_address_slot: self.vpn_active_lease_by_address_slot.view(),
-            vpn_settled_leases_by_account: self.vpn_settled_leases_by_account.view(),
-            uaid_dataspaces: self.uaid_dataspaces.view(),
-            space_directory_manifests: self.space_directory_manifests.view(),
-            axt_policies: self.axt_policies.view(),
-            axt_replay_ledger: self.axt_replay_ledger.view(),
-            sccp_registry: self.sccp_registry.view(),
-            sccp_outbound_pending_usage: self.sccp_outbound_pending_usage.view(),
-            sccp_outbound_pending_messages: self.sccp_outbound_pending_messages.view(),
-            sccp_outbound_message_locator: self.sccp_outbound_message_locator.view(),
-            sccp_outbound_message_index: self.sccp_outbound_message_index.view(),
-            sccp_outbound_proofs: self.sccp_outbound_proofs.view(),
-            sccp_inbound_messages: self.sccp_inbound_messages.view(),
-            sccp_inbound_anchor_high_water: self.sccp_inbound_anchor_high_water.view(),
-            tx_sequences: self.tx_sequences.view(),
-            triggers: self.triggers.view(),
-            executor: self.executor.view(),
-            executor_data_model: self.executor_data_model.view(),
-            verifying_keys: self.verifying_keys.view(),
-            verifying_keys_by_circuit: self.verifying_keys_by_circuit.view(),
-            pedersen_params: self.pedersen_params.view(),
-            poseidon_params: self.poseidon_params.view(),
-            runtime_upgrades: self.runtime_upgrades.view(),
-            privacy_consensus_policy: self.privacy_consensus_policy.view(),
-            privacy_activations: self.privacy_activations.view(),
-            privacy_commitments: self.privacy_commitments.view(),
-            proofs: self.proofs.view(),
-            proofs_by_status: self.proofs_by_status.view(),
-            proof_tags: self.proof_tags.view(),
-            proofs_by_tag: self.proofs_by_tag.view(),
-            commit_qcs: self.commit_qcs.view(),
-            consensus_evidence: self.consensus_evidence.view(),
-            contract_manifests: self.contract_manifests.view(),
-            contract_code: self.contract_code.view(),
-            contract_code_uploads: self.contract_code_uploads.view(),
-            contract_code_upload_chunks: self.contract_code_upload_chunks.view(),
-            contract_instances: self.contract_instances.view(),
-            contract_subject_bindings: self.contract_subject_bindings.view(),
-            contract_subject_addresses: self.contract_subject_addresses.view(),
-            smart_contract_state: self.smart_contract_state.view(),
-            musubi_namespace_bindings: self.musubi_namespace_bindings.view(),
-            musubi_domain_ownership_generations: self.musubi_domain_ownership_generations.view(),
-            musubi_packages: self.musubi_packages.view(),
-            musubi_package_metadata: self.musubi_package_metadata.view(),
-            musubi_package_members: self.musubi_package_members.view(),
-            musubi_package_invitations: self.musubi_package_invitations.view(),
-            musubi_maintainer_directory: self.musubi_maintainer_directory.view(),
-            musubi_releases: self.musubi_releases.view(),
-            musubi_archives: self.musubi_archives.view(),
-            musubi_provider_bundle_attestations: self.musubi_provider_bundle_attestations.view(),
-            musubi_archive_locations: self.musubi_archive_locations.view(),
-            musubi_locations_by_pin: self.musubi_locations_by_pin.view(),
-            musubi_locations_by_replication_order: self
-                .musubi_locations_by_replication_order
-                .view(),
-            musubi_locations_by_provider: self.musubi_locations_by_provider.view(),
-            musubi_archive_availability: self.musubi_archive_availability.view(),
-            musubi_archive_reverse_references: self.musubi_archive_reverse_references.view(),
-            musubi_resolver_index: self.musubi_resolver_index.view(),
-            musubi_resolver_index_checkpoints: self.musubi_resolver_index_checkpoints.view(),
-            musubi_public_directory: self.musubi_public_directory.view(),
-            musubi_aliases: self.musubi_aliases.view(),
-            musubi_alias_history: self.musubi_alias_history.view(),
-            musubi_governance_decisions: self.musubi_governance_decisions.view(),
-            musubi_registry_policy: self.musubi_registry_policy.view(),
-            musubi_resolver_index_revision: self.musubi_resolver_index_revision.view(),
-            musubi_replication_shortfall_releases: self
-                .musubi_replication_shortfall_releases
-                .view(),
-            soracloud_service_revisions: self.soracloud_service_revisions.view(),
-            soracloud_service_deployments: self.soracloud_service_deployments.view(),
-            soracloud_app_infra_states: self.soracloud_app_infra_states.view(),
-            soracloud_service_runtime: self.soracloud_service_runtime.view(),
-            soracloud_inrou_replica_runtime: self.soracloud_inrou_replica_runtime.view(),
-            soracloud_service_audit_events: self.soracloud_service_audit_events.view(),
-            soracloud_app_infra_audit_events: self.soracloud_app_infra_audit_events.view(),
-            soracloud_service_state_entries: self.soracloud_service_state_entries.view(),
-            soracloud_decryption_request_records: self.soracloud_decryption_request_records.view(),
-            soracloud_agent_apartments: self.soracloud_agent_apartments.view(),
-            soracloud_agent_apartment_audit_events: self
-                .soracloud_agent_apartment_audit_events
-                .view(),
-            soracloud_training_jobs: self.soracloud_training_jobs.view(),
-            soracloud_training_job_audit_events: self.soracloud_training_job_audit_events.view(),
-            soracloud_model_registries: self.soracloud_model_registries.view(),
-            soracloud_model_weight_versions: self.soracloud_model_weight_versions.view(),
-            soracloud_model_weight_audit_events: self.soracloud_model_weight_audit_events.view(),
-            soracloud_model_artifacts: self.soracloud_model_artifacts.view(),
-            soracloud_model_artifact_audit_events: self
-                .soracloud_model_artifact_audit_events
-                .view(),
-            soracloud_uploaded_model_bundles: self.soracloud_uploaded_model_bundles.view(),
-            soracloud_model_host_capabilities: self.soracloud_model_host_capabilities.view(),
-            soracloud_inrou_host_capabilities: self.soracloud_inrou_host_capabilities.view(),
-            soracloud_hf_sources: self.soracloud_hf_sources.view(),
-            soracloud_hf_shared_lease_pools: self.soracloud_hf_shared_lease_pools.view(),
-            soracloud_hf_shared_lease_members: self.soracloud_hf_shared_lease_members.view(),
-            soracloud_hf_shared_lease_audit_events: self
-                .soracloud_hf_shared_lease_audit_events
-                .view(),
-            soracloud_model_host_violation_evidence: self
-                .soracloud_model_host_violation_evidence
-                .view(),
-            soracloud_hf_placements: self.soracloud_hf_placements.view(),
-            soracloud_inrou_service_placements: self.soracloud_inrou_service_placements.view(),
-            soracloud_mailbox_messages: self.soracloud_mailbox_messages.view(),
-            soracloud_runtime_receipts: self.soracloud_runtime_receipts.view(),
-            soracloud_private_uploaded_model_execution_receipts: self
-                .soracloud_private_uploaded_model_execution_receipts
-                .view(),
-            capacity_declarations: self.capacity_declarations.view(),
-            capacity_fee_ledger: self.capacity_fee_ledger.view(),
-            capacity_disputes: self.capacity_disputes.view(),
-            sorafs_pricing: self.sorafs_pricing.view(),
-            provider_credit_ledger: self.provider_credit_ledger.view(),
-            provider_owners: self.provider_owners.view(),
-            provider_ingest_completion_authorities: self
-                .provider_ingest_completion_authorities
-                .view(),
-            da_pin_intents_by_ticket: self.da_pin_intents_by_ticket.view(),
-            da_pin_intents_by_alias: self.da_pin_intents_by_alias.view(),
-            da_pin_intents_by_manifest: self.da_pin_intents_by_manifest.view(),
-            da_pin_intents_by_lane_epoch: self.da_pin_intents_by_lane_epoch.view(),
-            pin_manifests: self.pin_manifests.view(),
-            manifest_aliases: self.manifest_aliases.view(),
-            replication_orders: self.replication_orders.view(),
-            content_bundles: self.content_bundles.view(),
-            content_chunks: self.content_chunks.view(),
-            soradns_directory_records: self.soradns_directory_records.view(),
-            soradns_directory_pending: self.soradns_directory_pending.view(),
-            soradns_directory_latest: self.soradns_directory_latest.view(),
-            soradns_directory_history: self.soradns_directory_history.view(),
-            soradns_directory_prev_of: self.soradns_directory_prev_of.view(),
-            soradns_directory_revocations: self.soradns_directory_revocations.view(),
-            soradns_release_signers: self.soradns_release_signers.view(),
-            soradns_rotation_policy: self.soradns_rotation_policy.view(),
-            soradns_last_publish_ms: self.soradns_last_publish_ms.view(),
-            soradns_history_len: self.soradns_history_len.view(),
-            repo_agreements: self.repo_agreements.view(),
-            repo_agreements_by_initiator: self.repo_agreements_by_initiator.view(),
-            repo_agreements_by_counterparty: self.repo_agreements_by_counterparty.view(),
-            repo_agreements_by_custodian: self.repo_agreements_by_custodian.view(),
-            settlement_receipts: self.settlement_receipts.view(),
-            kagemusha_replay_keys: self.kagemusha_replay_keys.view(),
-            direct_lane_block_application_markers: self
-                .direct_lane_block_application_markers
-                .view(),
-            public_lane_validators: self.public_lane_validators.view(),
-            public_lane_stake_shares: self.public_lane_stake_shares.view(),
-            public_lane_rewards: self.public_lane_rewards.view(),
-            public_lane_reward_claims: self.public_lane_reward_claims.view(),
-            lane_relay_emergency_validators: self.lane_relay_emergency_validators.view(),
-            zk_assets: self.zk_assets.view(),
-            elections: self.elections.view(),
-            citizens: self.citizens.view(),
-            ministry_agenda_proposals: self.ministry_agenda_proposals.view(),
-            governance_proposals: self.governance_proposals.view(),
-            governance_referenda: self.governance_referenda.view(),
-            governance_stage_approvals: self.governance_stage_approvals.view(),
-            governance_locks: self.governance_locks.view(),
-            governance_lock_expiry_index: self.governance_lock_expiry_index.view(),
-            validation_fee_proposal_index: self.validation_fee_proposal_index.view(),
-            governance_slashes: self.governance_slashes.view(),
-            governance_last_unlock_sweep_height: self.governance_last_unlock_sweep_height.view(),
-            governance_unlock_stats: self.governance_unlock_stats.view(),
-            council: self.council.view(),
-            parliament_bodies: self.parliament_bodies.view(),
-            vrf_epochs: self.vrf_epochs.view(),
-            merge_hint_roots: self.merge_hint_roots.view(),
-            merge_global_state_root: self.merge_global_state_root.view(),
-        }
+        build_world_view!(self)
     }
 }
 
@@ -23917,7 +22755,7 @@ mod bootle_lantern_policy_world_read_tests {
                 .collect(),
         });
         let issuer_public_matrix =
-            BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(first_column)
+            BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&first_column)
                 .expect("canonical dense multiplication matrix");
         let mut policy = BootleLanternIssuerPolicyV1 {
             issuer_id: PrivacyIssuerIdV1::new([0xA1; 32]),
@@ -26831,6 +25669,17 @@ pub(crate) struct CertifiedLaneBlockPersistenceAuthority {
     canonical_reset_height: Option<u64>,
 }
 
+/// Immutable startup projection of certified ordinary-lane evidence.
+///
+/// `pair_repairs` are exact frontier artifacts whose indexed ordinary slots
+/// must be rebuilt after the complete startup plan has passed preflight.
+/// `earliest_unapplied` contains at most one predecessor-ready receipt owner
+/// per active route.
+pub(crate) struct LaneApplicationCertifiedRepairSnapshot {
+    pub(crate) pair_repairs: Vec<crate::kura::CertifiedLaneBlockArtifact>,
+    pub(crate) earliest_unapplied: Vec<crate::lane_consensus::CommittedLaneBlockSession>,
+}
+
 impl CertifiedLaneBlockPersistenceAuthority {
     #[cfg(test)]
     pub(crate) fn for_test(
@@ -27182,12 +26031,13 @@ impl State {
     /// Fence queue admission and durable reservation ownership against lane
     /// lifecycle publication.
     ///
-    /// Callers must acquire this guard before any queue ownership lock and
-    /// retain it through the final state-bound route/incarnation validation
-    /// and queue mutation. Lifecycle commit follows the same
-    /// `lane_lifecycle_lock -> queue ownership` order conceptually, so a queue
-    /// operation either becomes visible before a drain closes or validates
-    /// against the fully published post-transition catalog.
+    /// Callers that also need the Queue reservation-transition lock must
+    /// acquire that Queue guard first. They then retain this guard through the
+    /// final state-bound route/incarnation validation and queue mutation. The
+    /// shared order is `reservation transition -> lane lifecycle -> queue
+    /// ownership`, so a queue operation either becomes visible before a drain
+    /// closes or validates against the fully published post-transition
+    /// catalog.
     pub(crate) fn lock_lane_lifecycle_work_admission(&self) -> parking_lot::MutexGuard<'_, ()> {
         self.lane_lifecycle_lock.lock()
     }
@@ -30729,6 +29579,8 @@ impl State {
             autoscale_sample_history_dirty: false,
             direct_committed_transactions: HashSet::new(),
             staged_merge_entry: None,
+            canonical_wsv_merge_commit_authorization: None,
+            canonical_carrier_commit_metadata_authorization: None,
             pending_nexus_fee_receipt_source_ids: BTreeSet::new(),
             start_of_block_effects_applied: false,
             exec_witness: None,
@@ -31633,6 +30485,8 @@ impl State {
             autoscale_sample_history_dirty: false,
             direct_committed_transactions: HashSet::new(),
             staged_merge_entry: None,
+            canonical_wsv_merge_commit_authorization: None,
+            canonical_carrier_commit_metadata_authorization: None,
             pending_nexus_fee_receipt_source_ids: BTreeSet::new(),
             start_of_block_effects_applied: false,
             exec_witness: None,
@@ -31741,6 +30595,8 @@ impl State {
             autoscale_sample_history_dirty: false,
             direct_committed_transactions: HashSet::new(),
             staged_merge_entry: None,
+            canonical_wsv_merge_commit_authorization: None,
+            canonical_carrier_commit_metadata_authorization: None,
             pending_nexus_fee_receipt_source_ids: BTreeSet::new(),
             start_of_block_effects_applied: false,
             exec_witness: None,
@@ -32747,10 +31603,13 @@ impl State {
                     ));
                 }
                 if !entry.lane_drain_certificates.is_empty()
-                    && (entry.execution_batch.is_some() || !entry.lane_snapshots.is_empty())
+                    && (entry.execution_batch.is_some()
+                        || !entry.lane_snapshots.is_empty()
+                        || !entry.queue_plan_admissions.is_empty())
                 {
                     return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "durable lane drain entry mixes snapshots or execution".to_owned(),
+                        "durable lane drain entry mixes snapshots, execution, or QueuePlan admission controls"
+                            .to_owned(),
                     ));
                 }
                 if entry.lane_snapshots.is_empty()
@@ -32823,12 +31682,22 @@ impl State {
                                 "durable carrier height is zero".to_owned(),
                             )
                         })?;
-                    let carrier_block = self.kura.get_block(carrier_height).ok_or_else(|| {
-                        MergeLedgerCommitError::ExecutionBatchInvalid(
-                            "durable carrier body is unavailable during merge recovery".to_owned(),
-                        )
-                    })?;
-                    if crate::merge::merge_application_header_from_carrier(&carrier_block.header())
+                    let carrier_header = if let Some(carrier_block) =
+                        self.kura.get_block_without_merge_sidecar(carrier_height)
+                    {
+                        carrier_block.header()
+                    } else {
+                        self.kura
+                            .v2_finality_artifact_with_header(carrier.block_height)?
+                            .map(|(header, _)| header)
+                            .ok_or_else(|| {
+                                MergeLedgerCommitError::ExecutionBatchInvalid(
+                                    "durable carrier has neither a local body nor retained finality header"
+                                        .to_owned(),
+                                )
+                            })?
+                    };
+                    if crate::merge::merge_application_header_from_carrier(&carrier_header)
                         != batch.application_block_header
                     {
                         return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
@@ -32910,7 +31779,58 @@ impl State {
         self.settled_nexus_fee_receipts.write().clear();
         let committed_block_hashes = self.block_hashes.view().iter().copied().collect::<Vec<_>>();
         let committed_height = u64::try_from(committed_block_hashes.len()).unwrap_or(u64::MAX);
-        for entry in self.kura.merge_ledger_all_entries()? {
+        let entries = self.kura.merge_ledger_all_entries()?;
+
+        // Transaction membership is an auxiliary index outside `World`. Repair
+        // every authenticated, marker-complete execution before classifying
+        // earlier QueuePlan admissions: a later execution atomically removes
+        // their pending WSV obligations, so chronological classification must
+        // not mistake a crash-delayed membership index for lost work.
+        for entry in entries
+            .iter()
+            .filter(|entry| entry.execution_batch.is_some())
+        {
+            let entry_hash = entry.canonical_hash();
+            let carrier = self
+                .kura
+                .merge_carrier_for_entry(entry_hash)?
+                .ok_or_else(|| {
+                    MergeLedgerCommitError::ExecutionStatePublication(format!(
+                        "durable merge execution {entry_hash} has no canonical global carrier"
+                    ))
+                })?;
+            if carrier.block_height > committed_height {
+                continue;
+            }
+            let committed_carrier_hash = usize::try_from(carrier.block_height)
+                .ok()
+                .and_then(|height| height.checked_sub(1))
+                .and_then(|index| committed_block_hashes.get(index).copied());
+            if committed_carrier_hash != Some(carrier.block_hash)
+                || self
+                    .kura
+                    .merge_entry_for_carrier(carrier.block_height, carrier.block_hash)?
+                    .as_ref()
+                    != Some(entry)
+            {
+                return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
+                    "merge execution {entry_hash} carrier is not present in committed State history"
+                )));
+            }
+            let batch = entry
+                .execution_batch
+                .as_ref()
+                .expect("filtered to execution entries");
+            if !self.merge_execution_already_applied(entry, batch)? {
+                return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
+                    "merge execution {entry_hash} is durable at carrier {} but absent from WSV; replay the exact carrier block",
+                    carrier.block_height
+                )));
+            }
+            self.repair_merge_execution_transaction_membership(entry, &carrier)?;
+        }
+
+        for entry in entries {
             let entry_hash = entry.canonical_hash();
             let carrier = self
                 .kura
@@ -32959,8 +31879,25 @@ impl State {
                 // process stopped after the atomic WSV publication but before
                 // the auxiliary membership index update became observable.
                 self.repair_merge_execution_transaction_membership(&entry, &carrier)?;
+                let reference = iroha_data_model::block::CertifiedMergeLedgerReference::new(&entry);
+                let repair_authorizations =
+                    crate::sumeragi::v2_apply::post_carrier_evidence_repair_authorizations(
+                        &reference,
+                        &entry,
+                        Hash::new(self.chain_id.as_str().as_bytes()),
+                        carrier.block_height,
+                        carrier.block_hash,
+                    )
+                    .map_err(|error| {
+                        MergeLedgerCommitError::ExecutionStatePublication(format!(
+                            "merge entry {entry_hash} post-carrier repair authorization failed: {error}"
+                        ))
+                    })?;
                 self.kura
-                    .persist_merge_lane_block_application_receipts_from_committed_log(&entry)?;
+                    .persist_merge_lane_block_application_receipts_from_committed_log_with_authorizations(
+                        &entry,
+                        repair_authorizations,
+                    )?;
                 self.record_merge_execution_fee_receipts(batch);
             }
             if !entry.lane_drain_certificates.is_empty()
@@ -33911,7 +32848,7 @@ impl State {
             .collect()
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     fn lane_relay_committee_seed(
         &self,
         dataspace_id: DataSpaceId,
@@ -35077,15 +34014,33 @@ impl State {
             self.verify_lane_relay_fastpq_record(envelope)?;
         }
 
-        // Serialize only the final authenticated lifecycle recheck and cache
+        if !persist {
+            return Ok(None);
+        }
+
+        self.publish_prevalidated_lane_relay(envelope, relay_proposal_height)
+            .map(Some)
+    }
+
+    /// Publish a fully authenticated relay under the lane-lifecycle fence.
+    ///
+    /// Callers must complete the QC, authority, and effect-record validation
+    /// above before entering this final stage. Keeping the final stage
+    /// separate lets the retirement race regression pause after
+    /// authentication without inventing a test-only cache insertion path.
+    fn publish_prevalidated_lane_relay(
+        &self,
+        envelope: &LaneRelayEnvelope,
+        relay_proposal_height: u64,
+    ) -> core::result::Result<LaneRelayInsert, LaneRelayError> {
+        // Serialize the final authenticated lifecycle recheck and cache
         // insertion with geometry archive/removal, catalog publication, and
-        // lane-scoped cache pruning. Expensive QC/PoP verification above does
-        // not stall lifecycle progress. If admission wins this fence,
-        // retirement observes the relay as a drain blocker. If retirement
-        // wins, this post-fence snapshot rejects the retired incarnation.
-        // Raw/unvalidated cache noise never crosses this fence and therefore
-        // cannot veto Byzantine-tolerant retirement.
-        let lifecycle_guard = persist.then(|| self.lane_lifecycle_lock.lock());
+        // lane-scoped cache pruning. If admission wins this fence, retirement
+        // observes the relay as a drain blocker. If retirement wins, this
+        // post-fence snapshot rejects the retired incarnation. Raw/unvalidated
+        // cache noise never crosses this fence and therefore cannot veto
+        // Byzantine-tolerant retirement.
+        let lifecycle_guard = self.lane_lifecycle_lock.lock();
         let current_lifecycle = self.lane_consensus_lifecycle_snapshot();
         let current_incarnation = current_lifecycle
             .incarnations
@@ -35116,10 +34071,6 @@ impl State {
             });
         }
 
-        if !persist {
-            return Ok(None);
-        }
-
         let inserted = {
             let mut guard = self.lane_relays.write();
             guard.insert(envelope.clone())?
@@ -35136,7 +34087,7 @@ impl State {
                 self.telemetry.record_lane_relay_finality(
                     envelope.lane_id,
                     envelope.dataspace_id,
-                    proposal_height,
+                    relay_proposal_height,
                     head_height,
                     envelope.rbc_bytes_total,
                 );
@@ -35144,7 +34095,7 @@ impl State {
 
             crate::sumeragi::status::push_lane_relay_envelope(envelope.clone());
         }
-        Ok(Some(inserted))
+        Ok(inserted)
     }
 
     fn merge_execution_source_from_embedded(
@@ -35294,6 +34245,7 @@ impl State {
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let mut seen_entrypoints = BTreeSet::new();
         let mut seen_reservations = BTreeSet::new();
+        let mut pending_obligations = Vec::new();
         let mut executions = Vec::with_capacity(sources.len());
 
         for source in sources {
@@ -35404,6 +34356,10 @@ impl State {
                         "autonomous merge reservation or routing-plan binding mismatch".to_owned(),
                     ));
                 }
+                pending_obligations.push((
+                    reservation.entrypoint_hash.clone(),
+                    reservation.queue_plan_admission_binding_hash,
+                ));
                 if !crate::native_amx::receipt_shape_matches_coordinator_payload(
                     native_amx_receipt.as_ref(),
                     bound_plan,
@@ -35564,6 +34520,7 @@ impl State {
             execution.settlement_commitment = commitment;
             executions.push(execution);
         }
+        state_block.resolve_required_queue_plan_pending_obligations(pending_obligations)?;
         state_block.stage_merge_execution_nexus_fee_settlement(&executions)?;
         Ok(executions)
     }
@@ -35659,75 +34616,32 @@ impl State {
             }
             let expected_epoch =
                 crate::sumeragi::epoch_for_height_from_world(&world, descriptor.proposal_height);
-            let bundle = match self.kura.autonomous_lane_merge_bundle(
-                certified.clone(),
+            let durable_source = match self.kura.durable_autonomous_lane_merge_source(
+                lane.id,
+                expected_height,
                 chain_hash,
                 expected_epoch,
             ) {
-                Ok(bundle) => bundle,
+                Ok(source) if source.bundle.certified == certified => source,
+                Ok(_) => {
+                    warn!(
+                        lane = %lane.id.as_u32(),
+                        lane_block_height = expected_height,
+                        "durable autonomous merge source changed during certified source selection"
+                    );
+                    return None;
+                }
                 Err(message) => {
                     warn!(
                         lane = %lane.id.as_u32(),
                         lane_block_height = expected_height,
                         message,
-                        "certified lane block is missing its authenticated merge bundle"
+                        "certified lane block is missing its complete durable merge source"
                     );
                     return None;
                 }
             };
-            let source_bundle = match bundle.encode_framed() {
-                Ok(bytes) => bytes,
-                Err(err) => {
-                    warn!(?err, "autonomous merge bundle could not be encoded");
-                    return None;
-                }
-            };
-            let bundle_hash = merge_execution_source_bundle_hash(&source_bundle);
-            let input = self
-                .kura
-                .read_lane_block_execution_input(lane.id, expected_height)
-                .or_else(|| {
-                    let recovered = self
-                        .kura
-                        .recover_autonomous_lane_block_payload(
-                            &certified.proposal,
-                            chain_hash,
-                            expected_epoch,
-                        )
-                        .ok()?;
-                    self.kura
-                        .persist_lane_block_execution_input(&recovered)
-                        .ok()?;
-                    self.kura
-                        .read_lane_block_execution_input(lane.id, expected_height)
-                });
-            let Some(input) = input else {
-                warn!(
-                    lane = %lane.id.as_u32(),
-                    lane_block_height = expected_height,
-                    "deferring complete merge batch until certified execution input is available"
-                );
-                return None;
-            };
-            if input.proposal != certified.proposal
-                || input.autonomous_chain_id_hash != Some(chain_hash)
-                || input.autonomous_epoch != Some(expected_epoch)
-                || input.autonomous_payload_hash.is_none()
-            {
-                warn!(
-                    lane = %lane.id.as_u32(),
-                    lane_block_height = expected_height,
-                    "deferring complete merge batch because source proposal/chain/epoch binding is invalid"
-                );
-                return None;
-            }
-            sources.push(MergeExecutionSource {
-                bundle_hash,
-                source_bundle,
-                origin_proposal: bundle.executable_payload().origin_proposal.clone(),
-                certified,
-                input,
-            });
+            sources.push(MergeExecutionSource::from_durable(durable_source));
         }
         sources
             .sort_by_key(|source| merge_execution_canonical_order_key(&source.certified.proposal));
@@ -35736,10 +34650,10 @@ impl State {
 
     /// Return whether durable certified lane backlog may produce a merge execution candidate.
     ///
-    /// This readiness hint performs no transaction execution and does not assemble source
-    /// bundles. It recognizes only the exact contiguous successor of the replicated
-    /// route/incarnation frontier; later certified heights cannot keep the merge producer
-    /// permanently selected while the required predecessor is absent. Exact candidate
+    /// This readiness hint performs no transaction execution or storage repair. It recognizes
+    /// only a complete, independently durable source for the exact contiguous successor of the
+    /// replicated route/incarnation frontier; later certified heights or a certificate without
+    /// its exact execution input cannot keep the merge producer selected. Exact candidate
     /// construction and follower validation remain authoritative.
     pub(crate) fn has_pending_merge_execution_sources(&self) -> bool {
         let consensus = self.merge_consensus_snapshot();
@@ -35748,6 +34662,7 @@ impl State {
         if !nexus.enabled {
             return false;
         }
+        let chain_hash = Hash::new(self.chain_id.clone().into_inner().as_bytes());
         let world = self.world.view();
         for lane in nexus.lane_catalog.lanes() {
             let Some(incarnation) = lifecycle.incarnations.get(&lane.id).copied() else {
@@ -35764,7 +34679,7 @@ impl State {
             let Some(expected_height) = frontier.0.checked_add(1) else {
                 return false;
             };
-            let ready = self
+            let certified = self
                 .kura
                 .read_certified_lane_block_artifact(lane.id, expected_height)
                 .filter(|artifact| {
@@ -35783,8 +34698,23 @@ impl State {
                             &world, descriptor,
                         )
                         .is_ok()
-                })
-                .is_some();
+                });
+            let Some(certified) = certified else {
+                continue;
+            };
+            let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
+                &world,
+                certified.proposal.descriptor.proposal_height,
+            );
+            let ready = self
+                .kura
+                .durable_autonomous_lane_merge_source(
+                    lane.id,
+                    expected_height,
+                    chain_hash,
+                    expected_epoch,
+                )
+                .is_ok_and(|source| source.bundle.certified == certified);
             if ready {
                 return true;
             }
@@ -35886,6 +34816,15 @@ impl State {
         pending: Vec<Vec<u8>>,
     ) -> Result<Option<crate::merge::MergeLedgerCandidate>, MergeLedgerCommitError> {
         if pending.is_empty() {
+            return Ok(base);
+        }
+        if base
+            .as_ref()
+            .is_some_and(|candidate| !candidate.lane_drain_certificates.is_empty())
+        {
+            // Drain certificates are intentionally standalone. Admission is
+            // fenced once the drain closes, and any pre-existing pending
+            // certificate already blocks drain-certificate production.
             return Ok(base);
         }
         let consensus = self.merge_consensus_snapshot();
@@ -36076,7 +35015,8 @@ impl State {
             ));
         }
         state_block.stage_merge_metadata_values(&[], crate::merge::reduce_merge_hint_roots(&[]));
-        state_block.validate_merge_execution_commit_surface()?;
+        state_block
+            .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)?;
         if state_block.merge_execution_write_set_root() != batch.application_write_set_root {
             return Err(MergeLedgerCommitError::ExecutionDivergence(
                 "canonical application write set differs while binding QueuePlan admissions"
@@ -36113,6 +35053,24 @@ impl State {
             || !nexus.enabled
             || nexus.lane_catalog.lanes().len() > MAX_ACTIVE_EXECUTION_LANES
         {
+            return None;
+        }
+        let start_effect_probe = self.block(application_block_header.clone());
+        let start_effects_are_noop = start_effect_probe
+            .world
+            .merge_execution_write_set_bytes()
+            .is_empty()
+            && start_effect_probe.world.external_event_buf.is_empty()
+            && start_effect_probe.direct_committed_transactions.is_empty()
+            && start_effect_probe
+                .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)
+                .is_ok();
+        drop(start_effect_probe);
+        if !start_effects_are_noop {
+            debug!(
+                carrier_height = application_block_header.height().get(),
+                "deferring autonomous execution because its carrier has due deterministic start effects"
+            );
             return None;
         }
         let chain_hash = Hash::new(self.chain_id.clone().into_inner().as_bytes());
@@ -36191,75 +35149,32 @@ impl State {
             }
             let expected_epoch =
                 crate::sumeragi::epoch_for_height_from_world(&world, descriptor.proposal_height);
-            let bundle = match self.kura.autonomous_lane_merge_bundle(
-                certified.clone(),
+            let durable_source = match self.kura.durable_autonomous_lane_merge_source(
+                lane.id,
+                expected_height,
                 chain_hash,
                 expected_epoch,
             ) {
-                Ok(bundle) => bundle,
+                Ok(source) if source.bundle.certified == certified => source,
+                Ok(_) => {
+                    warn!(
+                        lane = %lane.id.as_u32(),
+                        lane_block_height = expected_height,
+                        "durable autonomous merge source changed during batch construction"
+                    );
+                    return None;
+                }
                 Err(message) => {
                     warn!(
                         lane = %lane.id.as_u32(),
                         lane_block_height = expected_height,
                         message,
-                        "certified lane block is missing its authenticated merge bundle"
+                        "certified lane block is missing its complete durable merge source"
                     );
                     return None;
                 }
             };
-            let source_bundle = match bundle.encode_framed() {
-                Ok(bytes) => bytes,
-                Err(err) => {
-                    warn!(?err, "autonomous merge bundle could not be encoded");
-                    return None;
-                }
-            };
-            let bundle_hash = merge_execution_source_bundle_hash(&source_bundle);
-            let input = self
-                .kura
-                .read_lane_block_execution_input(lane.id, expected_height)
-                .or_else(|| {
-                    let recovered = self
-                        .kura
-                        .recover_autonomous_lane_block_payload(
-                            &certified.proposal,
-                            chain_hash,
-                            expected_epoch,
-                        )
-                        .ok()?;
-                    self.kura
-                        .persist_lane_block_execution_input(&recovered)
-                        .ok()?;
-                    self.kura
-                        .read_lane_block_execution_input(lane.id, expected_height)
-                });
-            let Some(input) = input else {
-                warn!(
-                    lane = %lane.id.as_u32(),
-                    lane_block_height = expected_height,
-                    "deferring complete merge batch until certified execution input is available"
-                );
-                return None;
-            };
-            if input.proposal != certified.proposal
-                || input.autonomous_chain_id_hash != Some(chain_hash)
-                || input.autonomous_epoch != Some(expected_epoch)
-                || input.autonomous_payload_hash.is_none()
-            {
-                warn!(
-                    lane = %lane.id.as_u32(),
-                    lane_block_height = expected_height,
-                    "deferring complete merge batch because source chain/epoch binding is invalid"
-                );
-                return None;
-            }
-            sources.push(MergeExecutionSource {
-                bundle_hash,
-                source_bundle,
-                origin_proposal: bundle.executable_payload().origin_proposal.clone(),
-                certified,
-                input,
-            });
+            sources.push(MergeExecutionSource::from_durable(durable_source));
         }
         if sources.is_empty() {
             return None;
@@ -36345,7 +35260,9 @@ impl State {
         };
         let mut state_block = state_block;
         state_block.stage_merge_metadata_values(&[], crate::merge::reduce_merge_hint_roots(&[]));
-        if let Err(err) = state_block.validate_merge_execution_commit_surface() {
+        if let Err(err) = state_block
+            .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)
+        {
             warn!(
                 ?err,
                 "merge execution staged an unsupported commit side effect"
@@ -36512,10 +35429,45 @@ impl State {
                 dataspace_id,
                 lane_incarnation,
             )
+            || self.queue_plan_pending_route_obligation_blocks_lane_drain(
+                lane_id,
+                dataspace_id,
+                lane_incarnation,
+            )
             || self
                 .kura
                 .pending_certified_merge_work_for_lane(lane_id, dataspace_id, lane_incarnation)
                 .unwrap_or(true)
+    }
+
+    fn queue_plan_pending_route_obligation_blocks_lane_drain(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> bool {
+        Self::queue_plan_pending_route_obligation_blocks_lane_drain_in_world(
+            &self.world.view(),
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+        )
+    }
+
+    fn queue_plan_pending_route_obligation_blocks_lane_drain_in_world(
+        world: &impl WorldReadOnly,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> bool {
+        let route = QueuePlanPendingObligationRouteV1 {
+            version: QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+        };
+        Self::queue_plan_pending_route_obligation_count_from_world(world, route)
+            .map_or(true, |count| count > 0)
     }
 
     /// Return whether a durable, not-yet-applied QueuePlan admission certificate
@@ -36811,15 +35763,38 @@ impl State {
         &self,
         admissions: &[crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV2],
     ) -> Result<(), MergeLedgerCommitError> {
-        let world = self.world.view();
+        let state_view = self.view();
         for admission in admissions {
             let key = Self::queue_plan_admission_registry_marker_key(&admission.registry_key)?;
-            if let Some(payload) = world.smart_contract_state().get(&key) {
+            if let Some(payload) = state_view.world().smart_contract_state().get(&key) {
                 let current =
                     Self::decode_exact_queue_plan_admission_registry_marker(&key, payload)?;
                 if current != admission.registry_value {
                     return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
                         "queue-plan admission registry key is claimed by a different binding: `{key}`"
+                    )));
+                }
+                if Self::queue_plan_admission_application_state(&state_view, admission)?
+                    == QueuePlanAdmissionApplicationState::PendingStale
+                {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "queue-plan admission registry owner names a retired or recreated lane incarnation: `{key}`"
+                    )));
+                }
+            } else {
+                let obligation = Self::queue_plan_pending_obligation_from_admission(admission)?;
+                let obligation_key = Self::queue_plan_pending_obligation_marker_key(
+                    obligation.chain_id_digest,
+                    obligation.entrypoint_hash,
+                )?;
+                if state_view
+                    .world()
+                    .smart_contract_state()
+                    .get(&obligation_key)
+                    .is_some()
+                {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "queue-plan pending obligation exists without registry owner: `{obligation_key}`"
                     )));
                 }
             }
@@ -36847,19 +35822,16 @@ impl State {
                     "pending queue-plan admission certificate is invalid: {error}"
                 ))
             })?;
-        let key = Self::queue_plan_admission_registry_marker_key(&admission.registry_key)?;
-        let lookup = match self.world.view().smart_contract_state().get(&key) {
-            None => QueuePlanAdmissionRegistryMatch::Absent,
-            Some(payload) => {
-                let current =
-                    Self::decode_exact_queue_plan_admission_registry_marker(&key, payload)?;
-                if current != admission.registry_value {
-                    QueuePlanAdmissionRegistryMatch::Conflict
-                } else {
-                    QueuePlanAdmissionRegistryMatch::Exact
-                }
-            }
-        };
+        let state_view = self.view();
+        let lookup = Self::queue_plan_admission_registry_match_in_view(
+            &state_view,
+            admission.registry_key.entrypoint_hash.clone(),
+            admission.registry_value.binding_hash,
+        )
+        .map_err(MergeLedgerCommitError::ExecutionMarkerConflict)?;
+        if lookup == QueuePlanAdmissionRegistryMatch::Exact {
+            Self::queue_plan_admission_application_state(&state_view, &admission)?;
+        }
         Ok((admission, lookup))
     }
 
@@ -36884,7 +35856,18 @@ impl State {
         let (admission, registry_match) =
             self.pending_queue_plan_admission_registry_lookup(bytes)?;
         let disposition = match registry_match {
-            QueuePlanAdmissionRegistryMatch::Exact => PendingQueuePlanAdmissionDisposition::Exact,
+            QueuePlanAdmissionRegistryMatch::Exact => {
+                let state_view = self.view();
+                match Self::queue_plan_admission_application_state(&state_view, &admission)? {
+                    QueuePlanAdmissionApplicationState::PendingStale => {
+                        PendingQueuePlanAdmissionDisposition::Stale
+                    }
+                    QueuePlanAdmissionApplicationState::Pending
+                    | QueuePlanAdmissionApplicationState::Applied => {
+                        PendingQueuePlanAdmissionDisposition::Exact
+                    }
+                }
+            }
             QueuePlanAdmissionRegistryMatch::Conflict => {
                 PendingQueuePlanAdmissionDisposition::DefinitiveConflict
             }
@@ -36999,10 +35982,13 @@ impl State {
             ));
         }
         if !candidate.lane_drain_certificates.is_empty()
-            && (candidate.execution_batch.is_some() || !candidate.lane_snapshots.is_empty())
+            && (candidate.execution_batch.is_some()
+                || !candidate.lane_snapshots.is_empty()
+                || !candidate.queue_plan_admissions.is_empty())
         {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "lane drain certificate entries must not mix snapshots or execution".to_owned(),
+                "lane drain certificate entries must not mix snapshots, execution, or QueuePlan admission controls"
+                    .to_owned(),
             ));
         }
         if candidate.execution_batch.is_some() && !candidate.lane_snapshots.is_empty() {
@@ -37219,7 +36205,8 @@ impl State {
             ));
         }
         state_block.stage_merge_metadata_values(&[], crate::merge::reduce_merge_hint_roots(&[]));
-        state_block.validate_merge_execution_commit_surface()?;
+        state_block
+            .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)?;
         if state_block.merge_execution_write_set_root() != batch.application_write_set_root {
             return Err(MergeLedgerCommitError::ExecutionDivergence(
                 "canonical application write set differs from the proposed batch".to_owned(),
@@ -37599,6 +36586,11 @@ impl State {
         marker: AppliedNativeAmxParticipantFrontierMarker,
         state: SumeragiNativeAmxParticipantApplicationState,
     ) -> SumeragiNativeAmxParticipantApplication {
+        let application_identity =
+            (state != SumeragiNativeAmxParticipantApplicationState::Conflict).then_some((
+                marker.application_block_height,
+                marker.application_block_hash,
+            ));
         SumeragiNativeAmxParticipantApplication {
             lane_id: marker.lane_id,
             dataspace_id: marker.dataspace_id,
@@ -37611,8 +36603,8 @@ impl State {
             proposal_hash: marker.participant_proposal_hash,
             settlement_hash: marker.participant_settlement_hash,
             source_count: marker.source_count,
-            application_block_height: Some(marker.application_block_height),
-            application_block_hash: Some(marker.application_block_hash),
+            application_block_height: application_identity.map(|identity| identity.0),
+            application_block_hash: application_identity.map(|identity| identity.1),
             state,
         }
     }
@@ -37697,91 +36689,110 @@ impl State {
         Ok(rows)
     }
 
-    fn authenticated_native_amx_participant_application_rows_from_autonomous_payload(
-        &self,
-        payload: &crate::lane_consensus::LaneExecutablePayloadV1,
-        authority: &StateView<'_>,
-        active_routes: &BTreeSet<(LaneId, DataSpaceId, Hash)>,
+    fn authenticated_native_amx_participant_application_rows_from_autonomous_source(
+        source_bundle: &[u8],
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+        source_authority: crate::block::HistoricalNativeAmxSourceAuthority<'_>,
     ) -> Result<Vec<SumeragiNativeAmxParticipantApplication>, MergeLedgerCommitError> {
+        let bundle = crate::block::validate_historical_native_amx_source_bundle(
+            source_bundle,
+            expected_chain_id_hash,
+            expected_epoch,
+            source_authority,
+        )
+        .map_err(|reason| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                "certified autonomous Native AMX diagnostics failed source authentication: {reason}",
+            ))
+        })?;
+        let payload = bundle.executable_payload();
         if !payload.native_amx_receipts.iter().any(Option::is_some) {
             return Ok(Vec::new());
         }
-        if payload.entrypoints.len() != payload.reservation_keys.len()
-            || payload.entrypoints.len() != payload.routing_plans.len()
-            || payload.entrypoints.len() != payload.native_amx_receipts.len()
-        {
-            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "certified autonomous Native AMX payload vectors are not aligned".to_owned(),
-            ));
-        }
 
         let mut rows = Vec::new();
-        for (((entrypoint, reservation), routing_plan), native_amx_receipt) in payload
-            .entrypoints
-            .iter()
-            .zip(&payload.reservation_keys)
-            .zip(&payload.routing_plans)
-            .zip(&payload.native_amx_receipts)
-        {
+        for native_amx_receipt in &payload.native_amx_receipts {
             let Some(receipt) = native_amx_receipt else {
                 continue;
             };
-            let mut has_active_separate_participant = false;
-            for leg in &receipt.legs {
-                match crate::native_amx::native_amx_participant_application_role(receipt, leg) {
-                    Ok(crate::native_amx::NativeAmxParticipantApplicationRole::Coordinator) => {}
-                    Ok(
-                        crate::native_amx::NativeAmxParticipantApplicationRole::SeparateParticipant,
-                    ) => {
-                        let descriptor = &leg.participant_proposal.descriptor;
-                        has_active_separate_participant |= active_routes.contains(&(
-                            descriptor.lane_id,
-                            descriptor.dataspace_id,
-                            descriptor.lane_incarnation,
-                        ));
-                    }
-                    Err(reason) => {
-                        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                            "certified autonomous Native AMX diagnostics contain an invalid leg: {reason}",
-                        )));
-                    }
-                }
-            }
-            if !has_active_separate_participant {
-                continue;
-            }
-            let mut source_id = [0_u8; Hash::LENGTH];
-            source_id.copy_from_slice(reservation.signed_transaction_hash.as_ref());
-            let expected_v2_context = crate::block::expected_native_amx_v2_context_from_receipt(
-                receipt,
-                payload.epoch,
-            )
-            .map_err(|reason| {
-                MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                    "certified autonomous Native AMX diagnostics have an invalid context: {reason}",
-                ))
-            })?;
-            crate::block::validate_historical_native_amx_receipt_against_plan(
-                receipt,
-                &payload.origin_proposal,
-                entrypoint.hash(),
-                routing_plan,
-                source_id,
-                payload.chain_id_hash,
-                &authority.nexus.dataspace_catalog,
-                authority,
-                Some(expected_v2_context),
-            )
-            .map_err(|reason| {
-                MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                    "certified autonomous Native AMX diagnostics failed receipt authentication: {reason}",
-                ))
-            })?;
-            rows.extend(
+            let receipt_rows =
                 Self::native_amx_participant_application_diagnostic_rows_from_native_receipt(
                     receipt,
-                )?,
-            );
+                )?;
+            if rows.len().saturating_add(receipt_rows.len())
+                > SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX
+            {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "certified autonomous Native AMX diagnostics exceed the hard row cap of {SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX}",
+                )));
+            }
+            rows.extend(receipt_rows);
+        }
+        Ok(rows)
+    }
+
+    /// Authenticate only the historical merge-entry material that authorizes
+    /// certified-pending Native AMX diagnostics.
+    ///
+    /// The merge QC authenticates the complete entry, including
+    /// `active_lanes` and every exact source-bundle byte. Each source then
+    /// revalidates its producer, availability/lane certificates, routing, and
+    /// participant QCs without consulting the current lifecycle. This helper
+    /// deliberately does not make the entry eligible for live application.
+    fn authenticated_native_amx_participant_application_rows_from_merge_entry(
+        &self,
+        entry: &MergeLedgerEntry,
+    ) -> Result<Vec<SumeragiNativeAmxParticipantApplication>, MergeLedgerCommitError> {
+        if !entry.has_current_version() || !entry.canonical_size_within_limit() {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "pending Native AMX diagnostic merge entry has an unsupported or oversized layout"
+                    .to_owned(),
+            ));
+        }
+        validate_merge_entry_snapshot_order(&entry.lane_snapshots)?;
+        validate_merge_entry_incarnation_context(
+            entry.lane_catalog_hash,
+            &entry.active_lanes,
+            entry.incarnation_root,
+            entry.activation_root,
+            &entry.lane_snapshots,
+        )?;
+        self.validate_merge_quorum_certificate(entry, false, false)?;
+        let Some(batch) = entry.execution_batch.as_ref() else {
+            return Ok(Vec::new());
+        };
+        if !crate::merge::merge_execution_batch_commitments_match(batch) {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "pending Native AMX diagnostic execution commitments do not match".to_owned(),
+            ));
+        }
+        let expected_chain_id_hash = Hash::new(self.chain_id.clone().into_inner().as_bytes());
+        let mut rows = Vec::new();
+        for execution in &batch.lanes {
+            Self::merge_execution_source_from_embedded(execution)?;
+            if execution.autonomous_chain_id_hash != expected_chain_id_hash {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "pending Native AMX diagnostic source has a foreign chain binding".to_owned(),
+                ));
+            }
+            let source_rows =
+                Self::authenticated_native_amx_participant_application_rows_from_autonomous_source(
+                    &execution.source_bundle,
+                    expected_chain_id_hash,
+                    execution.autonomous_epoch,
+                    crate::block::HistoricalNativeAmxSourceAuthority::MergeQcActiveLanes(
+                        &entry.active_lanes,
+                    ),
+                )?;
+            if rows.len().saturating_add(source_rows.len())
+                > SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX
+            {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "pending merge Native AMX diagnostics exceed the hard row cap of {SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX}",
+                )));
+            }
+            rows.extend(source_rows);
         }
         Ok(rows)
     }
@@ -37887,16 +36898,38 @@ impl State {
     /// The deterministic union contains only current route/incarnation evidence
     /// from fully verified certified autonomous bundles, authenticated pending
     /// Merge-QC sidecars, exact Kura application receipts, and canonical WSV
-    /// markers. No adapter/session cache is consulted. Same-height identity
-    /// disagreement is explicit `conflict`; stage advancement is selected only
-    /// for an identical participant-control identity.
+    /// markers. Bundle-only evidence is rooted in the still-active coordinator's
+    /// Kura geometry, producer signature, availability proof, and lane
+    /// Prepare/Commit QCs; those bytes bind routing and the independently
+    /// verified participant QCs. Once a merge entry exists, its QC-authenticated
+    /// historical `active_lanes` is mandatory for the coordinator and every
+    /// participant, and bundle-only fallback is suppressed. No adapter/session
+    /// cache is consulted. Same-height identity disagreement is explicit
+    /// `conflict`; stage advancement is selected only for an identical
+    /// participant-control identity.
     ///
     /// # Errors
     ///
     /// Returns an error when active lifecycle state, a canonical WSV marker,
     /// or selected durable Kura evidence is malformed or unauthenticated, or
-    /// when the diagnostics/evidence scan exceeds its hard cap.
+    /// when the diagnostics/evidence scan exceeds its hard cap, or when State
+    /// does not remain at one committed generation within the fixed retry
+    /// budget.
     pub fn native_amx_participant_applications_diagnostics(
+        &self,
+    ) -> Result<Vec<SumeragiNativeAmxParticipantApplication>, MergeLedgerCommitError> {
+        self.derive_diagnostics_at_stable_state_generation(
+            || self.native_amx_participant_applications_diagnostics_once(),
+            || {
+                MergeLedgerCommitError::ExecutionMarkerConflict(
+                    "State generation changed repeatedly during bounded Native AMX participant diagnostics"
+                        .to_owned(),
+                )
+            },
+        )
+    }
+
+    fn native_amx_participant_applications_diagnostics_once(
         &self,
     ) -> Result<Vec<SumeragiNativeAmxParticipantApplication>, MergeLedgerCommitError> {
         let lifecycle = self.lane_consensus_lifecycle_snapshot();
@@ -37991,10 +37024,73 @@ impl State {
         drop(world);
 
         let chain_id_hash = Hash::new(self.chain_id.clone().into_inner().as_bytes());
-        let authority = self.view();
-        // Certified bundles and pending merge sidecars share one hard scan
-        // budget; neither durable source can hide an unbounded second pass.
+        // Pending merge evidence is inventoried first so a source that already
+        // has a merge entry cannot be downgraded to bundle-only authority when
+        // that entry's QC or historical active-lane binding is invalid.
         let mut remaining_native_evidence_scan = SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX;
+        let pending_native_evidence = match self
+            .kura
+            .pending_certified_merge_entry_hashes_matching_bounded(
+                remaining_native_evidence_scan,
+                |entry| {
+                    entry.execution_batch.as_ref().is_some_and(|batch| {
+                        batch.lanes.iter().any(|execution| {
+                            execution.native_amx_receipts.iter().any(Option::is_some)
+                                || crate::kura::Kura::decode_autonomous_lane_merge_bundle(
+                                    &execution.source_bundle,
+                                    execution.autonomous_chain_id_hash,
+                                    execution.autonomous_epoch,
+                                )
+                                .map_or(true, |bundle| {
+                                    bundle
+                                        .executable_payload()
+                                        .native_amx_receipts
+                                        .iter()
+                                        .any(Option::is_some)
+                                })
+                        })
+                    })
+                },
+            )
+            .map_err(MergeLedgerCommitError::Persistence)?
+        {
+            PendingCertifiedMergeEvidenceScan::Complete(hashes) => hashes,
+            PendingCertifiedMergeEvidenceScan::LimitExceeded => {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "pending certified merge Native AMX diagnostics exceed the hard evidence-scan cap of {SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX}",
+                )));
+            }
+        };
+        remaining_native_evidence_scan =
+            remaining_native_evidence_scan.saturating_sub(pending_native_evidence.len());
+        let mut pending_native_entries = Vec::with_capacity(pending_native_evidence.len());
+        let mut pending_native_source_hashes = BTreeSet::new();
+        for entry_hash in pending_native_evidence {
+            let Some(entry) = self
+                .kura
+                .merge_entry_by_hash(entry_hash)
+                .map_err(MergeLedgerCommitError::Persistence)?
+            else {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "pending certified merge Native AMX diagnostic evidence {entry_hash} disappeared during its bounded scan",
+                )));
+            };
+            if let Some(batch) = entry.execution_batch.as_ref() {
+                for execution in &batch.lanes {
+                    // Once any exact source makes the entry Native-relevant,
+                    // reserve every source hash in that QC-authenticated entry.
+                    // A tampered projection cannot then hide the Native source
+                    // and downgrade it to bundle-only coordinator authority.
+                    pending_native_source_hashes
+                        .insert(merge_execution_source_bundle_hash(&execution.source_bundle));
+                }
+            }
+            pending_native_entries.push(entry);
+        }
+
+        // Certified bundles and pending merge sidecars share the hard scan
+        // budget; neither durable source can hide an unbounded second pass.
+        let certified_coordinator_authority = self.view();
         for (lane_id, dataspace_id, incarnation) in active_routes.iter().copied() {
             let requested = remaining_native_evidence_scan.saturating_add(1);
             let certified = self.kura.latest_certified_lane_block_artifacts_matching(
@@ -38021,31 +37117,50 @@ impl State {
                 remaining_native_evidence_scan.saturating_sub(certified.len());
             for artifact in certified {
                 let descriptor = &artifact.proposal.descriptor;
-                let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
-                    &authority.world,
-                    descriptor.proposal_height,
-                );
-                let bundle = match self.kura.autonomous_lane_merge_bundle(
-                    artifact.clone(),
+                let Some(expected_epoch) = artifact
+                    .prepare_qc
+                    .payload_availability_qc
+                    .as_ref()
+                    .map(|qc| qc.body.epoch)
+                else {
+                    continue;
+                };
+                let source = match self.kura.durable_autonomous_lane_merge_source(
+                    lane_id,
+                    descriptor.lane_block_height,
                     chain_id_hash,
                     expected_epoch,
                 ) {
-                    Ok(bundle) => bundle,
+                    Ok(source) if source.bundle.certified == artifact => source,
+                    Ok(_) => {
+                        debug!(
+                            lane = %lane_id.as_u32(),
+                            lane_block_height = descriptor.lane_block_height,
+                            "ignoring autonomous Native AMX source that changed during diagnostic selection"
+                        );
+                        continue;
+                    }
                     Err(reason) => {
                         debug!(
                             lane = %lane_id.as_u32(),
                             lane_block_height = descriptor.lane_block_height,
                             reason,
-                            "ignoring certified lane artifact without a fully validated autonomous Kura bundle"
+                            "ignoring certified lane artifact without a complete durable autonomous Kura source"
                         );
                         continue;
                     }
                 };
-                for row in self
-                    .authenticated_native_amx_participant_application_rows_from_autonomous_payload(
-                        bundle.executable_payload(),
-                        &authority,
-                        &active_routes,
+                if pending_native_source_hashes.contains(&source.bundle_hash) {
+                    continue;
+                }
+                for row in
+                    Self::authenticated_native_amx_participant_application_rows_from_autonomous_source(
+                        &source.source_bundle,
+                        chain_id_hash,
+                        expected_epoch,
+                        crate::block::HistoricalNativeAmxSourceAuthority::CertifiedCoordinator(
+                            &certified_coordinator_authority,
+                        ),
                     )?
                 {
                     Self::merge_native_amx_participant_application_diagnostic_row(
@@ -38056,64 +37171,17 @@ impl State {
                 }
             }
         }
-        drop(authority);
+        drop(certified_coordinator_authority);
 
-        let pending_native_evidence = match self
-            .kura
-            .pending_certified_merge_entry_hashes_matching_bounded(
-                remaining_native_evidence_scan,
-                |entry| {
-                    entry.execution_batch.as_ref().is_some_and(|batch| {
-                        batch.lanes.iter().any(|execution| {
-                            execution.native_amx_receipts.iter().any(Option::is_some)
-                        })
-                    })
-                },
-            )
-            .map_err(MergeLedgerCommitError::Persistence)?
-        {
-            PendingCertifiedMergeEvidenceScan::Complete(hashes) => hashes,
-            PendingCertifiedMergeEvidenceScan::LimitExceeded => {
-                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
-                    "pending certified merge Native AMX diagnostics exceed the hard evidence-scan cap of {SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX}",
-                )));
-            }
-        };
-        for entry_hash in pending_native_evidence {
-            let Some(entry) = self
-                .kura
-                .merge_entry_by_hash(entry_hash)
-                .map_err(MergeLedgerCommitError::Persistence)?
-            else {
-                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
-                    "pending certified merge Native AMX diagnostic evidence {entry_hash} disappeared during its bounded scan",
-                )));
-            };
-            if self
-                .validate_certified_merge_entry_for_global_order(&entry)
-                .is_err()
+        for entry in pending_native_entries {
+            for row in
+                self.authenticated_native_amx_participant_application_rows_from_merge_entry(&entry)?
             {
-                continue;
-            }
-            let Some(batch) = entry.execution_batch.as_ref() else {
-                continue;
-            };
-            for receipt in batch
-                .lanes
-                .iter()
-                .flat_map(|execution| execution.native_amx_receipts.iter().flatten())
-            {
-                for row in
-                    Self::native_amx_participant_application_diagnostic_rows_from_native_receipt(
-                        receipt,
-                    )?
-                {
-                    Self::merge_native_amx_participant_application_diagnostic_row(
-                        &mut rows,
-                        &active_routes,
-                        row,
-                    )?;
-                }
+                Self::merge_native_amx_participant_application_diagnostic_row(
+                    &mut rows,
+                    &active_routes,
+                    row,
+                )?;
             }
         }
 
@@ -38491,7 +37559,14 @@ impl State {
         use crate::sumeragi::status::CommittedLaneBlockExecutionStatus as ExecutionStatus;
 
         let proposal = &session.proposal;
-        if self.kura.lane_block_application_receipt_available(proposal) {
+        let application_receipt_available = if session.prepare_qc.payload_availability_qc.is_some()
+        {
+            self.kura
+                .autonomous_lane_block_merge_receipt_revalidates_without_sidecar_repair(proposal)
+        } else {
+            self.kura.lane_block_application_receipt_available(proposal)
+        };
+        if application_receipt_available {
             let descriptor = &proposal.descriptor;
             let receipt = self.kura.read_lane_block_application_receipt(
                 descriptor.lane_id,
@@ -38508,8 +37583,9 @@ impl State {
             );
         }
         if self.certified_lane_block_session_is_applied_or_snapshot_anchored_cached(session) {
-            // Hash-only snapshot evidence cannot prove which execution path produced the
-            // application. Keep diagnostics fail-closed until an exact receipt is recovered.
+            // A replicated frontier or hash-only ordinary snapshot cannot
+            // prove which receipt format produced the application. Keep
+            // diagnostics fail-closed until exact durable evidence recovers.
             return None;
         }
         if self
@@ -38518,7 +37594,7 @@ impl State {
         {
             return Some(ExecutionStatus::ApplicationReceiptConflictsWithPreflight);
         }
-        if !self.certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(proposal) {
+        if !self.certified_lane_block_session_predecessor_is_applied_cached(session) {
             return Some(ExecutionStatus::AwaitingPredecessorApplication);
         }
         if self
@@ -38564,24 +37640,27 @@ impl State {
     /// # Errors
     ///
     /// Returns an error when a bounded Kura evidence snapshot cannot be read
-    /// safely. Callers must fail the diagnostics request closed.
+    /// safely or State does not stabilize within the fixed retry budget.
+    /// Callers must fail the diagnostics request closed.
     pub fn autonomous_lane_execution_diagnostics(
         &self,
     ) -> Result<Vec<SumeragiAutonomousLaneExecution>> {
         self.autonomous_lane_execution_diagnostics_inner(None)
     }
 
-    /// Derive bounded autonomous execution stages with an exact durable Queue
-    /// Commit/Forget witness for terminal rows.
+    /// Derive bounded autonomous execution stages with exact durable Queue
+    /// reservation and Commit/Forget witnesses.
     ///
-    /// The Queue observer is consulted only after the canonical application
-    /// receipt and exact source bundle have independently revalidated. It
-    /// cannot authorize application or advance any consensus state.
+    /// The Queue observer supplies the initial fsynced reservation-group
+    /// boundary and, after canonical application independently revalidates,
+    /// the terminal Commit/Forget boundary. It cannot authorize application
+    /// or advance any consensus state.
     ///
     /// # Errors
     ///
     /// Returns an error when a bounded Kura evidence snapshot cannot be read
-    /// safely. Callers must fail the diagnostics request closed.
+    /// safely or State does not stabilize within the fixed retry budget.
+    /// Callers must fail the diagnostics request closed.
     pub fn autonomous_lane_execution_diagnostics_with_queue(
         &self,
         queue: &crate::queue::Queue,
@@ -38590,6 +37669,20 @@ impl State {
     }
 
     fn autonomous_lane_execution_diagnostics_inner(
+        &self,
+        queue: Option<&crate::queue::Queue>,
+    ) -> Result<Vec<SumeragiAutonomousLaneExecution>> {
+        self.derive_diagnostics_at_stable_state_generation(
+            || self.autonomous_lane_execution_diagnostics_once(queue),
+            || {
+                eyre!(
+                    "State generation changed repeatedly during bounded autonomous lane execution diagnostics"
+                )
+            },
+        )
+    }
+
+    fn autonomous_lane_execution_diagnostics_once(
         &self,
         queue: Option<&crate::queue::Queue>,
     ) -> Result<Vec<SumeragiAutonomousLaneExecution>> {
@@ -38617,7 +37710,10 @@ impl State {
         let authority = self.view();
         let mut evidence =
             BTreeMap::<AutonomousLaneDiagnosticKey, AutonomousLaneDiagnosticEvidence>::new();
-        let mut autonomous_proposal_keys = BTreeSet::<AutonomousLaneDiagnosticKey>::new();
+        let mut autonomous_proposal_evidence = BTreeMap::<
+            (LaneId, DataSpaceId, Hash, u64, u64, u64, Hash, Hash),
+            AutonomousLaneDiagnosticEvidence,
+        >::new();
 
         let mut insert = |incoming: AutonomousLaneDiagnosticEvidence| {
             let descriptor_route = (
@@ -38636,6 +37732,19 @@ impl State {
             }
         };
 
+        if let Some(queue) = queue {
+            let row_limit = NonZeroUsize::new(SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX)
+                .expect("autonomous diagnostics row limit is positive");
+            let reservation_groups = queue
+                .lane_reservation_diagnostic_groups_bounded(&routes, row_limit)
+                .wrap_err("failed to read bounded durable Queue reservation diagnostics")?;
+            for summary in reservation_groups {
+                insert(AutonomousLaneDiagnosticEvidence::from_reservation_group(
+                    summary,
+                ));
+            }
+        }
+
         let autonomous = self
             .kura
             .latest_autonomous_lane_block_artifacts_snapshot(
@@ -38648,24 +37757,34 @@ impl State {
             .wrap_err("failed to read bounded autonomous payload diagnostics")?;
         for (artifact, _) in autonomous {
             let payload = &artifact.executable_payload;
-            let Some(mut incoming) =
-                AutonomousLaneDiagnosticEvidence::from_proposal(&payload.origin_proposal)
-            else {
-                continue;
-            };
+            let mut incoming = AutonomousLaneDiagnosticEvidence::from_proposal_and_reservations(
+                &payload.origin_proposal,
+                &payload.reservation_keys,
+            )
+            .wrap_err("autonomous payload has invalid reservation diagnostics identity")?;
             incoming.payload_durable = true;
             incoming.availability_certified = artifact.availability_certificate.is_some();
             incoming.row.executable_payload_hash = Some(payload.payload_hash);
-            incoming.row.reservation_count =
-                u64::try_from(payload.reservation_keys.len()).unwrap_or(u64::MAX);
-            incoming.reservation_keys = Some(payload.reservation_keys.clone());
             if payload.reservation_keys.len() != payload.entrypoints.len()
                 || incoming.row.transaction_count
                     != u64::try_from(payload.entrypoints.len()).unwrap_or(u64::MAX)
             {
                 incoming.conflict = true;
             }
-            autonomous_proposal_keys.insert(incoming.key());
+            let descriptor = &payload.origin_proposal.descriptor;
+            autonomous_proposal_evidence.insert(
+                (
+                    descriptor.lane_id,
+                    descriptor.dataspace_id,
+                    descriptor.lane_incarnation,
+                    descriptor.proposal_height,
+                    descriptor.lane_block_height,
+                    descriptor.lane_block_view,
+                    payload.origin_proposal.proposal_hash,
+                    descriptor.descriptor_hash,
+                ),
+                incoming.clone(),
+            );
             insert(incoming);
         }
 
@@ -38686,31 +37805,47 @@ impl State {
                         )
                 },
             ) {
-                let Some(mut incoming) =
-                    AutonomousLaneDiagnosticEvidence::from_proposal(&certified.proposal)
-                else {
-                    continue;
-                };
-                let key = incoming.key();
                 let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
                     &authority.world,
                     certified.proposal.descriptor.proposal_height,
                 );
-                if let Ok(bundle) =
-                    self.kura
-                        .autonomous_lane_merge_bundle(certified, chain_id_hash, expected_epoch)
+                let finalized_key = {
+                    let descriptor = &certified.proposal.descriptor;
+                    (
+                        descriptor.lane_id,
+                        descriptor.dataspace_id,
+                        descriptor.lane_incarnation,
+                        descriptor.proposal_height,
+                        descriptor.lane_block_height,
+                        descriptor.lane_block_view,
+                        certified.proposal.proposal_hash,
+                        descriptor.descriptor_hash,
+                    )
+                };
+                if let Ok(source) = self.kura.durable_autonomous_lane_merge_source(
+                    lane_id,
+                    certified.proposal.descriptor.lane_block_height,
+                    chain_id_hash,
+                    expected_epoch,
+                ) && source.bundle.certified == certified
                 {
+                    let bundle = &source.bundle;
                     let payload = bundle.executable_payload();
+                    let mut incoming =
+                        AutonomousLaneDiagnosticEvidence::from_proposal_and_reservations(
+                            &bundle.certified.proposal,
+                            &payload.reservation_keys,
+                        )
+                        .wrap_err(
+                            "certified autonomous bundle has invalid reservation diagnostics identity",
+                        )?;
                     incoming.payload_durable = true;
                     incoming.availability_certified =
                         bundle.autonomous.availability_certificate.is_some();
                     incoming.lane_certified = true;
                     incoming.bundle_durable = true;
                     incoming.row.executable_payload_hash = Some(payload.payload_hash);
-                    incoming.row.source_bundle_hash = bundle.bundle_hash().ok();
-                    incoming.row.reservation_count =
-                        u64::try_from(payload.reservation_keys.len()).unwrap_or(u64::MAX);
-                    incoming.reservation_keys = Some(payload.reservation_keys.clone());
+                    incoming.row.source_bundle_hash = Some(source.bundle_hash);
                     if payload.reservation_keys.len() != payload.entrypoints.len()
                         || incoming.row.transaction_count
                             != u64::try_from(payload.entrypoints.len()).unwrap_or(u64::MAX)
@@ -38718,7 +37853,12 @@ impl State {
                         incoming.conflict = true;
                     }
                     insert(incoming);
-                } else if autonomous_proposal_keys.contains(&key) {
+                } else {
+                    let Some(mut incoming) =
+                        autonomous_proposal_evidence.get(&finalized_key).cloned()
+                    else {
+                        continue;
+                    };
                     // Certification alone does not encode whether this was an
                     // ordinary globally anchored lane proposal or an
                     // autonomous source. Only advance an incomplete bundle to
@@ -38754,22 +37894,40 @@ impl State {
                     break;
                 }
                 source_budget = source_budget.saturating_sub(1);
-                let Some(mut incoming) =
-                    AutonomousLaneDiagnosticEvidence::from_proposal(&execution.proposal)
-                else {
-                    continue;
-                };
+                let reservation_keys = execution
+                    .reservation_keys
+                    .iter()
+                    .map(|encoded| decode_canonical_merge_reservation_key(encoded))
+                    .collect::<core::result::Result<Vec<_>, _>>()
+                    .wrap_err("failed to decode autonomous merge reservation diagnostics")?;
+                let mut incoming =
+                    AutonomousLaneDiagnosticEvidence::from_proposal_and_reservations(
+                        &execution.proposal,
+                        &reservation_keys,
+                    )
+                    .wrap_err(
+                        "autonomous merge source has invalid reservation diagnostics identity",
+                    )?;
                 incoming.row.merge_entry_hash = Some(entry_hash);
                 incoming.row.executable_payload_hash = Some(execution.autonomous_payload_hash);
                 incoming.row.source_bundle_hash = Some(execution.source_bundle_hash);
-                incoming.row.reservation_count =
-                    u64::try_from(execution.reservation_keys.len()).unwrap_or(u64::MAX);
                 incoming.payload_durable = true;
                 incoming.availability_certified = true;
                 incoming.lane_certified = true;
-                incoming.bundle_durable = true;
                 incoming.merge_candidate = !committed;
                 incoming.globally_committed = committed;
+                incoming.bundle_durable = self
+                    .kura
+                    .durable_autonomous_lane_merge_source(
+                        execution.proposal.descriptor.lane_id,
+                        execution.proposal.descriptor.lane_block_height,
+                        execution.autonomous_chain_id_hash,
+                        execution.autonomous_epoch,
+                    )
+                    .is_ok_and(|source| {
+                        source.bundle_hash == execution.source_bundle_hash
+                            && source.source_bundle == execution.source_bundle
+                    });
                 let source_bundle_revalidates =
                     match crate::kura::Kura::decode_autonomous_lane_merge_bundle(
                         &execution.source_bundle,
@@ -38799,9 +37957,6 @@ impl State {
                                     == Some(&execution.reservation_keys)
                                 && routing_bytes.ok().as_ref() == Some(&execution.routing_plans)
                                 && payload.native_amx_receipts == execution.native_amx_receipts;
-                            if exact {
-                                incoming.reservation_keys = Some(payload.reservation_keys.clone());
-                            }
                             exact
                         }
                         Err(_) => false,
@@ -38827,8 +37982,10 @@ impl State {
         // A route/incarnation/lane-height slot may have only one authenticated
         // proposal identity. Retain every bounded conflicting identity and
         // mark all of them instead of selecting one silently.
-        let mut identities_by_slot =
-            BTreeMap::<(LaneId, DataSpaceId, Hash, u64), BTreeSet<(Hash, Hash, u64, u64)>>::new();
+        let mut identities_by_slot = BTreeMap::<
+            (LaneId, DataSpaceId, Hash, u64),
+            BTreeSet<(Hash, Hash, Hash, Option<Hash>, Option<Hash>, u64, u64)>,
+        >::new();
         for candidate in evidence.values() {
             identities_by_slot
                 .entry((
@@ -38839,6 +37996,9 @@ impl State {
                 ))
                 .or_default()
                 .insert((
+                    candidate.row.proposal_identity_hash,
+                    candidate.row.reservation_owner_hash,
+                    candidate.row.reservation_group_hash,
                     candidate.row.proposal_hash,
                     candidate.row.descriptor_hash,
                     candidate.row.lane_block_view,
@@ -38878,14 +38038,14 @@ impl State {
                 continue;
             };
             let receipt_descriptor = &receipt.proposal.descriptor;
-            if receipt.proposal.proposal_hash != candidate.row.proposal_hash
+            if Some(receipt.proposal.proposal_hash) != candidate.row.proposal_hash
                 || receipt_descriptor.lane_id != candidate.row.lane_id
                 || receipt_descriptor.dataspace_id != candidate.row.dataspace_id
                 || receipt_descriptor.lane_incarnation != candidate.row.lane_incarnation
                 || receipt_descriptor.lane_block_height != candidate.row.lane_block_height
                 || receipt_descriptor.lane_block_view != candidate.row.lane_block_view
                 || receipt_descriptor.proposal_height != candidate.row.proposal_height
-                || receipt_descriptor.descriptor_hash != candidate.row.descriptor_hash
+                || Some(receipt_descriptor.descriptor_hash) != candidate.row.descriptor_hash
                 || receipt.format != LaneBlockApplicationReceiptArtifactFormat::MergeExecution
                 || receipt.merge_source_bundle_hash != candidate.row.source_bundle_hash
                 || candidate.row.merge_entry_hash.is_some()
@@ -39208,6 +38368,206 @@ impl State {
         sessions
     }
 
+    /// Build the complete read-only certified ordinary-lane startup projection.
+    /// No frontier, indexed slot, receipt, or validation cache is repaired by
+    /// this operation; exact frontier-backed slot repairs are returned as plan
+    /// items for publication after the all-item recheck.
+    pub(crate) fn lane_application_certified_repair_snapshot_cached(
+        &self,
+        capacity: usize,
+    ) -> Result<LaneApplicationCertifiedRepairSnapshot, MergeLedgerCommitError> {
+        if capacity == 0 {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "ordinary lane receipt startup repair has zero capacity".to_owned(),
+            ));
+        }
+        let _state_write_lock = self.state_write_lock.lock();
+        let lifecycle = self.lane_consensus_lifecycle_snapshot();
+        let routes = Self::lane_block_artifact_routes(&lifecycle.nexus);
+        if routes.len() > capacity {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "ordinary lane receipt startup repair has {} active routes; capacity is {capacity}",
+                routes.len()
+            )));
+        }
+
+        let mut frontiers = Vec::new();
+        let mut pair_repairs = Vec::new();
+        for (lane_id, dataspace_id) in routes {
+            let authority = lifecycle
+                .certified_lane_block_persistence_authority(lane_id, dataspace_id)
+                .ok_or_else(|| {
+                    MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "ordinary certified lane {} has no committed incarnation",
+                        lane_id.as_u32()
+                    ))
+                })?;
+            let Some((artifact, pair_repair_required)) = self
+                .kura
+                .preflight_latest_certified_lane_block_frontier_with_authority(lane_id, &authority)
+                .map_err(|error| {
+                    MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "ordinary certified lane {} read-only frontier preflight failed: {error}",
+                        lane_id.as_u32()
+                    ))
+                })?
+            else {
+                continue;
+            };
+            let descriptor = &artifact.proposal.descriptor;
+            if descriptor.dataspace_id != dataspace_id
+                || !lifecycle.lane_route_and_incarnation_matches(
+                    lane_id,
+                    dataspace_id,
+                    descriptor.proposal_height,
+                    descriptor.lane_incarnation,
+                )
+            {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "ordinary certified lane {} frontier is outside its active route",
+                    lane_id.as_u32()
+                )));
+            }
+            if pair_repair_required {
+                pair_repairs.push(artifact.clone());
+            }
+            if let Some(session) = Self::ordinary_application_receipt_repair_session(artifact) {
+                frontiers.push(session);
+            }
+        }
+
+        let mut earliest = Vec::new();
+        let mut traversed_total = 0_usize;
+        for mut session in frontiers {
+            if self.certified_lane_block_session_is_applied_or_snapshot_anchored_cached(&session) {
+                continue;
+            }
+            let mut traversed = 0_usize;
+            loop {
+                let descriptor = &session.proposal.descriptor;
+                if descriptor.lane_block_height == 0
+                    || !lifecycle.lane_route_and_incarnation_matches(
+                        descriptor.lane_id,
+                        descriptor.dataspace_id,
+                        descriptor.proposal_height,
+                        descriptor.lane_incarnation,
+                    )
+                    || (descriptor.previous_lane_block_height == 0)
+                        != descriptor.previous_lane_block_descriptor_hash.is_none()
+                    || (descriptor.lane_block_height == 1)
+                        != (descriptor.previous_lane_block_height == 0)
+                    || (descriptor.lane_block_height > 1
+                        && descriptor.previous_lane_block_height.checked_add(1)
+                            != Some(descriptor.lane_block_height))
+                {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "ordinary certified lane route {} contains a stale, ABA, or non-contiguous descriptor",
+                        descriptor.lane_id.as_u32()
+                    )));
+                }
+                if self.certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(
+                    &session.proposal,
+                ) {
+                    break;
+                }
+                traversed = traversed.saturating_add(1);
+                traversed_total = traversed_total.saturating_add(1);
+                if traversed > capacity || traversed_total > capacity {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "ordinary certified lane route {} predecessor walk exceeds startup capacity {capacity}",
+                        descriptor.lane_id.as_u32()
+                    )));
+                }
+                let previous_height = descriptor.previous_lane_block_height;
+                let previous_hash =
+                    descriptor
+                        .previous_lane_block_descriptor_hash
+                        .ok_or_else(|| {
+                            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                                "ordinary certified lane route {} lost its predecessor descriptor",
+                                descriptor.lane_id.as_u32()
+                            ))
+                        })?;
+                let previous = self
+                    .kura
+                    .read_certified_lane_block_artifact_read_only(
+                        descriptor.lane_id,
+                        previous_height,
+                    )
+                    .map_err(|error| {
+                        MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                            "ordinary certified lane {} predecessor read-only lookup failed: {error}",
+                            descriptor.lane_id.as_u32()
+                        ))
+                    })?
+                    .ok_or_else(|| {
+                        MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                            "ordinary certified lane route {} is missing predecessor height {previous_height}",
+                            descriptor.lane_id.as_u32()
+                        ))
+                    })?;
+                let previous_descriptor = &previous.proposal.descriptor;
+                if previous_descriptor.lane_id != descriptor.lane_id
+                    || previous_descriptor.dataspace_id != descriptor.dataspace_id
+                    || previous_descriptor.lane_incarnation != descriptor.lane_incarnation
+                    || previous_descriptor.lane_block_height != previous_height
+                    || previous_descriptor.descriptor_hash != previous_hash
+                    || previous_descriptor.proposal_height >= descriptor.proposal_height
+                    || !lifecycle.lane_route_and_incarnation_matches(
+                        previous_descriptor.lane_id,
+                        previous_descriptor.dataspace_id,
+                        previous_descriptor.proposal_height,
+                        previous_descriptor.lane_incarnation,
+                    )
+                {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "ordinary certified lane route {} predecessor is conflicting or stale",
+                        descriptor.lane_id.as_u32()
+                    )));
+                }
+                let route_lane_id = descriptor.lane_id;
+                session = crate::lane_consensus::CommittedLaneBlockSession {
+                    proposal: previous.proposal,
+                    prepare_qc: previous.prepare_qc,
+                    commit_qc: previous.commit_qc,
+                };
+                if self
+                    .certified_lane_block_session_is_applied_or_snapshot_anchored_cached(&session)
+                {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "ordinary certified lane route {} selected an already-applied predecessor",
+                        route_lane_id.as_u32()
+                    )));
+                }
+            }
+            earliest.push(session);
+        }
+        earliest.sort_by_key(|session| {
+            let descriptor = &session.proposal.descriptor;
+            (
+                descriptor.lane_id,
+                descriptor.dataspace_id,
+                descriptor.lane_incarnation,
+                descriptor.lane_block_height,
+                descriptor.lane_block_view,
+            )
+        });
+        pair_repairs.sort_by_key(|artifact| {
+            let descriptor = &artifact.proposal.descriptor;
+            (
+                descriptor.lane_id,
+                descriptor.dataspace_id,
+                descriptor.lane_incarnation,
+                descriptor.lane_block_height,
+                descriptor.lane_block_view,
+            )
+        });
+        Ok(LaneApplicationCertifiedRepairSnapshot {
+            pair_repairs,
+            earliest_unapplied: earliest,
+        })
+    }
+
     pub(crate) fn lane_block_artifact_is_applied_or_snapshot_anchored_cached(
         &self,
         artifact: &crate::kura::LaneBlockArtifact,
@@ -39220,10 +38580,14 @@ impl State {
         &self,
         session: &crate::lane_consensus::CommittedLaneBlockSession,
     ) -> bool {
+        if session.prepare_qc.payload_availability_qc.is_some() {
+            return self
+                .certified_autonomous_lane_block_is_globally_applied_cached(&session.proposal);
+        }
         self.certified_lane_block_proposal_has_hash_only_snapshot_anchor(&session.proposal)
             || self
                 .kura
-                .lane_block_application_receipt_available(&session.proposal)
+                .lane_block_application_receipt_available_without_sidecar_repair(&session.proposal)
     }
 
     pub(crate) fn certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(
@@ -39233,14 +38597,15 @@ impl State {
         let descriptor = &proposal.descriptor;
         let previous_height = descriptor.previous_lane_block_height;
         if previous_height == 0 {
-            return true;
+            return descriptor.lane_block_height == 1
+                && descriptor.previous_lane_block_descriptor_hash.is_none();
         }
         let Some(previous_descriptor_hash) = descriptor.previous_lane_block_descriptor_hash else {
-            return true;
+            return false;
         };
         if self
             .kura
-            .read_lane_block_artifact(descriptor.lane_id, previous_height)
+            .read_lane_block_artifact_without_sidecar_repair(descriptor.lane_id, previous_height)
             .is_some_and(|artifact| {
                 artifact.ownership.dataspace_id == descriptor.dataspace_id
                     && artifact.ownership.lane_block_height == previous_height
@@ -39252,7 +38617,7 @@ impl State {
             return true;
         }
         self.kura
-            .lane_block_predecessor_application_receipt_available(proposal)
+            .lane_block_predecessor_application_receipt_available_without_sidecar_repair(proposal)
     }
 
     fn certified_lane_block_artifact_is_applied_or_snapshot_anchored_cached(
@@ -39270,10 +38635,10 @@ impl State {
         proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
     ) -> bool {
         let descriptor = &proposal.descriptor;
-        let Some(artifact) = self
-            .kura
-            .read_lane_block_artifact(descriptor.lane_id, descriptor.lane_block_height)
-        else {
+        let Some(artifact) = self.kura.read_lane_block_artifact_without_sidecar_repair(
+            descriptor.lane_id,
+            descriptor.lane_block_height,
+        ) else {
             return false;
         };
         if !Self::lane_block_artifact_matches_certified_proposal(&artifact, proposal) {
@@ -39533,7 +38898,7 @@ impl State {
     }
 
     /// Compare an expected QueuePlan binding hash with the immutable WSV
-    /// registry using one bounded read.
+    /// registry and its protocol-bounded pending-or-applied evidence.
     ///
     /// # Errors
     ///
@@ -39545,8 +38910,9 @@ impl State {
         entrypoint_hash: HashOf<TransactionEntrypoint>,
         expected_binding_hash: Hash,
     ) -> Result<QueuePlanAdmissionRegistryMatch, String> {
+        let state_view = self.view();
         Self::queue_plan_admission_registry_match_in_view(
-            &self.view(),
+            &state_view,
             entrypoint_hash,
             expected_binding_hash,
         )
@@ -39586,10 +38952,38 @@ impl State {
             .map_err(|error| error.to_string())?;
         let state_view = self.view();
         let Some(payload) = state_view.world().smart_contract_state().get(&key) else {
+            let obligation_key = Self::queue_plan_pending_obligation_marker_key(
+                registry_key.chain_id_digest,
+                registry_key.entrypoint_hash,
+            )
+            .map_err(|error| error.to_string())?;
+            if state_view
+                .world()
+                .smart_contract_state()
+                .get(&obligation_key)
+                .is_some()
+            {
+                return Err(
+                    "QueuePlan pending obligation exists without an immutable registry owner"
+                        .to_owned(),
+                );
+            }
             return Ok(false);
         };
-        Self::decode_exact_queue_plan_admission_registry_marker(&key, payload)
+        let registry_value = Self::decode_exact_queue_plan_admission_registry_marker(&key, payload)
             .map_err(|error| error.to_string())?;
+        let application_state = Self::queue_plan_registry_owner_application_state_in_view(
+            &state_view,
+            registry_key.chain_id_digest,
+            registry_key.entrypoint_hash,
+            registry_value.binding_hash,
+        )
+        .map_err(|error| error.to_string())?;
+        if application_state == QueuePlanAdmissionApplicationState::PendingStale {
+            return Err(
+                "QueuePlan registry owner names a retired or recreated lane incarnation".to_owned(),
+            );
+        }
         Ok(true)
     }
 
@@ -39614,17 +39008,51 @@ impl State {
         if binding.chain_id_digest != expected_chain_id_digest {
             return Err("QueuePlan admission binding belongs to another chain".to_owned());
         }
-        self.queue_plan_admission_registry_match(
+        let state_view = self.view();
+        let registry_match = Self::queue_plan_admission_registry_match_in_view(
+            &state_view,
             binding.entrypoint_hash.clone(),
             binding.canonical_hash(),
-        )
+        )?;
+        if registry_match == QueuePlanAdmissionRegistryMatch::Exact {
+            let expected = Self::queue_plan_pending_obligation_from_binding(binding)
+                .map_err(|error| error.to_string())?;
+            let application_state =
+                Self::queue_plan_binding_application_state(&state_view, binding, expected)
+                    .map_err(|error| error.to_string())?;
+            if application_state == QueuePlanAdmissionApplicationState::PendingStale {
+                return Err(
+                    "QueuePlan binding names a retired or recreated lane incarnation".to_owned(),
+                );
+            }
+        }
+        Ok(registry_match)
     }
 
     fn queue_plan_admission_registry_match_in_view(
-        state_view: &impl StateReadOnly,
+        state_view: &impl StateReadOnlyWithTransactions,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
         expected_binding_hash: Hash,
     ) -> Result<QueuePlanAdmissionRegistryMatch, String> {
+        Self::queue_plan_admission_registry_match_with_application_state_in_view(
+            state_view,
+            entrypoint_hash,
+            expected_binding_hash,
+        )
+        .map(|(registry_match, _)| registry_match)
+    }
+
+    fn queue_plan_admission_registry_match_with_application_state_in_view(
+        state_view: &impl StateReadOnlyWithTransactions,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        expected_binding_hash: Hash,
+    ) -> Result<
+        (
+            QueuePlanAdmissionRegistryMatch,
+            Option<QueuePlanAdmissionApplicationState>,
+        ),
+        String,
+    > {
         if entrypoint_hash.as_ref().iter().all(|byte| *byte == 0)
             || expected_binding_hash.as_ref().iter().all(|byte| *byte == 0)
         {
@@ -39640,15 +39068,39 @@ impl State {
         let key = Self::queue_plan_admission_registry_marker_key(&registry_key)
             .map_err(|error| error.to_string())?;
         let Some(payload) = state_view.world().smart_contract_state().get(&key) else {
-            return Ok(QueuePlanAdmissionRegistryMatch::Absent);
+            let obligation_key = Self::queue_plan_pending_obligation_marker_key(
+                registry_key.chain_id_digest,
+                registry_key.entrypoint_hash,
+            )
+            .map_err(|error| error.to_string())?;
+            if state_view
+                .world()
+                .smart_contract_state()
+                .get(&obligation_key)
+                .is_some()
+            {
+                return Err(
+                    "QueuePlan pending obligation exists without an immutable registry owner"
+                        .to_owned(),
+                );
+            }
+            return Ok((QueuePlanAdmissionRegistryMatch::Absent, None));
         };
         let value = Self::decode_exact_queue_plan_admission_registry_marker(&key, payload)
             .map_err(|error| error.to_string())?;
-        Ok(if value.binding_hash == expected_binding_hash {
+        let application_state = Self::queue_plan_registry_owner_application_state_in_view(
+            state_view,
+            registry_key.chain_id_digest,
+            registry_key.entrypoint_hash,
+            value.binding_hash,
+        )
+        .map_err(|error| error.to_string())?;
+        let registry_match = if value.binding_hash == expected_binding_hash {
             QueuePlanAdmissionRegistryMatch::Exact
         } else {
             QueuePlanAdmissionRegistryMatch::Conflict
-        })
+        };
+        Ok((registry_match, Some(application_state)))
     }
 
     fn queue_plan_admission_registry_marker_key(
@@ -39697,17 +39149,28 @@ impl State {
                 "queue-plan admission registry value is malformed".to_owned(),
             ));
         }
-        norito::to_bytes(registry_value).map_err(|error| {
+        let payload = norito::to_bytes(registry_value).map_err(|error| {
             MergeLedgerCommitError::ExecutionBatchInvalid(format!(
                 "queue-plan admission registry value cannot be encoded: {error}"
             ))
-        })
+        })?;
+        if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "queue-plan admission registry value is empty or oversized".to_owned(),
+            ));
+        }
+        Ok(payload)
     }
 
     fn decode_exact_queue_plan_admission_registry_marker(
         key: &StatePath,
         payload: &[u8],
     ) -> Result<crate::torii_proxy::QueuePlanAdmissionRegistryValueV2, MergeLedgerCommitError> {
+        if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "queue-plan admission registry marker `{key}` is empty or oversized"
+            )));
+        }
         let value = norito::decode_from_bytes::<
             crate::torii_proxy::QueuePlanAdmissionRegistryValueV2,
         >(payload)
@@ -39723,6 +39186,840 @@ impl State {
             )));
         }
         Ok(value)
+    }
+
+    fn queue_plan_pending_obligation_from_admission(
+        admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV2,
+    ) -> Result<QueuePlanPendingObligationV1, MergeLedgerCommitError> {
+        let binding = &admission.certificate.binding;
+        if admission.binding_hash != binding.canonical_hash()
+            || admission.registry_key != binding.registry_key()
+            || admission.registry_value != binding.registry_value()
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "validated QueuePlan admission projections disagree".to_owned(),
+            ));
+        }
+        Self::queue_plan_pending_obligation_from_binding(binding)
+    }
+
+    fn queue_plan_pending_obligation_from_binding(
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+    ) -> Result<QueuePlanPendingObligationV1, MergeLedgerCommitError> {
+        let routes = Self::queue_plan_pending_obligation_routes_from_binding(binding)?;
+        let obligation = QueuePlanPendingObligationV1 {
+            version: QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1,
+            chain_id_digest: binding.chain_id_digest,
+            entrypoint_hash: binding.entrypoint_hash.clone(),
+            signed_transaction_hash: binding.signed_transaction_hash,
+            binding_hash: binding.canonical_hash(),
+            binding: binding.clone(),
+            routes,
+        };
+        Self::validate_queue_plan_pending_obligation(&obligation)?;
+        Ok(obligation)
+    }
+
+    fn queue_plan_pending_obligation_routes_from_binding(
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+    ) -> Result<Vec<QueuePlanPendingObligationRouteV1>, MergeLedgerCommitError> {
+        binding.validate_structure().map_err(|reason| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending obligation contains a malformed admission binding: {reason}"
+            ))
+        })?;
+        let mut routes = binding
+            .admission_context
+            .route_incarnations
+            .iter()
+            .map(|bound| QueuePlanPendingObligationRouteV1 {
+                version: QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1,
+                lane_id: bound.leg.route.lane_id,
+                dataspace_id: bound.leg.route.dataspace_id,
+                lane_incarnation: bound.lane_incarnation,
+            })
+            .collect::<Vec<_>>();
+        routes.sort_unstable();
+        routes.dedup();
+        Ok(routes)
+    }
+
+    fn validate_queue_plan_pending_obligation_route(
+        route: &QueuePlanPendingObligationRouteV1,
+    ) -> Result<(), MergeLedgerCommitError> {
+        if route.version != QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1
+            || route
+                .lane_incarnation
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-obligation route is malformed".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_queue_plan_pending_obligation(
+        obligation: &QueuePlanPendingObligationV1,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let max_routes = crate::native_amx::MAX_NATIVE_AMX_PARTICIPANT_LEGS.saturating_add(1);
+        if obligation.version != QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1
+            || obligation
+                .chain_id_digest
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || obligation
+                .entrypoint_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || obligation
+                .binding_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || obligation
+                .signed_transaction_hash
+                .as_ref()
+                .is_some_and(|hash| hash.as_ref().iter().all(|byte| *byte == 0))
+            || obligation.routes.is_empty()
+            || obligation.routes.len() > max_routes
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-obligation marker is malformed".to_owned(),
+            ));
+        }
+        for route in &obligation.routes {
+            Self::validate_queue_plan_pending_obligation_route(route)?;
+        }
+        if obligation
+            .routes
+            .windows(2)
+            .any(|window| window[0] >= window[1])
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-obligation routes are duplicated or not canonical".to_owned(),
+            ));
+        }
+        let expected_routes =
+            Self::queue_plan_pending_obligation_routes_from_binding(&obligation.binding)?;
+        if obligation.chain_id_digest != obligation.binding.chain_id_digest
+            || obligation.entrypoint_hash != obligation.binding.entrypoint_hash
+            || obligation.signed_transaction_hash != obligation.binding.signed_transaction_hash
+            || obligation.binding_hash != obligation.binding.canonical_hash()
+            || obligation.routes != expected_routes
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-obligation copies do not match its authenticated admission binding"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn queue_plan_pending_obligation_marker_key(
+        chain_id_digest: Hash,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Result<StatePath, MergeLedgerCommitError> {
+        if chain_id_digest.as_ref().iter().all(|byte| *byte == 0)
+            || entrypoint_hash.as_ref().iter().all(|byte| *byte == 0)
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-obligation key contains a zero identity".to_owned(),
+            ));
+        }
+        format!(
+            "{QUEUE_PLAN_PENDING_OBLIGATION_MARKER_PREFIX}{}_{}",
+            hex::encode(chain_id_digest.as_ref()),
+            hex::encode(entrypoint_hash.as_ref()),
+        )
+        .parse()
+        .map_err(|_| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-obligation key cannot be represented in WSV".to_owned(),
+            )
+        })
+    }
+
+    fn queue_plan_pending_obligation_marker_payload(
+        obligation: &QueuePlanPendingObligationV1,
+    ) -> Result<Vec<u8>, MergeLedgerCommitError> {
+        Self::validate_queue_plan_pending_obligation(obligation)?;
+        let payload = norito::to_bytes(obligation).map_err(|error| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending-obligation marker cannot be encoded: {error}"
+            ))
+        })?;
+        if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_PENDING_OBLIGATION_BYTES {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-obligation marker is empty or oversized".to_owned(),
+            ));
+        }
+        Ok(payload)
+    }
+
+    fn decode_exact_queue_plan_pending_obligation_marker(
+        key: &StatePath,
+        payload: &[u8],
+    ) -> Result<QueuePlanPendingObligationV1, MergeLedgerCommitError> {
+        if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_PENDING_OBLIGATION_BYTES {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending-obligation marker `{key}` is empty or oversized"
+            )));
+        }
+        let decode_limits = norito::DecodeLimits::new(
+            iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES + 1,
+            MAX_QUEUE_PLAN_PENDING_OBLIGATION_BYTES,
+            MAX_QUEUE_PLAN_PENDING_OBLIGATION_BYTES,
+            MAX_QUEUE_PLAN_PENDING_OBLIGATION_BYTES.saturating_mul(4),
+            64,
+        );
+        let obligation = norito::decode_canonical_with_limits::<QueuePlanPendingObligationV1>(
+            payload,
+            decode_limits,
+        )
+        .map_err(|_| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending-obligation marker `{key}` is not exact canonical Norito"
+            ))
+        })?;
+        let canonical = Self::queue_plan_pending_obligation_marker_payload(&obligation)?;
+        let expected_key = Self::queue_plan_pending_obligation_marker_key(
+            obligation.chain_id_digest,
+            obligation.entrypoint_hash.clone(),
+        )?;
+        if canonical.as_slice() != payload || &expected_key != key {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending-obligation marker `{key}` is not canonical"
+            )));
+        }
+        Ok(obligation)
+    }
+
+    fn queue_plan_pending_route_member_identity(
+        obligation: &QueuePlanPendingObligationV1,
+        route: QueuePlanPendingObligationRouteV1,
+    ) -> Result<[u8; Hash::LENGTH], MergeLedgerCommitError> {
+        Self::validate_queue_plan_pending_obligation_route(&route)?;
+        if obligation.version != QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1
+            || obligation
+                .chain_id_digest
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || obligation
+                .entrypoint_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || obligation
+                .binding_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || obligation.routes.binary_search(&route).is_err()
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-route member has a malformed or absent obligation identity"
+                    .to_owned(),
+            ));
+        }
+        Self::queue_plan_pending_route_member_identity_from_claim(
+            obligation.chain_id_digest,
+            obligation.entrypoint_hash.clone(),
+            obligation.binding_hash,
+            route,
+        )
+    }
+
+    fn queue_plan_pending_route_member_identity_from_claim(
+        chain_id_digest: Hash,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        binding_hash: Hash,
+        route: QueuePlanPendingObligationRouteV1,
+    ) -> Result<[u8; Hash::LENGTH], MergeLedgerCommitError> {
+        Self::validate_queue_plan_pending_obligation_route(&route)?;
+        if chain_id_digest.as_ref().iter().all(|byte| *byte == 0)
+            || entrypoint_hash.as_ref().iter().all(|byte| *byte == 0)
+            || binding_hash.as_ref().iter().all(|byte| *byte == 0)
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-route member claim contains a zero identity".to_owned(),
+            ));
+        }
+        let encoded = norito::to_bytes(&(
+            QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1,
+            chain_id_digest,
+            entrypoint_hash,
+            binding_hash,
+            route,
+        ))
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending-route member identity cannot be encoded: {error}"
+            ))
+        })?;
+        let identity = Hash::new_from_chunks(&[
+            QUEUE_PLAN_PENDING_ROUTE_MEMBER_DOMAIN_V1,
+            encoded.as_slice(),
+        ]);
+        if identity.as_ref().iter().all(|byte| *byte == 0) {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-route member identity is zero".to_owned(),
+            ));
+        }
+        Ok(*identity.as_ref())
+    }
+
+    fn queue_plan_pending_route_member_from_obligation(
+        obligation: &QueuePlanPendingObligationV1,
+        route: QueuePlanPendingObligationRouteV1,
+    ) -> Result<QueuePlanPendingRouteMemberV1, MergeLedgerCommitError> {
+        Ok(QueuePlanPendingRouteMemberV1 {
+            version: QUEUE_PLAN_PENDING_ROUTE_MEMBER_VERSION_V1,
+            route,
+            chain_id_digest: obligation.chain_id_digest,
+            entrypoint_hash: obligation.entrypoint_hash.clone(),
+            binding_hash: obligation.binding_hash,
+            member_identity: Self::queue_plan_pending_route_member_identity(obligation, route)?,
+        })
+    }
+
+    fn queue_plan_pending_route_member_marker_prefix(
+        route: QueuePlanPendingObligationRouteV1,
+    ) -> Result<(String, StatePath), MergeLedgerCommitError> {
+        Self::validate_queue_plan_pending_obligation_route(&route)?;
+        let literal = format!(
+            "{QUEUE_PLAN_PENDING_ROUTE_MEMBER_MARKER_PREFIX}{}_{}_{}_",
+            route.lane_id.as_u32(),
+            route.dataspace_id.as_u64(),
+            hex::encode(route.lane_incarnation.as_ref()),
+        );
+        let start = literal.parse().map_err(|_| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-route member prefix cannot be represented in WSV".to_owned(),
+            )
+        })?;
+        Ok((literal, start))
+    }
+
+    fn queue_plan_pending_route_member_marker_key(
+        route: QueuePlanPendingObligationRouteV1,
+        member_identity: [u8; Hash::LENGTH],
+    ) -> Result<StatePath, MergeLedgerCommitError> {
+        Self::validate_queue_plan_pending_obligation_route(&route)?;
+        if member_identity.iter().all(|byte| *byte == 0) {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-route member key contains a zero identity".to_owned(),
+            ));
+        }
+        format!(
+            "{QUEUE_PLAN_PENDING_ROUTE_MEMBER_MARKER_PREFIX}{}_{}_{}_{}",
+            route.lane_id.as_u32(),
+            route.dataspace_id.as_u64(),
+            hex::encode(route.lane_incarnation.as_ref()),
+            hex::encode(member_identity),
+        )
+        .parse()
+        .map_err(|_| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-route member key cannot be represented in WSV".to_owned(),
+            )
+        })
+    }
+
+    fn queue_plan_pending_route_member_marker_payload(
+        marker: &QueuePlanPendingRouteMemberV1,
+    ) -> Result<Vec<u8>, MergeLedgerCommitError> {
+        Self::validate_queue_plan_pending_obligation_route(&marker.route)?;
+        if marker.version != QUEUE_PLAN_PENDING_ROUTE_MEMBER_VERSION_V1
+            || marker
+                .chain_id_digest
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || marker
+                .entrypoint_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || marker.binding_hash.as_ref().iter().all(|byte| *byte == 0)
+            || marker.member_identity.iter().all(|byte| *byte == 0)
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-route member marker is malformed".to_owned(),
+            ));
+        }
+        let expected_identity = Self::queue_plan_pending_route_member_identity_from_claim(
+            marker.chain_id_digest,
+            marker.entrypoint_hash.clone(),
+            marker.binding_hash,
+            marker.route,
+        )?;
+        if marker.member_identity != expected_identity {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-route member marker has a forged identity".to_owned(),
+            ));
+        }
+        let payload = norito::to_bytes(marker).map_err(|error| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending-route member marker cannot be encoded: {error}"
+            ))
+        })?;
+        if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-route member marker is empty or oversized".to_owned(),
+            ));
+        }
+        Ok(payload)
+    }
+
+    fn decode_exact_queue_plan_pending_route_member_marker(
+        key: &StatePath,
+        payload: &[u8],
+    ) -> Result<QueuePlanPendingRouteMemberV1, MergeLedgerCommitError> {
+        if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending-route member marker `{key}` is empty or oversized"
+            )));
+        }
+        let marker =
+            norito::decode_from_bytes::<QueuePlanPendingRouteMemberV1>(payload).map_err(|_| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending-route member marker `{key}` is not exact canonical Norito"
+                ))
+            })?;
+        let canonical = Self::queue_plan_pending_route_member_marker_payload(&marker)?;
+        let expected_key =
+            Self::queue_plan_pending_route_member_marker_key(marker.route, marker.member_identity)?;
+        if canonical.as_slice() != payload || &expected_key != key {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending-route member marker `{key}` is not canonical"
+            )));
+        }
+        Ok(marker)
+    }
+
+    fn require_queue_plan_pending_route_member_marker(
+        storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
+        obligation: &QueuePlanPendingObligationV1,
+        route: QueuePlanPendingObligationRouteV1,
+    ) -> Result<(StatePath, QueuePlanPendingRouteMemberV1), MergeLedgerCommitError> {
+        let expected = Self::queue_plan_pending_route_member_from_obligation(obligation, route)?;
+        let key =
+            Self::queue_plan_pending_route_member_marker_key(route, expected.member_identity)?;
+        let payload = storage.get(&key).ok_or_else(|| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending obligation lacks exact route-member marker `{key}`"
+            ))
+        })?;
+        let marker = Self::decode_exact_queue_plan_pending_route_member_marker(&key, payload)?;
+        if marker != expected {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending-route member marker `{key}` binds another obligation"
+            )));
+        }
+        Ok((key, marker))
+    }
+
+    fn queue_plan_pending_route_members_from_storage(
+        storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
+        route: QueuePlanPendingObligationRouteV1,
+    ) -> Result<Vec<(StatePath, QueuePlanPendingRouteMemberV1)>, MergeLedgerCommitError> {
+        Self::queue_plan_pending_route_members_from_storage_with_limit(
+            storage,
+            route,
+            MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS,
+        )
+    }
+
+    fn queue_plan_pending_route_members_from_storage_with_limit(
+        storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
+        route: QueuePlanPendingObligationRouteV1,
+        max_members: usize,
+    ) -> Result<Vec<(StatePath, QueuePlanPendingRouteMemberV1)>, MergeLedgerCommitError> {
+        let (prefix, start) = Self::queue_plan_pending_route_member_marker_prefix(route)?;
+        let mut members = Vec::new();
+        for (key, payload) in storage.range(start..) {
+            if !key.as_ref().starts_with(&prefix) {
+                break;
+            }
+            if members.len() == max_members {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending-route member roster `{prefix}` exceeds its consensus bound"
+                )));
+            }
+            let marker = Self::decode_exact_queue_plan_pending_route_member_marker(key, payload)?;
+            if marker.route != route {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending-route member marker `{key}` binds another route"
+                )));
+            }
+            let obligation_key = Self::queue_plan_pending_obligation_marker_key(
+                marker.chain_id_digest,
+                marker.entrypoint_hash.clone(),
+            )?;
+            if storage.get(&obligation_key).is_none() {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending-route member marker `{key}` has no exact obligation `{obligation_key}`"
+                )));
+            }
+            members.push((key.clone(), marker));
+        }
+        Ok(members)
+    }
+
+    fn queue_plan_pending_route_obligation_count_from_world(
+        world: &impl WorldReadOnly,
+        route: QueuePlanPendingObligationRouteV1,
+    ) -> Result<u64, MergeLedgerCommitError> {
+        let count = Self::queue_plan_pending_route_members_from_storage(
+            world.smart_contract_state(),
+            route,
+        )?
+        .len();
+        u64::try_from(count).map_err(|_| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-route roster count exceeds u64".to_owned(),
+            )
+        })
+    }
+
+    fn queue_plan_entrypoint_membership_hash(
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> HashOf<SignedTransaction> {
+        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint_hash))
+    }
+
+    fn validate_queue_plan_pending_obligation_route_member(
+        world: &impl WorldReadOnly,
+        obligation: &QueuePlanPendingObligationV1,
+        route: QueuePlanPendingObligationRouteV1,
+    ) -> Result<(), MergeLedgerCommitError> {
+        Self::validate_queue_plan_pending_obligation_route_member_in_storage(
+            world.smart_contract_state(),
+            obligation,
+            route,
+        )
+    }
+
+    fn validate_queue_plan_pending_obligation_route_member_in_storage(
+        storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
+        obligation: &QueuePlanPendingObligationV1,
+        route: QueuePlanPendingObligationRouteV1,
+    ) -> Result<(), MergeLedgerCommitError> {
+        Self::queue_plan_pending_route_members_from_storage(storage, route)?;
+        Self::require_queue_plan_pending_route_member_marker(storage, obligation, route)?;
+        Ok(())
+    }
+
+    fn queue_plan_pending_obligation_matches_active_lifecycle(
+        state: &impl StateReadOnly,
+        obligation: &QueuePlanPendingObligationV1,
+    ) -> bool {
+        let proposal_height = obligation.binding.admission_context.proposal_height;
+        obligation.routes.iter().all(|route| {
+            state
+                .nexus()
+                .lane_catalog
+                .lanes()
+                .iter()
+                .any(|lane| lane.id == route.lane_id && lane.dataspace_id == route.dataspace_id)
+                && state.lane_incarnation_at_height(route.lane_id, proposal_height)
+                    == Some(route.lane_incarnation)
+        })
+    }
+
+    fn queue_plan_registry_owner_application_state_in_view(
+        state: &impl StateReadOnlyWithTransactions,
+        chain_id_digest: Hash,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        registry_binding_hash: Hash,
+    ) -> Result<QueuePlanAdmissionApplicationState, MergeLedgerCommitError> {
+        let key = Self::queue_plan_pending_obligation_marker_key(
+            chain_id_digest,
+            entrypoint_hash.clone(),
+        )?;
+        let membership_hash = Self::queue_plan_entrypoint_membership_hash(entrypoint_hash.clone());
+        let committed = state.has_transaction(membership_hash);
+        match state.world().smart_contract_state().get(&key) {
+            Some(payload) => {
+                let obligation =
+                    Self::decode_exact_queue_plan_pending_obligation_marker(&key, payload)?;
+                if obligation.chain_id_digest != chain_id_digest
+                    || obligation.entrypoint_hash != entrypoint_hash
+                    || obligation.binding_hash != registry_binding_hash
+                {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "QueuePlan registry owner conflicts with pending obligation `{key}`"
+                    )));
+                }
+                for route in &obligation.routes {
+                    Self::validate_queue_plan_pending_obligation_route_member(
+                        state.world(),
+                        &obligation,
+                        *route,
+                    )?;
+                }
+                if committed {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "QueuePlan pending obligation `{key}` survived canonical transaction membership"
+                    )));
+                }
+                if Self::queue_plan_pending_obligation_matches_active_lifecycle(state, &obligation)
+                {
+                    Ok(QueuePlanAdmissionApplicationState::Pending)
+                } else {
+                    Ok(QueuePlanAdmissionApplicationState::PendingStale)
+                }
+            }
+            None if committed => Ok(QueuePlanAdmissionApplicationState::Applied),
+            None => Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan registry owner `{key}` has neither a pending obligation nor canonical transaction membership"
+            ))),
+        }
+    }
+
+    fn queue_plan_admission_application_state(
+        state: &impl StateReadOnlyWithTransactions,
+        admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV2,
+    ) -> Result<QueuePlanAdmissionApplicationState, MergeLedgerCommitError> {
+        let expected = Self::queue_plan_pending_obligation_from_admission(admission)?;
+        Self::queue_plan_binding_application_state(state, &admission.certificate.binding, expected)
+    }
+
+    fn queue_plan_binding_application_state(
+        state: &impl StateReadOnlyWithTransactions,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+        expected: QueuePlanPendingObligationV1,
+    ) -> Result<QueuePlanAdmissionApplicationState, MergeLedgerCommitError> {
+        let committed = state.has_transaction(Self::queue_plan_entrypoint_membership_hash(
+            binding.entrypoint_hash.clone(),
+        ));
+        let active = Self::queue_plan_pending_obligation_matches_active_lifecycle(state, &expected);
+        Self::queue_plan_binding_application_state_in_storage(
+            state.world().smart_contract_state(),
+            expected,
+            committed,
+            active,
+        )
+    }
+
+    fn queue_plan_binding_application_state_in_storage(
+        storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
+        expected: QueuePlanPendingObligationV1,
+        committed: bool,
+        active: bool,
+    ) -> Result<QueuePlanAdmissionApplicationState, MergeLedgerCommitError> {
+        let key = Self::queue_plan_pending_obligation_marker_key(
+            expected.chain_id_digest,
+            expected.entrypoint_hash.clone(),
+        )?;
+        match storage.get(&key) {
+            Some(payload) => {
+                let current =
+                    Self::decode_exact_queue_plan_pending_obligation_marker(&key, payload)?;
+                if current != expected {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "QueuePlan pending-obligation marker `{key}` conflicts with its immutable admission"
+                    )));
+                }
+                for route in &current.routes {
+                    Self::validate_queue_plan_pending_obligation_route_member_in_storage(
+                        storage, &current, *route,
+                    )?;
+                }
+                if committed {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "QueuePlan pending-obligation marker `{key}` survived canonical transaction membership"
+                    )));
+                }
+                if active {
+                    Ok(QueuePlanAdmissionApplicationState::Pending)
+                } else {
+                    Ok(QueuePlanAdmissionApplicationState::PendingStale)
+                }
+            }
+            None if committed => Ok(QueuePlanAdmissionApplicationState::Applied),
+            None => Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan admission `{key}` has neither a pending obligation nor canonical transaction membership"
+            ))),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_queue_plan_pending_binding_for_test(
+        &self,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let obligation = Self::queue_plan_pending_obligation_from_binding(binding)?;
+        let registry_key = Self::queue_plan_admission_registry_marker_key(&binding.registry_key())?;
+        let mut world = self.world.block();
+        world.smart_contract_state.insert(
+            registry_key,
+            Self::queue_plan_admission_registry_marker_payload(&binding.registry_value())?,
+        );
+        Self::stage_queue_plan_pending_obligation_marker_in_storage(
+            &mut world.smart_contract_state,
+            obligation,
+        )?;
+        world.commit();
+        Ok(())
+    }
+
+    fn stage_queue_plan_pending_obligation_in_storage(
+        storage: &mut impl QueuePlanMarkerStorage,
+        admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV2,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let obligation = Self::queue_plan_pending_obligation_from_admission(admission)?;
+        let registry_key = Self::queue_plan_admission_registry_marker_key(&admission.registry_key)?;
+        let registry_payload = storage.get(&registry_key).ok_or_else(|| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending obligation has no immutable registry owner: `{registry_key}`"
+            ))
+        })?;
+        let registry_value = Self::decode_exact_queue_plan_admission_registry_marker(
+            &registry_key,
+            registry_payload,
+        )?;
+        if registry_value != admission.registry_value {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending obligation conflicts with registry owner `{registry_key}`"
+            )));
+        }
+
+        Self::stage_queue_plan_pending_obligation_marker_in_storage(storage, obligation)
+    }
+
+    fn stage_queue_plan_pending_obligation_marker_in_storage(
+        storage: &mut impl QueuePlanMarkerStorage,
+        obligation: QueuePlanPendingObligationV1,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let obligation_key = Self::queue_plan_pending_obligation_marker_key(
+            obligation.chain_id_digest,
+            obligation.entrypoint_hash.clone(),
+        )?;
+        if let Some(payload) = storage.get(&obligation_key) {
+            let current =
+                Self::decode_exact_queue_plan_pending_obligation_marker(&obligation_key, payload)?;
+            if current != obligation {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending-obligation key has a conflicting owner: `{obligation_key}`"
+                )));
+            }
+            for route in &current.routes {
+                Self::validate_queue_plan_pending_obligation_route_member_in_storage(
+                    storage, &current, *route,
+                )?;
+            }
+            return Ok(());
+        }
+
+        let obligation_payload = Self::queue_plan_pending_obligation_marker_payload(&obligation)?;
+        let mut route_updates = Vec::with_capacity(obligation.routes.len());
+        for route in &obligation.routes {
+            let members = Self::queue_plan_pending_route_members_from_storage(storage, *route)?;
+            if members.len() == MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending-route member roster for lane `{}` dataspace `{}` is full",
+                    route.lane_id.as_u32(),
+                    route.dataspace_id.as_u64(),
+                )));
+            }
+            let member =
+                Self::queue_plan_pending_route_member_from_obligation(&obligation, *route)?;
+            let member_key =
+                Self::queue_plan_pending_route_member_marker_key(*route, member.member_identity)?;
+            if let Some(payload) = storage.get(&member_key) {
+                Self::decode_exact_queue_plan_pending_route_member_marker(&member_key, payload)?;
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending-route member marker `{member_key}` exists without its obligation"
+                )));
+            }
+            let member_payload = Self::queue_plan_pending_route_member_marker_payload(&member)?;
+            route_updates.push((member_key, member_payload));
+        }
+        storage.insert_queue_plan_marker(obligation_key, obligation_payload);
+        for (member_key, member_payload) in route_updates {
+            storage.insert_queue_plan_marker(member_key, member_payload);
+        }
+        Ok(())
+    }
+
+    fn resolve_queue_plan_pending_obligation_in_storage(
+        storage: &mut impl QueuePlanMarkerStorage,
+        chain_id_digest: Hash,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Result<bool, MergeLedgerCommitError> {
+        let obligation_key = Self::queue_plan_pending_obligation_marker_key(
+            chain_id_digest,
+            entrypoint_hash.clone(),
+        )?;
+        let obligation = if let Some(obligation_payload) = storage.get(&obligation_key) {
+            Self::decode_exact_queue_plan_pending_obligation_marker(
+                &obligation_key,
+                obligation_payload,
+            )?
+        } else {
+            let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV2 {
+                version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+                chain_id_digest,
+                entrypoint_hash,
+            };
+            let registry_marker_key =
+                Self::queue_plan_admission_registry_marker_key(&registry_key)?;
+            if storage.get(&registry_marker_key).is_some() {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan registry owner `{registry_marker_key}` lacks its pending obligation"
+                )));
+            }
+            return Ok(false);
+        };
+        if obligation.chain_id_digest != chain_id_digest
+            || obligation.entrypoint_hash != entrypoint_hash
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending-obligation marker `{obligation_key}` binds another entrypoint"
+            )));
+        }
+
+        let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV2 {
+            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+            chain_id_digest,
+            entrypoint_hash: obligation.entrypoint_hash.clone(),
+        };
+        let registry_marker_key = Self::queue_plan_admission_registry_marker_key(&registry_key)?;
+        let registry_payload = storage.get(&registry_marker_key).ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending obligation has no immutable registry owner: `{registry_marker_key}`"
+                ))
+            })?;
+        let registry_value = Self::decode_exact_queue_plan_admission_registry_marker(
+            &registry_marker_key,
+            registry_payload,
+        )?;
+        if registry_value.binding_hash != obligation.binding_hash {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending obligation conflicts with registry owner `{registry_marker_key}`"
+            )));
+        }
+
+        let mut member_keys = Vec::with_capacity(obligation.routes.len());
+        for route in &obligation.routes {
+            Self::queue_plan_pending_route_members_from_storage(storage, *route)?;
+            let (member_key, _) =
+                Self::require_queue_plan_pending_route_member_marker(storage, &obligation, *route)?;
+            member_keys.push(member_key);
+        }
+
+        storage.remove_queue_plan_marker(obligation_key);
+        for member_key in member_keys {
+            storage.remove_queue_plan_marker(member_key);
+        }
+        Ok(true)
     }
 
     fn nexus_fee_receipt_marker_key(
@@ -40373,11 +40670,11 @@ impl State {
             entry.merge_qc.carrier_height,
             false,
         )?;
-        let world = self.world.view();
+        let state_view = self.view();
         let mut present = 0_usize;
         for admission in &admissions {
             let key = Self::queue_plan_admission_registry_marker_key(&admission.registry_key)?;
-            let Some(payload) = world.smart_contract_state().get(&key) else {
+            let Some(payload) = state_view.world().smart_contract_state().get(&key) else {
                 continue;
             };
             present = present.saturating_add(1);
@@ -40387,6 +40684,7 @@ impl State {
                     "queue-plan admission registry marker `{key}` has a conflicting binding"
                 )));
             }
+            Self::queue_plan_admission_application_state(&state_view, admission)?;
         }
         if present == 0 {
             return Ok(admissions.is_empty());
@@ -41528,16 +41826,22 @@ impl State {
                 .into_iter()
                 .next()
                 .expect("one entrypoint produces one membership hash");
+                let registry_match = if validate_live_authority {
+                    queue_plan_admission_registry_match(
+                        &authority,
+                        reservation.entrypoint_hash.clone(),
+                        reservation.queue_plan_admission_binding_hash,
+                    )
+                } else {
+                    Self::queue_plan_admission_registry_match_in_view(
+                        &authority,
+                        reservation.entrypoint_hash.clone(),
+                        reservation.queue_plan_admission_binding_hash,
+                    )
+                };
                 if reservation.signed_transaction_hash != transaction_hash
                     || Hash::from(reservation.entrypoint_hash) != *expected_hash
-                    || !matches!(
-                        queue_plan_admission_registry_match(
-                            &authority,
-                            reservation.entrypoint_hash.clone(),
-                            reservation.queue_plan_admission_binding_hash,
-                        ),
-                        Ok(QueuePlanAdmissionRegistryMatch::Exact)
-                    )
+                    || !matches!(registry_match, Ok(QueuePlanAdmissionRegistryMatch::Exact))
                     || reservation.routing_plan_digest != routing_plan.digest()
                     || reservation.coordinator_leg != routing_plan.coordinator_leg()
                     || reservation.lane_id != descriptor.lane_id
@@ -41644,6 +41948,22 @@ impl State {
             crate::kura::Kura::validate_certified_lane_block_artifact(&source.certified).map_err(
                 |message| MergeLedgerCommitError::ExecutionBatchInvalid(message.to_owned()),
             )?;
+            if !validate_live_authority {
+                crate::block::validate_historical_native_amx_source_bundle(
+                    &execution.source_bundle,
+                    execution.autonomous_chain_id_hash,
+                    execution.autonomous_epoch,
+                    crate::block::HistoricalNativeAmxSourceAuthority::MergeQcActiveLanes(
+                        active_lanes,
+                    ),
+                )
+                .map_err(|message| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                        "invalid historical availability-certified native-AMX source: {message}"
+                    ))
+                })?;
+                continue;
+            }
             for ((entrypoint, reservation), (routing_plan, native_amx_receipt)) in source
                 .input
                 .entrypoints
@@ -41714,10 +42034,13 @@ impl State {
             ));
         }
         if !entry.lane_drain_certificates.is_empty()
-            && (entry.execution_batch.is_some() || !entry.lane_snapshots.is_empty())
+            && (entry.execution_batch.is_some()
+                || !entry.lane_snapshots.is_empty()
+                || !entry.queue_plan_admissions.is_empty())
         {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "lane drain certificate entries must not mix snapshots or execution".to_owned(),
+                "lane drain certificate entries must not mix snapshots, execution, or QueuePlan admission controls"
+                    .to_owned(),
             ));
         }
         if entry.execution_batch.is_none()
@@ -41793,6 +42116,7 @@ impl State {
         &self,
         round_header: &BlockHeader,
         expected_next_epoch: u64,
+        selection: PendingCertifiedMergeSelection,
     ) -> Result<
         Option<(HashOf<MergeLedgerEntry>, MergeLedgerEntry, BlockHeader)>,
         MergeLedgerCommitError,
@@ -41808,6 +42132,7 @@ impl State {
                         .execution_batch
                         .as_ref()
                         .is_some_and(|batch| batch.application_block_header.ne(round_header))
+                    || (!selection.allows_execution() && entry.execution_batch.is_some())
                 {
                     return false;
                 }
@@ -42001,6 +42326,32 @@ impl State {
         Ok(())
     }
 
+    /// Verify the exact durable WSV marker set for one historical autonomous
+    /// execution entry.
+    ///
+    /// The caller separately binds the entry to canonical State block history
+    /// and authenticated Kura finality. Unlike the live-publication check
+    /// above, this predicate intentionally does not require the entry to remain
+    /// the latest merge admission, so bounded startup repair can authenticate
+    /// an older missing reverse carrier without rebinding it to current state.
+    pub(crate) fn ensure_committed_merge_execution_applied(
+        &self,
+        entry: &MergeLedgerEntry,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let batch = entry.execution_batch.as_ref().ok_or_else(|| {
+            MergeLedgerCommitError::ExecutionStatePublication(
+                "historical post-carrier repair entry has no autonomous execution batch".to_owned(),
+            )
+        })?;
+        if !self.merge_execution_already_applied(entry, batch)? {
+            return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "historical merge execution {} is durable but its exact WSV marker set is absent",
+                entry.canonical_hash()
+            )));
+        }
+        Ok(())
+    }
+
     /// Seed the exact post-commit merge state used by V2 auxiliary-settlement
     /// crash-boundary tests.
     #[cfg(test)]
@@ -42049,6 +42400,10 @@ impl State {
             let payload =
                 Self::queue_plan_admission_registry_marker_payload(&admission.registry_value)?;
             world.smart_contract_state.insert(key, payload);
+            Self::stage_queue_plan_pending_obligation_in_storage(
+                &mut world.smart_contract_state,
+                &admission,
+            )?;
         }
         world.commit();
         self.update_merge_metadata(entry);
@@ -45974,6 +46329,37 @@ struct PendingAutoscaleLaneLifecycle {
     transition: PendingAutoscaleTransition,
     transition_height: u64,
     expected_incarnation_root: Hash,
+}
+
+impl PendingAutoscaleLaneLifecycle {
+    fn exact_scale_in_binding(
+        &self,
+    ) -> Result<Option<(LaneId, DataSpaceId, Hash)>, LaneLifecycleError> {
+        let PendingAutoscaleTransition::ScaleIn { lane, .. } = &self.transition else {
+            return Ok(None);
+        };
+        ensure_autoscale_transition_matches_plan(&self.plan, &self.transition)?;
+        let previous_lane = self
+            .catalog_update
+            .previous_catalog
+            .lanes()
+            .iter()
+            .find(|candidate| candidate.id == *lane)
+            .ok_or(LaneLifecycleError::InvalidAutoscaleManagedLane {
+                lane: *lane,
+                reason: "final Queue veto cannot resolve the retiring lane in the previous catalog",
+            })?;
+        let incarnation = self
+            .catalog_update
+            .previous_lane_incarnations
+            .get(lane)
+            .copied()
+            .ok_or(LaneLifecycleError::InvalidAutoscaleManagedLane {
+                lane: *lane,
+                reason: "final Queue veto cannot resolve the retiring lane incarnation",
+            })?;
+        Ok(Some((*lane, previous_lane.dataspace_id, incarnation)))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -50170,6 +50556,9 @@ fn compute_execution_policy_digest_v1(
     )
 }
 
+include!("state/diagnostic_state_generation.rs");
+include!("state/autonomous_predecessor_application.rs");
+
 impl State {
     /// Compute the canonical V1 identity of all process-local policy that can affect execution.
     ///
@@ -51243,13 +51632,39 @@ impl<'state> StateBlock<'state> {
 
     /// Hash the exact semantic WSV write set currently staged by lane execution.
     fn merge_execution_write_set_root(&self) -> Hash {
-        let mut encoded = self.world.merge_execution_write_set_bytes();
-        if !self.world.external_event_buf.is_empty() {
+        Self::merge_execution_write_set_root_from_overlay(
+            &self.world,
+            &self.direct_committed_transactions,
+        )
+    }
+
+    fn merge_execution_write_set_root_from_overlay(
+        world: &WorldBlock<'_>,
+        direct_committed_transactions: &HashSet<HashOf<SignedTransaction>>,
+    ) -> Hash {
+        let external_event_bytes = Self::merge_execution_external_event_bytes(world);
+        Self::merge_execution_write_set_root_from_overlay_with_external_events(
+            world,
+            direct_committed_transactions,
+            external_event_bytes.as_deref(),
+        )
+    }
+
+    fn merge_execution_external_event_bytes(world: &WorldBlock<'_>) -> Option<Vec<u8>> {
+        (!world.external_event_buf.is_empty()).then(|| world.external_event_buf.encode())
+    }
+
+    fn merge_execution_write_set_root_from_overlay_with_external_events(
+        world: &WorldBlock<'_>,
+        direct_committed_transactions: &HashSet<HashOf<SignedTransaction>>,
+        external_event_bytes: Option<&[u8]>,
+    ) -> Hash {
+        let mut encoded = world.merge_execution_write_set_bytes();
+        if let Some(external_event_bytes) = external_event_bytes {
             append_merge_write_set_component(&mut encoded, b"external_events");
-            append_merge_write_set_component(&mut encoded, &self.world.external_event_buf.encode());
+            append_merge_write_set_component(&mut encoded, external_event_bytes);
         }
-        let mut transaction_membership = self
-            .direct_committed_transactions
+        let mut transaction_membership = direct_committed_transactions
             .iter()
             .copied()
             .collect::<Vec<_>>();
@@ -51262,6 +51677,11 @@ impl<'state> StateBlock<'state> {
     fn ensure_pristine_certified_merge_stage(&self) -> Result<(), MergeLedgerCommitError> {
         if self.start_of_block_effects_applied
             || self.staged_merge_entry.is_some()
+            || self.canonical_wsv_merge_commit_authorization.is_some()
+            || self
+                .canonical_carrier_commit_metadata_authorization
+                .is_some()
+            || self.world.axt_replay_ledger.is_dirty()
             || !self.world.merge_execution_write_set_bytes().is_empty()
             || !self.world.external_event_buf.is_empty()
             || !self.direct_committed_transactions.is_empty()
@@ -51395,7 +51815,7 @@ impl<'state> StateBlock<'state> {
             ));
         }
         self.update_merge_metadata(entry);
-        self.validate_merge_execution_commit_surface()?;
+        self.validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)?;
         if self.merge_execution_write_set_root() != batch.application_write_set_root {
             return Err(MergeLedgerCommitError::ExecutionDivergence(
                 "canonical application write set differs".to_owned(),
@@ -51416,6 +51836,28 @@ impl<'state> StateBlock<'state> {
                 "canonical WSV write set or expected post-state hash differs".to_owned(),
             ));
         }
+        let actual_batch_hash = crate::merge::merge_execution_batch_hash(batch);
+        if actual_batch_hash != batch.batch_hash {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "canonical execution batch hash differs".to_owned(),
+            ));
+        }
+        let external_event_count = self.world.external_event_buf.len();
+        let external_event_bytes = Self::merge_execution_external_event_bytes(&self.world);
+        self.canonical_wsv_merge_commit_authorization =
+            Some(CanonicalWsvMergeCommitAuthorization {
+                entry_hash: entry.canonical_hash(),
+                carrier_height: self._curr_block.height().get(),
+                carrier_hash: self._curr_block.hash(),
+                base_state_height: batch.base_state_height,
+                base_state_hash: batch.base_state_hash,
+                batch_hash: actual_batch_hash,
+                write_set_root: actual_write_set_root,
+                expected_post_state_hash: actual_post_state_hash,
+                external_event_bytes,
+                external_event_count,
+                validated_publication_event_bytes: None,
+            });
         self.staged_merge_entry = Some(entry.clone());
         Ok(())
     }
@@ -51425,20 +51867,253 @@ impl<'state> StateBlock<'state> {
         self.staged_merge_entry.as_ref()
     }
 
-    fn validate_merge_execution_commit_surface(&self) -> Result<(), MergeLedgerCommitError> {
+    fn canonical_wsv_merge_commit_authorization_matches(
+        authorization: &CanonicalWsvMergeCommitAuthorization,
+        entry: &MergeLedgerEntry,
+        batch: &MergeExecutionBatch,
+        carrier_height: u64,
+        carrier_hash: HashOf<BlockHeader>,
+        current_base_height: u64,
+        current_base_hash: HashOf<BlockHeader>,
+        current_write_set_root: Hash,
+    ) -> bool {
+        let current_post_state_hash = crate::merge::merge_expected_post_state_hash(
+            current_base_height,
+            current_base_hash,
+            current_write_set_root,
+        );
+        authorization.entry_hash == entry.canonical_hash()
+            && authorization.carrier_height == carrier_height
+            && authorization.carrier_hash == carrier_hash
+            && authorization.base_state_height == current_base_height
+            && authorization.base_state_hash == current_base_hash
+            && authorization.base_state_height == batch.base_state_height
+            && authorization.base_state_hash == batch.base_state_hash
+            && authorization.batch_hash == batch.batch_hash
+            && crate::merge::merge_execution_batch_hash(batch) == batch.batch_hash
+            && authorization.write_set_root == current_write_set_root
+            && authorization.write_set_root == batch.write_set_root
+            && authorization.expected_post_state_hash == current_post_state_hash
+            && authorization.expected_post_state_hash == batch.expected_post_state_hash
+    }
+
+    /// Revalidate the exact autonomous data-event surface before block
+    /// application appends its ordinary `BlockEvent` and drains all events for
+    /// publication.
+    ///
+    /// The certified write-set commits these bytes while they are still part
+    /// of the block overlay. After this check, `take_external_events` may move
+    /// them into the caller-owned publication vector; the move-only WSV
+    /// authorization retains the same bytes for the final State commit check.
+    fn validate_merge_execution_external_event_publication_surface(
+        &self,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let authorization = self
+            .canonical_wsv_merge_commit_authorization
+            .as_ref()
+            .ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "autonomous merge execution lacks canonical WSV commit authorization"
+                        .to_owned(),
+                )
+            })?;
+        let expected = authorization
+            .validated_publication_event_bytes
+            .as_deref()
+            .ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "autonomous merge execution lacks a validated carrier event surface".to_owned(),
+                )
+            })?;
+        let actual = self.world.external_event_buf.encode();
+        if actual.as_slice() != expected {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "autonomous merge execution event surface drifted before publication".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Revalidate the staged autonomous execution after deterministic block
+    /// effects and ordinary transaction processing, before consensus may vote.
+    pub(crate) fn validate_staged_merge_execution_authorization(
+        &mut self,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let Some(entry) = self.staged_merge_entry.as_ref() else {
+            return if self.canonical_wsv_merge_commit_authorization.is_none()
+                && self
+                    .canonical_carrier_commit_metadata_authorization
+                    .is_none()
+            {
+                Ok(())
+            } else {
+                Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "an absent merge entry carried canonical WSV commit authorization".to_owned(),
+                ))
+            };
+        };
+        let Some(batch) = entry.execution_batch.as_ref() else {
+            return if self.canonical_wsv_merge_commit_authorization.is_none()
+                && self
+                    .canonical_carrier_commit_metadata_authorization
+                    .is_none()
+            {
+                Ok(())
+            } else {
+                Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "a control-only merge entry carried canonical WSV commit authorization"
+                        .to_owned(),
+                ))
+            };
+        };
+        if self
+            .canonical_carrier_commit_metadata_authorization
+            .is_some()
+        {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "autonomous merge carrier metadata was authorized before finality".to_owned(),
+            ));
+        }
+        self.validate_merge_execution_commit_surface(
+            MergeExecutionCommitSurface::PostBlockPreVote {
+                carrier_height: self._curr_block.height().get(),
+            },
+        )?;
+        let authorization = self
+            .canonical_wsv_merge_commit_authorization
+            .as_ref()
+            .ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "autonomous merge execution lacks canonical WSV commit authorization"
+                        .to_owned(),
+                )
+            })?;
+        let current_base_height =
+            u64::try_from(self.state_ref.committed_height()).unwrap_or(u64::MAX);
+        let current_base_hash = self.state_ref.lane_execution_state_hash();
+        let autonomous_event_prefix = self
+            .world
+            .external_event_buf
+            .get(..authorization.external_event_count)
+            .ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionDivergence(
+                    "autonomous merge execution events were removed before block admission"
+                        .to_owned(),
+                )
+            })?;
+        let autonomous_event_prefix_bytes = (!autonomous_event_prefix.is_empty())
+            .then(|| autonomous_event_prefix.to_vec().encode());
+        if autonomous_event_prefix_bytes.as_deref() != authorization.external_event_bytes.as_deref()
+        {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "autonomous merge execution event prefix drifted before block admission".to_owned(),
+            ));
+        }
+        let current_write_set_root =
+            Self::merge_execution_write_set_root_from_overlay_with_external_events(
+                &self.world,
+                &self.direct_committed_transactions,
+                authorization.external_event_bytes.as_deref(),
+            );
+        if !Self::canonical_wsv_merge_commit_authorization_matches(
+            authorization,
+            entry,
+            batch,
+            self._curr_block.height().get(),
+            self._curr_block.hash(),
+            current_base_height,
+            current_base_hash,
+            current_write_set_root,
+        ) {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "canonical WSV merge commit authorization drifted before block admission"
+                    .to_owned(),
+            ));
+        }
+        let publication_event_bytes = self.world.external_event_buf.encode();
+        let authorization = self
+            .canonical_wsv_merge_commit_authorization
+            .as_mut()
+            .expect("authorization was validated above");
+        if let Some(expected) = authorization.validated_publication_event_bytes.as_ref() {
+            if expected != &publication_event_bytes {
+                return Err(MergeLedgerCommitError::ExecutionDivergence(
+                    "validated autonomous carrier event surface changed before block admission"
+                        .to_owned(),
+                ));
+            }
+        } else {
+            authorization.validated_publication_event_bytes = Some(publication_event_bytes);
+        }
+        Ok(())
+    }
+
+    fn validate_merge_execution_commit_surface(
+        &self,
+        surface: MergeExecutionCommitSurface<'_>,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let topology_metadata_invalid = !matches!(
+            surface,
+            MergeExecutionCommitSurface::FinalizedCarrier { .. }
+        ) && (self.commit_topology.is_dirty()
+            || self.prev_commit_topology.is_dirty());
+        let finalized_event_surface_invalid = matches!(
+            surface,
+            MergeExecutionCommitSurface::FinalizedCarrier { .. }
+        ) && !self.world.external_event_buf.is_empty();
+        let carrier_storage_height = |carrier_height| {
+            let Ok(height) = usize::try_from(carrier_height) else {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "autonomous merge carrier height exceeds local storage bounds".to_owned(),
+                ));
+            };
+            NonZeroUsize::new(height).ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "autonomous merge carrier height is zero".to_owned(),
+                )
+            })
+        };
+        let carrier_metadata_invalid = match surface {
+            MergeExecutionCommitSurface::Pristine => {
+                self.block_hashes.has_pending() || self.transactions.has_staged_block()
+            }
+            MergeExecutionCommitSurface::PostBlockPreVote { carrier_height } => {
+                let height = carrier_storage_height(carrier_height)?;
+                self.block_hashes.has_pending()
+                    || !self.transactions.has_exact_empty_staged_block(height)
+            }
+            MergeExecutionCommitSurface::FinalizedCarrier {
+                carrier_height,
+                carrier_hash,
+            } => {
+                let height = carrier_storage_height(carrier_height)?;
+                self.block_hashes.pending.as_slice() != core::slice::from_ref(carrier_hash)
+                    || !self.transactions.has_exact_empty_staged_block(height)
+            }
+        };
+        if carrier_metadata_invalid {
+            let required_surface = match surface {
+                MergeExecutionCommitSurface::Pristine => "pristine pre-execution",
+                MergeExecutionCommitSurface::PostBlockPreVote { .. } => {
+                    "exact-empty post-block/pre-vote"
+                }
+                MergeExecutionCommitSurface::FinalizedCarrier { .. } => "exact finalized-carrier",
+            };
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                "autonomous merge carrier metadata differs from the required {required_surface} surface"
+            )));
+        }
         if self.pending_autoscale_lifecycle.is_some()
             || self.pending_da_commitments.is_some()
             || self.pending_da_pin_intents.is_some()
             || !self.verified_lane_relay_records.is_empty()
-            || self.block_hashes.has_pending()
-            || self.transactions.has_staged_block()
-            || self.commit_topology.is_dirty()
-            || self.prev_commit_topology.is_dirty()
+            || topology_metadata_invalid
             || self.world.parameters.is_dirty()
             || !self.axt_envelopes.is_empty()
             || !self.fastpq_transcripts.is_empty()
             || !self.settlement_accumulator.is_empty()
             || self.exec_witness.is_some()
+            || finalized_event_surface_invalid
         {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "autonomous merge execution staged an effect outside the bound WSV overlay"
@@ -51489,11 +52164,27 @@ impl<'state> StateBlock<'state> {
             carrier_height,
             true,
         )?;
-        for admission in admissions {
+        let admissions = admissions
+            .into_iter()
+            .map(|admission| {
+                let obligation = State::queue_plan_pending_obligation_from_admission(&admission)?;
+                let committed = self.has_transaction(State::queue_plan_entrypoint_membership_hash(
+                    admission.certificate.binding.entrypoint_hash.clone(),
+                ));
+                let active = State::queue_plan_pending_obligation_matches_active_lifecycle(
+                    self,
+                    &obligation,
+                );
+                Ok((admission, obligation, committed, active))
+            })
+            .collect::<Result<Vec<_>, MergeLedgerCommitError>>()?;
+
+        let mut markers = self.world.smart_contract_state.transaction();
+        for (admission, obligation, committed, active) in admissions {
             let key = State::queue_plan_admission_registry_marker_key(&admission.registry_key)?;
             let payload =
                 State::queue_plan_admission_registry_marker_payload(&admission.registry_value)?;
-            if let Some(current_payload) = self.world.smart_contract_state.get(&key) {
+            if let Some(current_payload) = markers.get(&key) {
                 let current = State::decode_exact_queue_plan_admission_registry_marker(
                     &key,
                     current_payload,
@@ -51503,11 +52194,88 @@ impl<'state> StateBlock<'state> {
                         "queue-plan admission registry key has a conflicting binding: `{key}`"
                     )));
                 }
+                State::queue_plan_binding_application_state_in_storage(
+                    &markers, obligation, committed, active,
+                )?;
                 continue;
             }
-            self.world.smart_contract_state.insert(key, payload);
+            if committed {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "queue-plan admission registry key `{key}` was absent after its transaction committed"
+                )));
+            }
+            markers.insert_queue_plan_marker(key, payload);
+            State::stage_queue_plan_pending_obligation_in_storage(&mut markers, &admission)?;
         }
+        markers.apply();
         Ok(())
+    }
+
+    fn resolve_queue_plan_pending_obligations_for_entrypoints(
+        &mut self,
+        entrypoint_hashes: impl IntoIterator<Item = HashOf<TransactionEntrypoint>>,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let chain_id_digest =
+            crate::torii_proxy::queue_plan_admission_chain_id_digest(&self.chain_id);
+        let mut markers = self.world.smart_contract_state.transaction();
+        for entrypoint_hash in entrypoint_hashes {
+            State::resolve_queue_plan_pending_obligation_in_storage(
+                &mut markers,
+                chain_id_digest,
+                entrypoint_hash,
+            )?;
+        }
+        markers.apply();
+        Ok(())
+    }
+
+    fn resolve_required_queue_plan_pending_obligations(
+        &mut self,
+        pending_obligations: impl IntoIterator<Item = (HashOf<TransactionEntrypoint>, Hash)>,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let chain_id_digest =
+            crate::torii_proxy::queue_plan_admission_chain_id_digest(&self.chain_id);
+        let mut markers = self.world.smart_contract_state.transaction();
+        for (entrypoint_hash, expected_binding_hash) in pending_obligations {
+            let key = State::queue_plan_pending_obligation_marker_key(
+                chain_id_digest,
+                entrypoint_hash.clone(),
+            )?;
+            let payload = markers.get(&key).ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "autonomous QueuePlan entrypoint has no pending obligation: `{key}`"
+                ))
+            })?;
+            let obligation =
+                State::decode_exact_queue_plan_pending_obligation_marker(&key, payload)?;
+            if obligation.binding_hash != expected_binding_hash {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "autonomous QueuePlan entrypoint conflicts with pending obligation `{key}`"
+                )));
+            }
+            if !State::resolve_queue_plan_pending_obligation_in_storage(
+                &mut markers,
+                chain_id_digest,
+                entrypoint_hash,
+            )? {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "autonomous QueuePlan pending obligation disappeared before resolution: `{key}`"
+                )));
+            }
+        }
+        markers.apply();
+        Ok(())
+    }
+
+    pub(crate) fn resolve_queue_plan_pending_obligations_from_block(
+        &mut self,
+        block: &SignedBlock,
+    ) -> Result<(), MergeLedgerCommitError> {
+        self.resolve_queue_plan_pending_obligations_for_entrypoints(
+            block
+                .external_entrypoints_cloned()
+                .map(|entrypoint| entrypoint.hash()),
+        )
     }
 
     fn stage_merge_execution_markers(
@@ -51938,17 +52706,74 @@ impl<'state> StateBlock<'state> {
     /// # Errors
     /// Returns [`TransactionsBlockError`] when flushing the transaction batch fails.
     pub fn commit(self) -> Result<(), TransactionsBlockError> {
-        self.commit_inner()
+        self.commit_inner(None, None)
     }
 
-    fn commit_inner(mut self) -> Result<(), TransactionsBlockError> {
+    /// Commit with a move-only authorization consumed inside State's exact
+    /// linearization boundary.
+    pub(crate) fn commit_with_state_commit_authorization(
+        self,
+        authorization: Box<dyn StateBlockCommitAuthorization>,
+    ) -> Result<(), TransactionsBlockError> {
+        self.commit_inner(Some(authorization), None)
+    }
+
+    /// Commit with one final local Queue veto for an exact autoscale scale-in.
+    ///
+    /// The callback runs under the same lane-lifecycle guard that publishes the
+    /// catalog update. It must not try to acquire that guard recursively.
+    #[cfg(test)]
+    pub(crate) fn commit_with_autoscale_retirement_queue_veto(
+        self,
+        veto: &mut (dyn FnMut(LaneId, DataSpaceId, Hash) -> Result<(), String> + '_),
+    ) -> Result<(), TransactionsBlockError> {
+        self.commit_inner(None, Some(veto))
+    }
+
+    /// Commit with both the exact State authorization and final Queue scale-in
+    /// veto. The authorization is consumed only after the veto succeeds.
+    pub(crate) fn commit_with_state_commit_authorization_and_autoscale_retirement_queue_veto(
+        self,
+        authorization: Box<dyn StateBlockCommitAuthorization>,
+        veto: &mut (dyn FnMut(LaneId, DataSpaceId, Hash) -> Result<(), String> + '_),
+    ) -> Result<(), TransactionsBlockError> {
+        self.commit_inner(Some(authorization), Some(veto))
+    }
+
+    fn commit_inner(
+        mut self,
+        mut state_commit_authorization: Option<Box<dyn StateBlockCommitAuthorization>>,
+        mut autoscale_retirement_queue_veto: Option<
+            &mut (dyn FnMut(LaneId, DataSpaceId, Hash) -> Result<(), String> + '_),
+        >,
+    ) -> Result<(), TransactionsBlockError> {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
         let block_height = self._curr_block.height().get();
         let block_header_hash = self._curr_block.hash();
         let current_axt_slot =
             current_axt_slot_from_block(&self._curr_block, self.nexus.axt.slot_length_ms);
         let axt_replay_retention_slots = self.nexus.axt.replay_retention_slots.get();
-        self.prune_axt_replay_ledger(current_axt_slot, axt_replay_retention_slots);
+        let carries_autonomous_execution = self
+            .staged_merge_entry
+            .as_ref()
+            .is_some_and(|entry| entry.execution_batch.is_some());
+        if !carries_autonomous_execution {
+            self.prune_axt_replay_ledger(current_axt_slot, axt_replay_retention_slots);
+        }
+        let merge_execution_commit_surface_result = if self
+            .staged_merge_entry
+            .as_ref()
+            .is_some_and(|entry| entry.execution_batch.is_some())
+        {
+            self.validate_merge_execution_commit_surface(
+                MergeExecutionCommitSurface::FinalizedCarrier {
+                    carrier_height: block_height,
+                    carrier_hash: &block_header_hash,
+                },
+            )
+        } else {
+            Ok(())
+        };
         // NOTE: intentionally destruct self not to forget commit some fields
         let Self {
             state_ref,
@@ -51970,14 +52795,148 @@ impl<'state> StateBlock<'state> {
             autoscale_sample_history,
             autoscale_sample_history_dirty,
             staged_merge_entry,
+            mut canonical_wsv_merge_commit_authorization,
+            mut canonical_carrier_commit_metadata_authorization,
             pending_nexus_fee_receipt_source_ids,
             direct_committed_transactions,
             _curr_block,
+            committed_fragments,
             #[cfg(feature = "zk-preverify")]
                 zk_dedup: _,
             ..
         } = self;
+        let exact_scale_in_binding = match pending_autoscale_lifecycle
+            .as_ref()
+            .map(PendingAutoscaleLaneLifecycle::exact_scale_in_binding)
+            .transpose()
+        {
+            Ok(binding) => binding.flatten(),
+            Err(err) => {
+                error!(
+                    block_height,
+                    block = %block_header_hash,
+                    ?err,
+                    "failed to derive the exact autoscale retirement binding before state commit"
+                );
+                return Err(TransactionsBlockError::AutoscaleLaneLifecycle);
+            }
+        };
         let _state_commit_lock = state_ref.state_commit_lock.lock();
+        if let Err(err) = merge_execution_commit_surface_result {
+            error!(
+                block_height,
+                block = %block_header_hash,
+                ?err,
+                "autonomous merge execution commit surface drifted after authorization"
+            );
+            return Err(TransactionsBlockError::MergeAdmission);
+        }
+        match staged_merge_entry
+            .as_ref()
+            .and_then(|entry| entry.execution_batch.as_ref().map(|batch| (entry, batch)))
+        {
+            Some((entry, batch)) => {
+                let Some(authorization) = canonical_wsv_merge_commit_authorization.take() else {
+                    error!(
+                        block_height,
+                        block = %block_header_hash,
+                        merge_epoch = entry.epoch_id,
+                        "autonomous merge execution has no canonical WSV commit authorization"
+                    );
+                    return Err(TransactionsBlockError::MergeAdmission);
+                };
+                let Some(carrier_authorization) =
+                    canonical_carrier_commit_metadata_authorization.take()
+                else {
+                    error!(
+                        block_height,
+                        block = %block_header_hash,
+                        merge_epoch = entry.epoch_id,
+                        "autonomous merge execution has no finalized carrier metadata authorization"
+                    );
+                    return Err(TransactionsBlockError::MergeAdmission);
+                };
+                let current_base_height =
+                    u64::try_from(state_ref.committed_height()).unwrap_or(u64::MAX);
+                let current_base_hash = state_ref.lane_execution_state_hash();
+                let current_write_set_root =
+                    Self::merge_execution_write_set_root_from_overlay_with_external_events(
+                        &world,
+                        &direct_committed_transactions,
+                        authorization.external_event_bytes.as_deref(),
+                    );
+                if !Self::canonical_wsv_merge_commit_authorization_matches(
+                    &authorization,
+                    entry,
+                    batch,
+                    block_height,
+                    block_header_hash,
+                    current_base_height,
+                    current_base_hash,
+                    current_write_set_root,
+                ) {
+                    error!(
+                        block_height,
+                        block = %block_header_hash,
+                        merge_epoch = entry.epoch_id,
+                        "canonical WSV merge commit authorization is stale or mismatched"
+                    );
+                    return Err(TransactionsBlockError::MergeAdmission);
+                }
+                let previous_commit_topology = state_ref.commit_topology_snapshot();
+                let staged_previous_topology =
+                    prev_committed_topology.iter().cloned().collect::<Vec<_>>();
+                let staged_next_topology = committed_topology.iter().cloned().collect::<Vec<_>>();
+                let expected_sample = AutoscaleSampleRecord {
+                    block_height,
+                    block_hash: block_header_hash,
+                    creation_time_ms: u64::try_from(_curr_block.creation_time().as_millis())
+                        .unwrap_or(u64::MAX),
+                    work_count: autoscale_block_work_count(
+                        0,
+                        Some(u64::try_from(committed_fragments).unwrap_or(u64::MAX)),
+                    ),
+                };
+                let mut expected_history = state_ref.autoscale_sample_history_snapshot();
+                append_autoscale_sample_record(
+                    &mut expected_history,
+                    expected_sample,
+                    autoscale_sample_history_cap(&state_ref.nexus_snapshot().autoscale),
+                );
+                if carrier_authorization.entry_hash != entry.canonical_hash()
+                    || carrier_authorization.carrier_height != block_height
+                    || carrier_authorization.carrier_hash != block_header_hash
+                    || carrier_authorization.previous_commit_topology != previous_commit_topology
+                    || staged_previous_topology != previous_commit_topology
+                    || carrier_authorization.next_commit_topology != staged_next_topology
+                    || carrier_authorization.autoscale_sample != expected_sample
+                    || !autoscale_sample_history_dirty
+                    || autoscale_sample_history != expected_history
+                {
+                    error!(
+                        block_height,
+                        block = %block_header_hash,
+                        merge_epoch = entry.epoch_id,
+                        "finalized carrier metadata authorization is stale or mismatched"
+                    );
+                    return Err(TransactionsBlockError::MergeAdmission);
+                }
+            }
+            None => {
+                if canonical_wsv_merge_commit_authorization.take().is_some()
+                    || canonical_carrier_commit_metadata_authorization
+                        .take()
+                        .is_some()
+                {
+                    error!(
+                        block_height,
+                        block = %block_header_hash,
+                        "control-only or absent merge entry carried canonical WSV commit authorization"
+                    );
+                    return Err(TransactionsBlockError::MergeAdmission);
+                }
+            }
+        }
         if let Some(entry) = staged_merge_entry.as_ref() {
             if let Err(err) = state_ref.merge_admission.read().validate_next(entry) {
                 error!(
@@ -52081,6 +53040,67 @@ impl<'state> StateBlock<'state> {
         } else {
             None
         };
+        if tx_validate_accepted
+            && !replay_prevalidation
+            && let Some((lane_id, dataspace_id, lane_incarnation)) = exact_scale_in_binding
+        {
+            match autoscale_retirement_queue_veto.as_mut() {
+                Some(veto) => {
+                    if let Err(reason) = veto(lane_id, dataspace_id, lane_incarnation) {
+                        error!(
+                            block_height,
+                            block = %block_header_hash,
+                            lane = lane_id.as_u32(),
+                            dataspace = dataspace_id.as_u64(),
+                            incarnation = %hex::encode(lane_incarnation.as_ref()),
+                            %reason,
+                            "final autoscale retirement Queue veto rejected state commit"
+                        );
+                        return Err(TransactionsBlockError::AutoscaleLaneLifecycle);
+                    }
+                }
+                None if !replay_compatibility => {
+                    error!(
+                        block_height,
+                        block = %block_header_hash,
+                        lane = lane_id.as_u32(),
+                        dataspace = dataspace_id.as_u64(),
+                        incarnation = %hex::encode(lane_incarnation.as_ref()),
+                        "live autoscale retirement has no final Queue veto"
+                    );
+                    return Err(TransactionsBlockError::AutoscaleLaneLifecycle);
+                }
+                // Authenticated Kura replay has no live Queue ownership and
+                // re-applies the already-decided lifecycle transition.
+                None => {}
+            }
+        }
+        if tx_validate_accepted && !replay_prevalidation {
+            match state_commit_authorization.take() {
+                Some(authorization) => {
+                    if let Err(reason) = authorization
+                        .consume_for_state_commit(block_header_hash, staged_merge_entry.as_ref())
+                    {
+                        error!(
+                            block_height,
+                            block = %block_header_hash,
+                            %reason,
+                            "State commit authorization rejected the exact carrier transition"
+                        );
+                        return Err(TransactionsBlockError::MergeAdmission);
+                    }
+                }
+                None if carries_autonomous_execution && !replay_compatibility => {
+                    error!(
+                        block_height,
+                        block = %block_header_hash,
+                        "live autonomous execution has no checked carrier State commit authorization"
+                    );
+                    return Err(TransactionsBlockError::MergeAdmission);
+                }
+                None => {}
+            }
+        }
         let autoscale_storage_hold = if tx_validate_accepted {
             if let Some(pending) = &pending_autoscale_lifecycle {
                 let autoscale_start = Instant::now();
@@ -52441,6 +53461,174 @@ impl<'state> StateBlock<'state> {
         Ok(())
     }
 
+    fn mint_canonical_carrier_commit_metadata_authorization(
+        &mut self,
+        block: &CommittedBlock,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let Some(entry) = self.staged_merge_entry.as_ref() else {
+            return if self
+                .canonical_carrier_commit_metadata_authorization
+                .is_none()
+            {
+                Ok(())
+            } else {
+                Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "an absent merge entry carried finalized carrier metadata authorization"
+                        .to_owned(),
+                ))
+            };
+        };
+        let Some(batch) = entry.execution_batch.as_ref() else {
+            return if self
+                .canonical_carrier_commit_metadata_authorization
+                .is_none()
+            {
+                Ok(())
+            } else {
+                Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "a control-only merge entry carried finalized carrier metadata authorization"
+                        .to_owned(),
+                ))
+            };
+        };
+        if self
+            .canonical_carrier_commit_metadata_authorization
+            .is_some()
+        {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "finalized carrier metadata authorization was already minted".to_owned(),
+            ));
+        }
+        let signed_block = block.as_ref();
+        let carrier_height = signed_block.header().height().get();
+        let carrier_hash = signed_block.hash();
+        if carrier_height != self._curr_block.height().get()
+            || carrier_hash != self._curr_block.hash()
+            || signed_block
+                .execution_context()
+                .and_then(|context| context.merge_entry.as_ref())
+                .is_none_or(|reference| !reference.matches_entry(entry))
+        {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "finalized carrier metadata belongs to a different merge entry or block".to_owned(),
+            ));
+        }
+        let current_base_height =
+            u64::try_from(self.state_ref.committed_height()).unwrap_or(u64::MAX);
+        let current_base_hash = self.state_ref.lane_execution_state_hash();
+        let authorization = self
+            .canonical_wsv_merge_commit_authorization
+            .as_ref()
+            .ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "finalized autonomous carrier lacks canonical WSV authorization".to_owned(),
+                )
+            })?;
+        if authorization.validated_publication_event_bytes.is_none() {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "finalized autonomous carrier lacks a validated publication event surface"
+                    .to_owned(),
+            ));
+        }
+        if !self.world.external_event_buf.is_empty() {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "finalized autonomous carrier retained events after publication".to_owned(),
+            ));
+        }
+        let current_write_set_root =
+            Self::merge_execution_write_set_root_from_overlay_with_external_events(
+                &self.world,
+                &self.direct_committed_transactions,
+                authorization.external_event_bytes.as_deref(),
+            );
+        if !Self::canonical_wsv_merge_commit_authorization_matches(
+            authorization,
+            entry,
+            batch,
+            carrier_height,
+            carrier_hash,
+            current_base_height,
+            current_base_hash,
+            current_write_set_root,
+        ) {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "finalized carrier introduced an effect outside the authorized WSV write set"
+                    .to_owned(),
+            ));
+        }
+        if self.pending_autoscale_lifecycle.is_some()
+            || self.pending_da_commitments.is_some()
+            || self.pending_da_pin_intents.is_some()
+            || !self.verified_lane_relay_records.is_empty()
+        {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "finalized autonomous carrier staged an incompatible runtime effect".to_owned(),
+            ));
+        }
+        let carrier_storage_height = usize::try_from(carrier_height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+            .ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "finalized autonomous carrier height exceeds local storage bounds".to_owned(),
+                )
+            })?;
+        if self.block_hashes.pending.as_slice() != [carrier_hash]
+            || !self
+                .transactions
+                .has_exact_empty_staged_block(carrier_storage_height)
+        {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "finalized autonomous carrier metadata is not the exact empty carrier".to_owned(),
+            ));
+        }
+        let previous_commit_topology = self.state_ref.commit_topology_snapshot();
+        let staged_previous_topology = self
+            .prev_commit_topology
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        if staged_previous_topology != previous_commit_topology {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "finalized autonomous carrier previous topology differs from committed state"
+                    .to_owned(),
+            ));
+        }
+        let autoscale_sample = AutoscaleSampleRecord {
+            block_height: carrier_height,
+            block_hash: carrier_hash,
+            creation_time_ms: u64::try_from(signed_block.header().creation_time().as_millis())
+                .unwrap_or(u64::MAX),
+            work_count: autoscale_block_work_count(
+                signed_block.external_transactions().len(),
+                Some(u64::try_from(self.committed_fragment_count()).unwrap_or(u64::MAX)),
+            ),
+        };
+        let mut expected_history = self.state_ref.autoscale_sample_history_snapshot();
+        append_autoscale_sample_record(
+            &mut expected_history,
+            autoscale_sample,
+            autoscale_sample_history_cap(&self.nexus.autoscale),
+        );
+        if !self.autoscale_sample_history_dirty || self.autoscale_sample_history != expected_history
+        {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "finalized autonomous carrier autoscale sample is absent or non-canonical"
+                    .to_owned(),
+            ));
+        }
+        self.canonical_carrier_commit_metadata_authorization =
+            Some(CanonicalCarrierCommitMetadataAuthorization {
+                entry_hash: entry.canonical_hash(),
+                carrier_height,
+                carrier_hash,
+                previous_commit_topology,
+                next_commit_topology: self.commit_topology.iter().cloned().collect(),
+                autoscale_sample,
+            });
+        Ok(())
+    }
+
     /// Assuming all transactions in the block have been processed,
     /// apply the remaining block effects outside the world state.
     #[allow(clippy::too_many_lines)]
@@ -52473,12 +53661,21 @@ impl<'state> StateBlock<'state> {
         topology: Vec<PeerId>,
         commit_qc_hint: Option<&Qc>,
     ) -> Vec<EventBox> {
-        self.apply_without_execution_with_commit_qc_inner(
+        let (events, authorization) = self.apply_without_execution_with_commit_qc_inner(
             block,
             topology,
             CommitRosterAuthority::Legacy(commit_qc_hint),
             true,
-        )
+        );
+        if let Err(err) = authorization {
+            error!(
+                height = block.as_ref().header().height().get(),
+                block = %block.as_ref().hash(),
+                ?err,
+                "autonomous carrier metadata authorization failed during legacy apply"
+            );
+        }
+        events
     }
 
     /// Apply post-execution effects for a block already authenticated by exact v2 finality.
@@ -52490,13 +53687,14 @@ impl<'state> StateBlock<'state> {
         &mut self,
         block: &CommittedBlock,
         topology: Vec<PeerId>,
-    ) -> Vec<EventBox> {
-        self.apply_without_execution_with_commit_qc_inner(
+    ) -> Result<Vec<EventBox>, MergeLedgerCommitError> {
+        let (events, authorization) = self.apply_without_execution_with_commit_qc_inner(
             block,
             topology,
             CommitRosterAuthority::V2Finality,
             true,
-        )
+        );
+        authorization.map(|()| events)
     }
 
     /// Apply replayed block effects without refreshing per-block roster sidecars.
@@ -52512,12 +53710,21 @@ impl<'state> StateBlock<'state> {
         topology: Vec<PeerId>,
         commit_qc_hint: Option<&Qc>,
     ) -> Vec<EventBox> {
-        self.apply_without_execution_with_commit_qc_inner(
+        let (events, authorization) = self.apply_without_execution_with_commit_qc_inner(
             block,
             topology,
             CommitRosterAuthority::Legacy(commit_qc_hint),
             false,
-        )
+        );
+        if let Err(err) = authorization {
+            error!(
+                height = block.as_ref().header().height().get(),
+                block = %block.as_ref().hash(),
+                ?err,
+                "autonomous carrier metadata authorization failed during legacy replay"
+            );
+        }
+        events
     }
 
     /// Apply replayed block effects authenticated by Kura's exact v2 finality artifact.
@@ -52529,13 +53736,14 @@ impl<'state> StateBlock<'state> {
         &mut self,
         block: &CommittedBlock,
         topology: Vec<PeerId>,
-    ) -> Vec<EventBox> {
-        self.apply_without_execution_with_commit_qc_inner(
+    ) -> Result<Vec<EventBox>, MergeLedgerCommitError> {
+        let (events, authorization) = self.apply_without_execution_with_commit_qc_inner(
             block,
             topology,
             CommitRosterAuthority::V2Finality,
             false,
-        )
+        );
+        authorization.map(|()| events)
     }
 
     fn stage_musubi_resolver_index_checkpoint(
@@ -52628,7 +53836,7 @@ impl<'state> StateBlock<'state> {
         topology: Vec<PeerId>,
         commit_roster_authority: CommitRosterAuthority<'_>,
         write_commit_roster_sidecar: bool,
-    ) -> Vec<EventBox> {
+    ) -> (Vec<EventBox>, Result<(), MergeLedgerCommitError>) {
         let block_hash = block.as_ref().hash();
         trace!(%block_hash, "Applying block");
         crate::bridge::validate_sccp_commitment_root_for_signed_block(block.as_ref()).expect(
@@ -52999,6 +54207,15 @@ impl<'state> StateBlock<'state> {
         self.stage_native_amx_participant_frontiers(block.as_ref())
             .expect("committed Native AMX participant frontiers must be canonical");
         self.maybe_apply_nexus_autoscale(block);
+        let merge_event_authorization = if self
+            .staged_merge_entry
+            .as_ref()
+            .is_some_and(|entry| entry.execution_batch.is_some())
+        {
+            self.validate_merge_execution_external_event_publication_surface()
+        } else {
+            Ok(())
+        };
         self.world.external_event_buf.push(
             BlockEvent {
                 header: block.as_ref().header(),
@@ -53006,7 +54223,18 @@ impl<'state> StateBlock<'state> {
             }
             .into(),
         );
-        self.world.take_external_events()
+        let events = self.world.take_external_events();
+        let carrier_authorization = if self
+            .staged_merge_entry
+            .as_ref()
+            .is_some_and(|entry| entry.execution_batch.is_some())
+        {
+            merge_event_authorization
+                .and_then(|()| self.mint_canonical_carrier_commit_metadata_authorization(block))
+        } else {
+            Ok(())
+        };
+        (events, carrier_authorization)
     }
 
     fn pin_new_autoscale_lane_committee(
@@ -53308,7 +54536,10 @@ impl<'state> StateBlock<'state> {
                 "drain commitment carrier must contain exactly one certificate".to_owned(),
             ));
         };
-        if entry.execution_batch.is_some() || !entry.lane_snapshots.is_empty() {
+        if entry.execution_batch.is_some()
+            || !entry.lane_snapshots.is_empty()
+            || !entry.queue_plan_admissions.is_empty()
+        {
             return Err(LaneLifecycleError::Storage(
                 "drain commitment carrier must be certificate-only".to_owned(),
             ));
@@ -53501,6 +54732,12 @@ impl<'state> StateBlock<'state> {
                 incarnation,
             ) || commitment.carrier_height >= block_height
                 || frontier != commitment.frontier
+                || State::queue_plan_pending_route_obligation_blocks_lane_drain_in_world(
+                    &self.world,
+                    *lane,
+                    lane_config.dataspace_id,
+                    incarnation,
+                )
                 || self.state_ref.lane_has_drain_blocking_evidence(
                     *lane,
                     lane_config.dataspace_id,
@@ -53619,6 +54856,17 @@ impl<'state> StateBlock<'state> {
         if !self.stage_autoscale_sample_record(block) {
             return;
         }
+        if self
+            .staged_merge_entry
+            .as_ref()
+            .is_some_and(|entry| entry.execution_batch.is_some())
+        {
+            debug!(
+                height = block.as_ref().header().height().get(),
+                "deferring autoscale lifecycle transition on autonomous execution carrier"
+            );
+            return;
+        }
         if self.pending_autoscale_lifecycle.is_some() {
             debug!(
                 height = block.as_ref().header().height().get(),
@@ -53679,7 +54927,7 @@ impl<'state> StateBlock<'state> {
                     .is_some()
             });
         let scale_in_action = (autoscale_capacity_lanes > 1)
-            .then(|| self.select_autoscale_scale_in_action(block))
+            .then(|| self.select_autoscale_scale_in_action(block.as_ref()))
             .flatten();
         if drain_in_progress {
             let Some(AutoscaleScaleInAction::Retire(retire_lane_id)) = scale_in_action else {
@@ -53932,7 +55180,7 @@ impl<'state> StateBlock<'state> {
 
     fn select_autoscale_scale_in_action(
         &self,
-        block: &CommittedBlock,
+        block: &SignedBlock,
     ) -> Option<AutoscaleScaleInAction> {
         let candidate = autoscale_managed_lane_for_retire(
             self.nexus.lane_catalog.lanes(),
@@ -53974,6 +55222,12 @@ impl<'state> StateBlock<'state> {
         )
         .ok()?;
         if frontier != commitment.frontier
+            || State::queue_plan_pending_route_obligation_blocks_lane_drain_in_world(
+                &self.world,
+                candidate,
+                lane.dataspace_id,
+                incarnation,
+            )
             || self.state_ref.lane_has_drain_blocking_evidence(
                 candidate,
                 lane.dataspace_id,
@@ -53982,13 +55236,12 @@ impl<'state> StateBlock<'state> {
         {
             return None;
         }
-        let owns_current_block_payload =
-            block.as_ref().execution_context().is_some_and(|context| {
-                context
-                    .lane_payload_ownerships
-                    .iter()
-                    .any(|ownership| ownership.lane_id == candidate)
-            });
+        let owns_current_block_payload = block.execution_context().is_some_and(|context| {
+            context
+                .lane_payload_ownerships
+                .iter()
+                .any(|ownership| ownership.lane_id == candidate)
+        });
         if self.touched_lanes.contains(&candidate) || owns_current_block_payload {
             debug!(
                 lane = candidate.as_u32(),
@@ -53998,6 +55251,69 @@ impl<'state> StateBlock<'state> {
             return None;
         }
         Some(AutoscaleScaleInAction::Retire(candidate))
+    }
+
+    /// Return the exact route/incarnation this already-executed block would
+    /// retire during deterministic post-execution autoscale processing.
+    ///
+    /// Callers hold the lane lifecycle admission fence while consulting the
+    /// local Queue, so no ordinary owner can appear between this projection
+    /// and the retirement vote check.
+    pub(crate) fn prospective_autoscale_retirement_binding(
+        &self,
+        block: &SignedBlock,
+    ) -> Result<Option<(LaneId, DataSpaceId, Hash)>, LaneLifecycleError> {
+        if self.pending_autoscale_lifecycle.is_some()
+            || self
+                .staged_merge_entry
+                .as_ref()
+                .is_some_and(|entry| entry.execution_batch.is_some())
+            || !self.nexus.enabled
+            || !self.nexus.autoscale.enabled
+        {
+            return Ok(None);
+        }
+        if ensure_autoscale_runtime_lane_bounds(&self.nexus.autoscale).is_err()
+            || ensure_autoscale_runtime_elastic_range(&self.nexus).is_err()
+            || ensure_autoscale_managed_created_heights_not_future(
+                &self.nexus,
+                self._curr_block.height().get(),
+            )
+            .is_err()
+        {
+            return Ok(None);
+        }
+        let capacity = autoscale_default_route_capacity_lanes(
+            &self.nexus.routing_policy,
+            self.nexus.lane_catalog.lanes(),
+            self.nexus.autoscale.min_lanes.get(),
+            self.nexus.autoscale.max_lanes.get(),
+        );
+        if capacity <= 1 {
+            return Ok(None);
+        }
+        let Some(AutoscaleScaleInAction::Retire(lane_id)) =
+            self.select_autoscale_scale_in_action(block)
+        else {
+            return Ok(None);
+        };
+        let lane = self
+            .nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .find(|lane| lane.id == lane_id)
+            .ok_or(LaneLifecycleError::InvalidAutoscaleManagedLane {
+                lane: lane_id,
+                reason: "prospective retirement lane is absent from the catalog",
+            })?;
+        let incarnation = self.lane_incarnations.get(&lane_id).copied().ok_or(
+            LaneLifecycleError::InvalidAutoscaleManagedLane {
+                lane: lane_id,
+                reason: "prospective retirement lane has no active incarnation",
+            },
+        )?;
+        Ok(Some((lane_id, lane.dataspace_id, incarnation)))
     }
 
     fn collect_autoscale_samples(
@@ -54466,6 +55782,8 @@ impl<'state> StateBlock<'state> {
                 transaction.apply();
             }
         }
+        self.resolve_queue_plan_pending_obligations_from_block(block)
+            .expect("committed block must resolve exact QueuePlan pending application obligations");
     }
 
     fn seed_committed_transaction_context(
@@ -54552,41 +55870,12 @@ impl StateTransaction<'_, '_> {
 }
 
 #[cfg(test)]
-mod fragment_counter_tests {
-    use std::sync::Arc;
-
-    use iroha_data_model::block::BlockHeader;
-    use nonzero_ext::nonzero;
-
-    use super::*;
-    use crate::kura::Kura;
-
-    #[test]
-    fn state_block_fragment_counter_updates_on_apply() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(World::new(), Arc::clone(&kura), query);
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut state_block = state.block(header);
-        assert!(
-            !state_block.has_committed_fragments(),
-            "new StateBlock should not record committed fragments"
-        );
-        {
-            let tx = state_block.transaction();
-            tx.apply();
-        }
-        assert!(
-            state_block.has_committed_fragments(),
-            "applying a transaction should increment committed fragments counter"
-        );
-    }
-}
+mod fragment_counter_tests;
 
 #[cfg(test)]
 mod state_view_lock_tests {
     use std::{
+        cell::Cell,
         sync::{Arc, mpsc},
         thread,
         time::Duration,
@@ -54629,157 +55918,65 @@ mod state_view_lock_tests {
         );
         handle.join().expect("view thread");
     }
+
+    #[test]
+    fn diagnostic_projection_retries_after_state_generation_change() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        let attempts = Cell::new(0_u32);
+
+        let observed = state
+            .derive_diagnostics_at_stable_state_generation(
+                || {
+                    let attempt = attempts.get().saturating_add(1);
+                    attempts.set(attempt);
+                    if attempt == 1 {
+                        let generation_guard = state.begin_state_view_write();
+                        drop(generation_guard);
+                    }
+                    Ok::<u32, &'static str>(attempt)
+                },
+                || "one generation retry did not converge",
+            )
+            .expect("infallible diagnostic projection");
+
+        assert_eq!(
+            observed, 2,
+            "the mixed-generation observation must be discarded"
+        );
+        assert_eq!(attempts.get(), 2);
+        assert_eq!(state.state_view_generation(), 2);
+    }
+
+    #[test]
+    fn diagnostic_projection_fails_closed_after_bounded_generation_drift() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        let attempts = Cell::new(0_usize);
+
+        let result = state.derive_diagnostics_at_stable_state_generation(
+            || {
+                attempts.set(attempts.get().saturating_add(1));
+                let generation_guard = state.begin_state_view_write();
+                drop(generation_guard);
+                Ok::<(), &'static str>(())
+            },
+            || "diagnostic State generation did not stabilize",
+        );
+
+        assert_eq!(result, Err("diagnostic State generation did not stabilize"));
+        assert_eq!(
+            attempts.get(),
+            DIAGNOSTIC_STABLE_STATE_GENERATION_ATTEMPTS,
+            "the diagnostic scan must stop at its fixed retry budget"
+        );
+    }
 }
 
 #[cfg(all(test, feature = "zk-preverify"))]
-mod state_preverify_backend_admission_tests {
-    use std::{num::NonZeroU64, sync::Arc};
-
-    use iroha_data_model::{
-        block::BlockHeader,
-        proof::{ProofBox, VerifyingKeyBox},
-        zk::{BackendTag, OpenVerifyEnvelope},
-    };
-
-    use super::*;
-    use crate::{kura::Kura, zk::PreverifyResult};
-
-    #[test]
-    fn unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
-        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut transaction = block.transaction();
-        transaction.zk.halo2.curve = iroha_config::parameters::actual::ZkCurve::Bn254;
-
-        for backend in [
-            "halo2/bn254",
-            "halo2/bn254/vote",
-            "halo2/kzg",
-            "halo2/debug",
-            "halo2/mock",
-            "halo2/unknown-native-v1",
-            "halo2/ipa:production-ready",
-            "halo2/ipa:claimed-mainnet",
-        ] {
-            let proof = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
-            assert_eq!(
-                transaction.preverify_proof(&proof, None, 0, None, None, true),
-                PreverifyResult::UnsupportedBackend,
-                "case {backend}"
-            );
-        }
-
-        let admitted = ProofBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(), vec![1, 2, 3, 4]);
-        assert_eq!(
-            transaction.preverify_proof(&admitted, None, 0, None, None, true),
-            PreverifyResult::CurveNotAllowed,
-            "admitted Halo2/Pasta backends must still honor curve policy"
-        );
-    }
-
-    #[test]
-    fn stark_fri_profile_labels_require_enveloped_state_preverify_metadata() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
-        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut transaction = block.transaction();
-
-        for backend in [
-            crate::zk::ZK_BACKEND_STARK_FRI_V1,
-            "stark/fri/sha256-goldilocks",
-            "stark/fri/poseidon2-goldilocks",
-            "stark/fri/sha256_goldilocks.v1",
-        ] {
-            let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xA5, 0x5A, 0xC3]);
-            let vk_commitment = crate::zk::hash_vk(&vk);
-            let raw = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
-
-            assert_eq!(
-                transaction.preverify_proof(
-                    &raw,
-                    Some(&vk),
-                    0,
-                    Some(vk_commitment),
-                    Some(vk_commitment),
-                    true,
-                ),
-                PreverifyResult::MalformedProof,
-                "state preverify must require OpenVerifyEnvelope metadata for {backend}"
-            );
-
-            let envelope = OpenVerifyEnvelope {
-                backend: BackendTag::Stark,
-                circuit_id: format!("{backend}:state-preverify-test"),
-                vk_hash: vk_commitment,
-                public_inputs: vec![0x55; 32],
-                proof_bytes: vec![0xAA, 0xBB, 0xCC],
-                aux: Vec::new(),
-            };
-            let proof = ProofBox::new(
-                backend.to_owned(),
-                norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope"),
-            );
-
-            assert_eq!(
-                transaction.preverify_proof(
-                    &proof,
-                    Some(&vk),
-                    0,
-                    Some(vk_commitment),
-                    Some(vk_commitment),
-                    true,
-                ),
-                PreverifyResult::Accepted,
-                "malformed raw payload for {backend} must not poison state preverify dedup"
-            );
-        }
-    }
-
-    #[test]
-    fn halo2_ipa_profile_labels_use_family_curve_segment() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
-        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut transaction = block.transaction();
-        transaction.zk.halo2.curve = iroha_config::parameters::actual::ZkCurve::Pallas;
-
-        let backend = "halo2/ipa:ivm-execution-v1";
-        let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xA5, 0x5A, 0xC3]);
-        let vk_commitment = crate::zk::hash_vk(&vk);
-        let envelope = OpenVerifyEnvelope {
-            backend: BackendTag::Halo2IpaPasta,
-            circuit_id: backend.to_owned(),
-            vk_hash: vk_commitment,
-            public_inputs: vec![0x55; 32],
-            proof_bytes: vec![0xAA, 0xBB, 0xCC],
-            aux: Vec::new(),
-        };
-        let proof = ProofBox::new(
-            backend.to_owned(),
-            norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope"),
-        );
-
-        assert_eq!(
-            transaction.preverify_proof(
-                &proof,
-                None,
-                0,
-                Some(vk_commitment),
-                Some(vk_commitment),
-                true,
-            ),
-            PreverifyResult::Accepted,
-            "Halo2 IPA profile labels must be checked as IPA/Pasta labels before metadata preverify"
-        );
-    }
-}
+mod state_preverify_backend_admission_tests;
 
 #[cfg(test)]
 mod musubi_replication_shortfall_state_tests {
@@ -54920,656 +56117,7 @@ mod musubi_replication_shortfall_telemetry_tests {
 
 #[cfg(test)]
 mod state_commit_lock_order_tests {
-    use std::{
-        sync::{Arc, Barrier, mpsc},
-        thread,
-        time::{Duration, Instant},
-    };
-
-    use iroha_data_model::{block::BlockHeader, nexus::LaneConfig as LaneConfigModel};
-    use nonzero_ext::nonzero;
-
-    use super::*;
-    use crate::kura::Kura;
-
-    #[test]
-    fn state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(World::default(), kura, query));
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let _write_guard = state.state_write_lock.lock();
-        let barrier = Arc::new(Barrier::new(2));
-        let commit_state = Arc::clone(&state);
-        let commit_barrier = Arc::clone(&barrier);
-        let handle = thread::spawn(move || {
-            commit_barrier.wait();
-            let block = commit_state.block(header);
-            block.commit().expect("commit should succeed");
-        });
-        barrier.wait();
-
-        let start = Instant::now();
-        let mut locked_while_waiting = false;
-        while start.elapsed() < Duration::from_millis(200) {
-            if handle.is_finished() {
-                break;
-            }
-            if state.tiered_backend.try_lock().is_none() {
-                locked_while_waiting = true;
-                break;
-            }
-            thread::yield_now();
-        }
-
-        assert!(
-            !locked_while_waiting,
-            "tiered backend locked while commit waits for state_write_lock"
-        );
-
-        drop(_write_guard);
-        handle.join().expect("commit thread");
-    }
-
-    #[test]
-    fn lane_lifecycle_and_commit_do_not_deadlock_on_lock_order() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(World::default(), kura, query));
-        state.nexus.write().enabled = true;
-
-        let plan = iroha_data_model::nexus::LaneLifecyclePlan {
-            additions: vec![LaneConfigModel {
-                id: LaneId::new(1),
-                alias: "beta".to_string(),
-                ..LaneConfigModel::default()
-            }],
-            retire: Vec::new(),
-        };
-
-        let (done_tx, done_rx) = mpsc::channel();
-        let barrier = Arc::new(Barrier::new(3));
-        let lane_state = Arc::clone(&state);
-        let lane_done = done_tx.clone();
-        let lane_barrier = Arc::clone(&barrier);
-        let lane_handle = thread::spawn(move || {
-            lane_barrier.wait();
-            lane_state
-                .apply_lane_lifecycle(&plan)
-                .expect("lane lifecycle");
-            let _ = lane_done.send(());
-        });
-
-        let commit_state = Arc::clone(&state);
-        let commit_done = done_tx.clone();
-        let commit_barrier = Arc::clone(&barrier);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let commit_handle = thread::spawn(move || {
-            commit_barrier.wait();
-            let block = commit_state.block(header);
-            block.commit().expect("commit");
-            let _ = commit_done.send(());
-        });
-
-        barrier.wait();
-
-        done_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("first serialized operation completion");
-        done_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("second serialized operation completion");
-
-        lane_handle.join().expect("lane lifecycle thread");
-        commit_handle.join().expect("commit thread");
-        assert!(
-            state
-                .nexus_snapshot()
-                .lane_catalog
-                .by_alias("beta")
-                .is_some(),
-            "lane lifecycle should publish after serialization with commit"
-        );
-    }
-
-    #[test]
-    fn lane_lifecycle_cleanup_does_not_hold_commit_serialization_from_prebuilt_block() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(World::default(), kura, query));
-        state.nexus.write().enabled = true;
-
-        let plan = iroha_data_model::nexus::LaneLifecyclePlan {
-            additions: vec![LaneConfigModel {
-                id: LaneId::new(1),
-                alias: "prebuilt-beta".to_string(),
-                ..LaneConfigModel::default()
-            }],
-            retire: Vec::new(),
-        };
-
-        let (block_ready_tx, block_ready_rx) = mpsc::channel();
-        let (commit_release_tx, commit_release_rx) = mpsc::channel();
-        let (done_tx, done_rx) = mpsc::channel();
-        let commit_state = Arc::clone(&state);
-        let commit_done = done_tx.clone();
-        let commit_handle = thread::spawn(move || {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let block = commit_state.block(header);
-            block_ready_tx
-                .send(())
-                .expect("notify prebuilt block is holding its overlay");
-            commit_release_rx
-                .recv()
-                .expect("wait for lifecycle catalog publication");
-            block.commit().expect("commit prebuilt block");
-            let _ = commit_done.send("commit");
-        });
-
-        block_ready_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("prebuilt block ready");
-
-        let lifecycle_state = Arc::clone(&state);
-        let lifecycle_done = done_tx.clone();
-        let lifecycle_handle = thread::spawn(move || {
-            lifecycle_state
-                .apply_lane_lifecycle(&plan)
-                .expect("lane lifecycle");
-            let _ = lifecycle_done.send("lifecycle");
-        });
-
-        let publication_start = Instant::now();
-        let mut catalog_published = false;
-        while publication_start.elapsed() < Duration::from_secs(1) {
-            if state
-                .nexus_snapshot()
-                .lane_catalog
-                .by_alias("prebuilt-beta")
-                .is_some()
-            {
-                catalog_published = true;
-                break;
-            }
-            thread::sleep(Duration::from_millis(1));
-        }
-        assert!(
-            catalog_published,
-            "lane lifecycle should publish catalog before waiting on world-backed cleanup"
-        );
-        commit_release_tx
-            .send(())
-            .expect("release prebuilt block commit");
-
-        done_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("first operation completion");
-        done_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("second operation completion");
-
-        lifecycle_handle.join().expect("lane lifecycle thread");
-        commit_handle.join().expect("commit thread");
-        assert!(
-            state
-                .nexus_snapshot()
-                .lane_catalog
-                .by_alias("prebuilt-beta")
-                .is_some(),
-            "published lane should survive prebuilt block serialization"
-        );
-    }
-
-    #[test]
-    fn transaction_uses_prebuilt_block_nexus_snapshot_after_shared_catalog_update() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), kura, query);
-        state.nexus.write().enabled = true;
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let block_catalog = block.nexus.lane_catalog.clone();
-
-        let updated_catalog = iroha_data_model::nexus::LaneCatalog::new(
-            nonzero!(2_u32),
-            vec![
-                LaneConfigModel::default(),
-                LaneConfigModel {
-                    id: LaneId::new(1),
-                    alias: "post-block-beta".to_owned(),
-                    ..LaneConfigModel::default()
-                },
-            ],
-        )
-        .expect("updated lane catalog");
-        {
-            let mut nexus = state.nexus.write();
-            nexus.lane_config =
-                iroha_config::parameters::actual::LaneConfig::from_catalog(&updated_catalog);
-            nexus.lane_catalog = updated_catalog;
-        }
-        assert!(
-            state
-                .nexus_snapshot()
-                .lane_catalog
-                .by_alias("post-block-beta")
-                .is_some(),
-            "shared Nexus catalog update should be visible to new state snapshots"
-        );
-
-        let tx = block.transaction();
-
-        assert_eq!(tx.nexus.lane_catalog, block_catalog);
-        assert!(
-            tx.nexus.lane_catalog.by_alias("post-block-beta").is_none(),
-            "transactions opened from a prebuilt block must not observe later Nexus catalog updates"
-        );
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "committed block failed SCCP commitment validation before apply_without_execution"
-    )]
-    fn apply_without_execution_rejects_duplicate_sccp_records_before_state_mutation() {
-        let keypair = crate::state::checked_keypair();
-        let authority = AccountId::new(keypair.public_key().clone());
-        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
-            version: 1,
-            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-            nonce: 44,
-            route_revision: 1,
-            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            asset_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-            asset_id: b"xor".to_vec(),
-            amount: 1,
-            sender_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-            sender: b"sora:bridge".to_vec(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
-            recipient: vec![0x22; 20],
-            route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-            route_id: b"nexus:eth:xor".to_vec(),
-        });
-        let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&payload)
-            .expect("valid SCCP apply-without-execution fixture payload encodes");
-        let record = crate::bridge::test_record_sccp_message(payload_bytes.clone());
-        let tx = iroha_data_model::transaction::TransactionBuilder::new(
-            ChainId::from("apply-sccp-duplicate"),
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_executable(iroha_data_model::transaction::Executable::IvmProved(
-            iroha_data_model::transaction::IvmProved {
-                bytecode: iroha_data_model::transaction::IvmBytecode::from_compiled(vec![
-                    0x01, 0x02, 0x03,
-                ]),
-                overlay: vec![
-                    iroha_data_model::isi::InstructionBox::from(record.clone()),
-                    iroha_data_model::isi::InstructionBox::from(record),
-                ]
-                .into(),
-                events_commitment: Hash::new(b"events"),
-                gas_policy_commitment: Hash::new(b"gas"),
-            },
-        ))
-        .sign(keypair.private_key());
-        let entry_hash = tx.hash_as_entrypoint();
-        let accepted = crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx));
-        let leader = crate::state::checked_keypair();
-        let mut block: SignedBlock = crate::block::BlockBuilder::new(vec![accepted])
-            .chain(0, None)
-            .sign(leader.private_key())
-            .unpack(|_| {})
-            .into();
-        block
-            .set_transaction_results(
-                Vec::new(),
-                &[entry_hash],
-                vec![Ok(
-                    iroha_data_model::transaction::DataTriggerSequence::default(),
-                )],
-            )
-            .expect("test block entrypoint hash should match payload");
-        let messages = crate::bridge::collect_sccp_messages_from_signed_block(&block);
-        let root = crate::bridge::sccp_commitment_root_from_messages(&messages)
-            .expect("deduplicated SCCP root");
-        block.set_sccp_commitment_root(Some(root));
-        let committed = crate::block::ValidBlock::committed_from_replay_signed_block(block);
-
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), kura, query);
-        let mut state_block = state.block(committed.as_ref().header());
-
-        let _ = state_block.apply_without_execution(&committed, Vec::new());
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "committed block failed SCCP commitment validation before apply_without_execution"
-    )]
-    fn apply_without_execution_rejects_invalid_sccp_record_payload_before_state_mutation() {
-        let keypair = crate::state::checked_keypair();
-        let authority = AccountId::new(keypair.public_key().clone());
-        let record =
-            crate::bridge::test_record_sccp_message(b"not a canonical SCCP payload".to_vec());
-        let tx = iroha_data_model::transaction::TransactionBuilder::new(
-            ChainId::from("apply-sccp-invalid-record"),
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_executable(iroha_data_model::transaction::Executable::IvmProved(
-            iroha_data_model::transaction::IvmProved {
-                bytecode: iroha_data_model::transaction::IvmBytecode::from_compiled(vec![
-                    0x01, 0x02, 0x03,
-                ]),
-                overlay: vec![iroha_data_model::isi::InstructionBox::from(record)].into(),
-                events_commitment: Hash::new(b"events"),
-                gas_policy_commitment: Hash::new(b"gas"),
-            },
-        ))
-        .sign(keypair.private_key());
-        let entry_hash = tx.hash_as_entrypoint();
-        let accepted = crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx));
-        let leader = crate::state::checked_keypair();
-        let mut block: SignedBlock = crate::block::BlockBuilder::new(vec![accepted])
-            .chain(0, None)
-            .sign(leader.private_key())
-            .unpack(|_| {})
-            .into();
-        block
-            .set_transaction_results(
-                Vec::new(),
-                &[entry_hash],
-                vec![Ok(
-                    iroha_data_model::transaction::DataTriggerSequence::default(),
-                )],
-            )
-            .expect("test block entrypoint hash should match payload");
-        let committed = crate::block::ValidBlock::committed_from_replay_signed_block(block);
-
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), kura, query);
-        let mut state_block = state.block(committed.as_ref().header());
-
-        let _ = state_block.apply_without_execution(&committed, Vec::new());
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "committed block failed SCCP commitment validation before apply_without_execution"
-    )]
-    fn apply_without_execution_rejects_unbound_sccp_record_route_before_state_mutation() {
-        let keypair = crate::state::checked_keypair();
-        let authority = AccountId::new(keypair.public_key().clone());
-        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
-            version: 1,
-            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-            nonce: 47,
-            route_revision: 1,
-            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            asset_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-            asset_id: b"xor".to_vec(),
-            amount: 1,
-            sender_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-            sender: b"sora:bridge".to_vec(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
-            recipient: vec![0x22; 20],
-            route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-            route_id: b"nexus:bsc:xor".to_vec(),
-        });
-        let record = crate::bridge::test_record_sccp_message(
-            iroha_sccp::canonical_sccp_payload_bytes(&payload)
-                .expect("valid SCCP apply-without-execution fixture payload encodes"),
-        );
-        let tx = iroha_data_model::transaction::TransactionBuilder::new(
-            ChainId::from("apply-sccp-unbound-route"),
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_executable(iroha_data_model::transaction::Executable::IvmProved(
-            iroha_data_model::transaction::IvmProved {
-                bytecode: iroha_data_model::transaction::IvmBytecode::from_compiled(vec![
-                    0x01, 0x02, 0x03,
-                ]),
-                overlay: vec![iroha_data_model::isi::InstructionBox::from(record)].into(),
-                events_commitment: Hash::new(b"events"),
-                gas_policy_commitment: Hash::new(b"gas"),
-            },
-        ))
-        .sign(keypair.private_key());
-        let entry_hash = tx.hash_as_entrypoint();
-        let accepted = crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx));
-        let leader = crate::state::checked_keypair();
-        let mut block: SignedBlock = crate::block::BlockBuilder::new(vec![accepted])
-            .chain(0, None)
-            .sign(leader.private_key())
-            .unpack(|_| {})
-            .into();
-        block
-            .set_transaction_results(
-                Vec::new(),
-                &[entry_hash],
-                vec![Ok(
-                    iroha_data_model::transaction::DataTriggerSequence::default(),
-                )],
-            )
-            .expect("test block entrypoint hash should match payload");
-        let committed = crate::block::ValidBlock::committed_from_replay_signed_block(block);
-
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), kura, query);
-        let mut state_block = state.block(committed.as_ref().header());
-
-        let _ = state_block.apply_without_execution(&committed, Vec::new());
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "committed block failed SCCP commitment validation before apply_without_execution"
-    )]
-    fn apply_without_execution_rejects_scoped_sccp_asset_alias_before_state_mutation() {
-        let keypair = crate::state::checked_keypair();
-        let authority = AccountId::new(keypair.public_key().clone());
-        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
-            version: 1,
-            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-            nonce: 49,
-            route_revision: 1,
-            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            asset_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-            asset_id: b"xor#universal".to_vec(),
-            amount: 1,
-            sender_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-            sender: b"sora:bridge".to_vec(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
-            recipient: vec![0x22; 20],
-            route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-            route_id: b"nexus:eth:xor".to_vec(),
-        });
-        let record = crate::bridge::test_record_sccp_message(
-            iroha_sccp::canonical_sccp_payload_bytes(&payload)
-                .expect("valid SCCP apply-without-execution fixture payload encodes"),
-        );
-        let tx = iroha_data_model::transaction::TransactionBuilder::new(
-            ChainId::from("apply-sccp-scoped-asset-alias"),
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_executable(iroha_data_model::transaction::Executable::IvmProved(
-            iroha_data_model::transaction::IvmProved {
-                bytecode: iroha_data_model::transaction::IvmBytecode::from_compiled(vec![
-                    0x01, 0x02, 0x03,
-                ]),
-                overlay: vec![iroha_data_model::isi::InstructionBox::from(record)].into(),
-                events_commitment: Hash::new(b"events"),
-                gas_policy_commitment: Hash::new(b"gas"),
-            },
-        ))
-        .sign(keypair.private_key());
-        let entry_hash = tx.hash_as_entrypoint();
-        let accepted = crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx));
-        let leader = crate::state::checked_keypair();
-        let mut block: SignedBlock = crate::block::BlockBuilder::new(vec![accepted])
-            .chain(0, None)
-            .sign(leader.private_key())
-            .unpack(|_| {})
-            .into();
-        block
-            .set_transaction_results(
-                Vec::new(),
-                &[entry_hash],
-                vec![Ok(
-                    iroha_data_model::transaction::DataTriggerSequence::default(),
-                )],
-            )
-            .expect("test block entrypoint hash should match payload");
-        let committed = crate::block::ValidBlock::committed_from_replay_signed_block(block);
-
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), kura, query);
-        let mut state_block = state.block(committed.as_ref().header());
-
-        let _ = state_block.apply_without_execution(&committed, Vec::new());
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "committed block failed SCCP commitment validation before apply_without_execution"
-    )]
-    fn apply_without_execution_rejects_resultless_sccp_root_before_state_mutation() {
-        let keypair = crate::state::checked_keypair();
-        let authority = AccountId::new(keypair.public_key().clone());
-        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
-            version: 1,
-            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-            nonce: 45,
-            route_revision: 1,
-            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            asset_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-            asset_id: b"xor".to_vec(),
-            amount: 1,
-            sender_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-            sender: b"sora:bridge".to_vec(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
-            recipient: vec![0x22; 20],
-            route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-            route_id: b"nexus:eth:xor".to_vec(),
-        });
-        let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&payload)
-            .expect("valid SCCP apply-without-execution fixture payload encodes");
-        let record = crate::bridge::test_record_sccp_message(payload_bytes);
-        let tx = iroha_data_model::transaction::TransactionBuilder::new(
-            ChainId::from("apply-sccp-resultless"),
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_executable(iroha_data_model::transaction::Executable::IvmProved(
-            iroha_data_model::transaction::IvmProved {
-                bytecode: iroha_data_model::transaction::IvmBytecode::from_compiled(vec![
-                    0x01, 0x02, 0x03,
-                ]),
-                overlay: vec![iroha_data_model::isi::InstructionBox::from(record)].into(),
-                events_commitment: Hash::new(b"events"),
-                gas_policy_commitment: Hash::new(b"gas"),
-            },
-        ))
-        .sign(keypair.private_key());
-        let accepted = crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx));
-        let leader = crate::state::checked_keypair();
-        let mut block: SignedBlock = crate::block::BlockBuilder::new(vec![accepted])
-            .chain(0, None)
-            .sign(leader.private_key())
-            .unpack(|_| {})
-            .into();
-        let messages = crate::bridge::collect_sccp_messages_from_signed_block(&block);
-        let root = crate::bridge::sccp_commitment_root_from_messages(&messages)
-            .expect("resultless SCCP root");
-        block.set_sccp_commitment_root(Some(root));
-        let committed = crate::block::ValidBlock::committed_from_replay_signed_block(block);
-
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), kura, query);
-        let mut state_block = state.block(committed.as_ref().header());
-
-        let _ = state_block.apply_without_execution(&committed, Vec::new());
-    }
-
-    #[test]
-    fn lane_lifecycle_waits_for_inflight_state_commit_lock() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(World::default(), kura, query));
-        state.nexus.write().enabled = true;
-
-        let plan = iroha_data_model::nexus::LaneLifecyclePlan {
-            additions: vec![LaneConfigModel {
-                id: LaneId::new(1),
-                alias: "serialized-beta".to_string(),
-                ..LaneConfigModel::default()
-            }],
-            retire: Vec::new(),
-        };
-
-        let commit_guard = state.state_commit_lock.lock();
-        let (attempt_tx, attempt_rx) = mpsc::channel();
-        let lifecycle_state = Arc::clone(&state);
-        let handle = thread::spawn(move || {
-            attempt_tx
-                .send(())
-                .expect("notify lifecycle attempt started");
-            lifecycle_state
-                .apply_lane_lifecycle(&plan)
-                .expect("lane lifecycle");
-        });
-
-        attempt_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("lifecycle thread started");
-        thread::sleep(Duration::from_millis(50));
-        assert!(
-            state
-                .nexus_snapshot()
-                .lane_catalog
-                .by_alias("serialized-beta")
-                .is_none(),
-            "manual lifecycle must not publish while a state commit is in progress"
-        );
-
-        drop(commit_guard);
-        handle.join().expect("lane lifecycle thread");
-        assert!(
-            state
-                .nexus_snapshot()
-                .lane_catalog
-                .by_alias("serialized-beta")
-                .is_some(),
-            "manual lifecycle should publish after the state commit lock is released"
-        );
-    }
-
-    #[test]
-    fn heavy_world_commit_bench_helper_commits_accounts() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), kura, query);
-
-        let elapsed = state
-            .commit_heavy_world_accounts_for_bench(nonzero!(1_u64), 16)
-            .expect("heavy world bench commit");
-
-        assert!(elapsed > Duration::ZERO);
-        assert_eq!(state.view().world.accounts().iter().count(), 16);
-    }
+    include!("state/state_commit_lock_order_tests.rs");
 }
 
 #[cfg(test)]
@@ -55643,8 +56191,7 @@ mod tiered_snapshot_diff_tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
         let kura =
             Kura::new_temporary_with_configured_lane_catalog(&config, &lane_config, &catalog)
@@ -58812,745 +59359,7 @@ mod tiered_snapshot_diff_tests {
 
 #[cfg(test)]
 mod transfer_transcript_tests {
-    use iroha_data_model::block::BlockHeader;
-    use iroha_test_samples::{ALICE_ID, BOB_ID};
-    use nonzero_ext::nonzero;
-
-    use super::*;
-    use crate::kura::Kura;
-
-    fn sample_delta(amount: u32) -> TransferDeltaTranscript {
-        TransferDeltaTranscript {
-            from_account: (*ALICE_ID).clone(),
-            to_account: (*BOB_ID).clone(),
-            asset_definition: iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            ),
-            amount: Quantity::from(amount),
-            from_balance_before: Quantity::from(100_u32),
-            from_balance_after: Quantity::from(100_u32.saturating_sub(amount)),
-            to_balance_before: Quantity::zero(),
-            to_balance_after: Quantity::from(amount),
-            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
-            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
-        }
-    }
-
-    #[test]
-    fn transfer_transcripts_flush_into_block_map_on_apply() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(World::default(), Arc::clone(&kura), query);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        let call_hash = iroha_crypto::Hash::prehashed([0_u8; iroha_crypto::Hash::LENGTH]);
-        tx.tx_call_hash = Some(call_hash);
-        let asset_definition: iroha_data_model::asset::AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-        let delta = TransferDeltaTranscript {
-            from_account: (*ALICE_ID).clone(),
-            to_account: (*BOB_ID).clone(),
-            asset_definition,
-            amount: Quantity::zero(),
-            from_balance_before: Quantity::zero(),
-            from_balance_after: Quantity::zero(),
-            to_balance_before: Quantity::zero(),
-            to_balance_after: Quantity::zero(),
-            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
-            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
-        };
-        let expected_poseidon = crate::fastpq::poseidon_preimage_digest(&delta, &call_hash);
-        tx.record_transfer_transcript(&ALICE_ID, delta)
-            .expect("record transcript");
-        assert_eq!(
-            tx.pending_transfer_transcripts[0].poseidon_preimage_digest,
-            Some(expected_poseidon),
-            "single-delta transfer transcript digest should be computed while recording"
-        );
-        tx.apply();
-        let transcripts = block.drain_transfer_transcripts();
-        let entry = transcripts
-            .get(&call_hash)
-            .expect("transcripts recorded for call hash");
-        assert_eq!(entry.len(), 1);
-        let transcript = &entry[0];
-        assert_eq!(
-            transcript.authority_digest,
-            crate::fastpq::authority_digest(&ALICE_ID)
-        );
-        assert_eq!(transcript.poseidon_preimage_digest, Some(expected_poseidon));
-    }
-
-    #[test]
-    fn transfer_transcripts_reject_missing_call_hash() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(World::default(), Arc::clone(&kura), query);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        let asset_definition: iroha_data_model::asset::AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-        let delta = TransferDeltaTranscript {
-            from_account: (*ALICE_ID).clone(),
-            to_account: (*BOB_ID).clone(),
-            asset_definition,
-            amount: Quantity::zero(),
-            from_balance_before: Quantity::zero(),
-            from_balance_after: Quantity::zero(),
-            to_balance_before: Quantity::zero(),
-            to_balance_after: Quantity::zero(),
-            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
-            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
-        };
-        let err = tx
-            .record_transfer_transcript(&ALICE_ID, delta)
-            .expect_err("missing transaction call_hash must fail");
-        assert!(
-            err.to_string().contains("transaction call_hash"),
-            "unexpected error: {err}"
-        );
-        tx.apply();
-        let transcripts = block.drain_transfer_transcripts();
-        assert!(transcripts.is_empty());
-    }
-
-    #[test]
-    fn transfer_transcript_identity_preflight_fails_closed_during_replay() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(World::default(), Arc::clone(&kura), query);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-
-        {
-            let mut transaction = block.transaction();
-            let error = transaction
-                .require_transfer_transcript_identity("test transfer")
-                .expect_err("live transfer without call_hash must fail closed");
-            assert!(error.to_string().contains("transaction call_hash"));
-
-            let call_hash = iroha_crypto::Hash::prehashed([0xA5; iroha_crypto::Hash::LENGTH]);
-            transaction.tx_call_hash = Some(call_hash);
-            assert_eq!(
-                transaction
-                    .require_transfer_transcript_identity("test transfer")
-                    .expect("live transfer with call_hash must pass"),
-                call_hash
-            );
-        }
-
-        block.replay_compatibility = true;
-        let transaction = block.transaction();
-        let error = transaction
-            .require_transfer_transcript_identity("test replay transfer")
-            .expect_err("replay transfer without call_hash must fail closed");
-        assert!(error.to_string().contains("transaction call_hash"));
-    }
-
-    #[test]
-    fn replay_transfer_transcripts_reject_missing_call_hash_without_fastpq_work() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(World::default(), Arc::clone(&kura), query);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        block.replay_compatibility = true;
-        let _guard = crate::sumeragi::witness::exec_witness_guard();
-        crate::sumeragi::witness::start_block();
-        let mut tx = block.transaction();
-
-        tx.record_transfer_transcript(&ALICE_ID, sample_delta(1))
-            .expect_err("replay mode must not bypass transcript identity");
-        assert!(
-            tx.pending_transfer_transcripts.is_empty(),
-            "rejected replay transfer must not stage FASTPQ transcripts"
-        );
-        tx.apply();
-
-        assert!(block.drain_transfer_transcripts().is_empty());
-        let witness = crate::sumeragi::witness::drain_exec_witness();
-        assert!(witness.fastpq_transcripts.is_empty());
-        assert!(witness.fastpq_batches.is_empty());
-    }
-
-    #[test]
-    fn generated_rwa_id_rejects_missing_call_hash() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(World::default(), Arc::clone(&kura), query);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        let domain = DomainId::try_new("wonderland", "universal").unwrap();
-
-        let err = tx
-            .next_generated_rwa_id(&domain, "test")
-            .expect_err("missing transaction call_hash must fail");
-        assert!(
-            err.to_string().contains("transaction call_hash"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn transfer_transcripts_batch_records_multiple_deltas() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(World::default(), Arc::clone(&kura), query);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        tx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
-            [1_u8; iroha_crypto::Hash::LENGTH],
-        ));
-        let asset_definition: iroha_data_model::asset::AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-        let delta_a = TransferDeltaTranscript {
-            from_account: (*ALICE_ID).clone(),
-            to_account: (*BOB_ID).clone(),
-            asset_definition: asset_definition.clone(),
-            amount: Quantity::from(10_u32),
-            from_balance_before: Quantity::from(100_u32),
-            from_balance_after: Quantity::from(90_u32),
-            to_balance_before: Quantity::from(0_u32),
-            to_balance_after: Quantity::from(10_u32),
-            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
-            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
-        };
-        let delta_b = TransferDeltaTranscript {
-            from_account: (*ALICE_ID).clone(),
-            to_account: (*BOB_ID).clone(),
-            asset_definition,
-            amount: Quantity::from(5_u32),
-            from_balance_before: Quantity::from(90_u32),
-            from_balance_after: Quantity::from(85_u32),
-            to_balance_before: Quantity::from(10_u32),
-            to_balance_after: Quantity::from(15_u32),
-            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
-            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
-        };
-        tx.record_transfer_transcripts(&ALICE_ID, vec![delta_a.clone(), delta_b.clone()])
-            .expect("record batch transcript");
-        tx.apply();
-        let transcripts = block.drain_transfer_transcripts();
-        assert_eq!(transcripts.len(), 1);
-        let entry = transcripts.values().next().expect("batch recorded");
-        assert_eq!(entry.len(), 1);
-        let transcript = &entry[0];
-        assert_eq!(transcript.deltas, vec![delta_a, delta_b]);
-        assert_eq!(
-            transcript.authority_digest,
-            crate::fastpq::authority_digest(&ALICE_ID)
-        );
-        assert!(transcript.poseidon_preimage_digest.is_none());
-    }
-
-    #[test]
-    fn transfer_transcripts_batch_flushes_each_recorded_transaction_hash() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(World::default(), Arc::clone(&kura), query);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        let call_hash_a = iroha_crypto::Hash::prehashed([2_u8; iroha_crypto::Hash::LENGTH]);
-        let call_hash_b = iroha_crypto::Hash::prehashed([3_u8; iroha_crypto::Hash::LENGTH]);
-        let asset_definition: iroha_data_model::asset::AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-        let delta_a = TransferDeltaTranscript {
-            from_account: (*ALICE_ID).clone(),
-            to_account: (*BOB_ID).clone(),
-            asset_definition: asset_definition.clone(),
-            amount: Quantity::from(10_u32),
-            from_balance_before: Quantity::from(100_u32),
-            from_balance_after: Quantity::from(90_u32),
-            to_balance_before: Quantity::from(0_u32),
-            to_balance_after: Quantity::from(10_u32),
-            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
-            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
-        };
-        let delta_b = TransferDeltaTranscript {
-            from_account: (*BOB_ID).clone(),
-            to_account: (*ALICE_ID).clone(),
-            asset_definition,
-            amount: Quantity::from(5_u32),
-            from_balance_before: Quantity::from(10_u32),
-            from_balance_after: Quantity::from(5_u32),
-            to_balance_before: Quantity::from(90_u32),
-            to_balance_after: Quantity::from(95_u32),
-            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
-            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
-        };
-        tx.tx_call_hash = Some(call_hash_a);
-        tx.record_transfer_transcript(&ALICE_ID, delta_a.clone())
-            .expect("record first transcript");
-        tx.tx_call_hash = Some(call_hash_b);
-        tx.record_transfer_transcript(&BOB_ID, delta_b.clone())
-            .expect("record second transcript");
-        tx.tx_call_hash = None;
-        tx.apply();
-
-        let transcripts = block.drain_transfer_transcripts();
-        assert_eq!(transcripts.len(), 2);
-        assert_eq!(
-            transcripts
-                .get(&call_hash_a)
-                .expect("first hash transcript")[0]
-                .deltas,
-            vec![delta_a]
-        );
-        assert_eq!(
-            transcripts
-                .get(&call_hash_b)
-                .expect("second hash transcript")[0]
-                .deltas,
-            vec![delta_b]
-        );
-    }
-
-    #[test]
-    fn detached_asset_transfer_matches_sequential_transcript_and_events() {
-        use crate::smartcontracts::Execute as _;
-        use iroha_data_model::isi::Transfer;
-
-        fn build_transfer_world(receiver_asset_balance: Option<u32>) -> (World, AssetId, AssetId) {
-            let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-            let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
-            let asset_definition_id = AssetDefinitionId::derive_from_components(
-                domain_id,
-                "rose".parse().expect("asset name"),
-            );
-            let asset_definition = {
-                let __asset_definition_id = asset_definition_id.clone();
-                AssetDefinition::numeric(
-                    __asset_definition_id.clone(),
-                    "rose".to_owned(),
-                    iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
-                )
-            }
-            .build(&ALICE_ID);
-            let alice_asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
-            let bob_asset_id = AssetId::new(asset_definition_id, BOB_ID.clone());
-            let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(10_u32));
-            let mut assets = vec![alice_asset];
-            if let Some(balance) = receiver_asset_balance {
-                assets.push(Asset::new(bob_asset_id.clone(), Quantity::from(balance)));
-            }
-            let world = World::with_assets(
-                [domain],
-                [alice_account, bob_account],
-                [asset_definition],
-                assets,
-                [],
-            );
-            (world, alice_asset_id, bob_asset_id)
-        }
-
-        fn balance(state: &State, asset_id: &AssetId) -> Quantity {
-            state
-                .view()
-                .world()
-                .assets()
-                .get(asset_id)
-                .map(|value| value.as_ref().clone())
-                .unwrap_or_else(Quantity::zero)
-        }
-
-        let call_hash = iroha_crypto::Hash::prehashed([7_u8; iroha_crypto::Hash::LENGTH]);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-
-        let (world_seq, alice_asset_id, bob_asset_id) = build_transfer_world(None);
-        let kura_seq = Kura::blank_kura_for_testing();
-        let query_seq = crate::query::store::LiveQueryStore::start_test();
-        let state_seq = State::new(world_seq, Arc::clone(&kura_seq), query_seq);
-        let mut block_seq = state_seq.block(header);
-        {
-            let mut tx = block_seq.transaction();
-            tx.tx_call_hash = Some(call_hash);
-            Transfer::asset_quantity(alice_asset_id.clone(), 3_u32, BOB_ID.clone())
-                .execute(&ALICE_ID, &mut tx)
-                .expect("sequential transfer");
-            tx.apply();
-        }
-        let events_seq = block_seq.world.take_external_events();
-        let transcripts_seq = block_seq.drain_transfer_transcripts();
-        block_seq.commit().expect("commit sequential block");
-
-        let (world_det, _, _) = build_transfer_world(None);
-        let kura_det = Kura::blank_kura_for_testing();
-        let query_det = crate::query::store::LiveQueryStore::start_test();
-        let state_det = State::new(world_det, Arc::clone(&kura_det), query_det);
-        let mut block_det = state_det.block(header);
-        let instruction: InstructionBox =
-            Transfer::asset_quantity(alice_asset_id.clone(), 3_u32, BOB_ID.clone()).into();
-        let mut delta = DetachedStateTransactionDelta::default();
-        crate::executor::execute_instruction_detached(&ALICE_ID, &instruction, &mut delta)
-            .expect("detached transfer should be recorded");
-        let delta_for_existing_transaction = delta.clone();
-        delta
-            .merge_into_with_context(
-                &mut block_det,
-                &ALICE_ID,
-                DetachedMergeContext {
-                    tx_call_hash: Some(call_hash),
-                    current_tx_hash: None,
-                    current_lane_id: None,
-                    current_dataspace_id: None,
-                },
-            )
-            .expect("detached transfer merge");
-        let events_det = block_det.world.take_external_events();
-        let transcripts_det = block_det.drain_transfer_transcripts();
-        block_det.commit().expect("commit detached block");
-
-        let (world_existing_tx, _, _) = build_transfer_world(None);
-        let kura_existing_tx = Kura::blank_kura_for_testing();
-        let query_existing_tx = crate::query::store::LiveQueryStore::start_test();
-        let state_existing_tx = State::new(
-            world_existing_tx,
-            Arc::clone(&kura_existing_tx),
-            query_existing_tx,
-        );
-        let mut block_existing_tx = state_existing_tx.block(header);
-        {
-            let mut tx = block_existing_tx.transaction();
-            tx.tx_call_hash = Some(call_hash);
-            delta_for_existing_transaction
-                .merge_single_transfer_into_transaction(&mut tx, &ALICE_ID)
-                .expect("detached delta should be a single transfer")
-                .expect("detached transfer merge into existing transaction");
-            tx.apply();
-        }
-        let events_existing_tx = block_existing_tx.world.take_external_events();
-        let transcripts_existing_tx = block_existing_tx.drain_transfer_transcripts();
-        block_existing_tx
-            .commit()
-            .expect("commit existing-transaction detached block");
-
-        let second_call_hash = iroha_crypto::Hash::prehashed([8_u8; iroha_crypto::Hash::LENGTH]);
-        let (world_batch, _, _) = build_transfer_world(None);
-        let kura_batch = Kura::blank_kura_for_testing();
-        let query_batch = crate::query::store::LiveQueryStore::start_test();
-        let state_batch = State::new(world_batch, Arc::clone(&kura_batch), query_batch);
-        let mut block_batch = state_batch.block(header);
-        let mut first_delta = DetachedStateTransactionDelta::default();
-        let first_instruction: InstructionBox =
-            Transfer::asset_quantity(alice_asset_id.clone(), 3_u32, BOB_ID.clone()).into();
-        crate::executor::execute_instruction_detached(
-            &ALICE_ID,
-            &first_instruction,
-            &mut first_delta,
-        )
-        .expect("first detached transfer should be recorded");
-        let mut second_delta = DetachedStateTransactionDelta::default();
-        let second_instruction: InstructionBox =
-            Transfer::asset_quantity(alice_asset_id.clone(), 2_u32, BOB_ID.clone()).into();
-        crate::executor::execute_instruction_detached(
-            &ALICE_ID,
-            &second_instruction,
-            &mut second_delta,
-        )
-        .expect("second detached transfer should be recorded");
-        {
-            let mut tx = block_batch.transaction();
-            tx.tx_call_hash = Some(call_hash);
-            first_delta
-                .merge_numeric_transfer_batch_into_transaction(&mut tx, &ALICE_ID)
-                .expect("first delta should be a single transfer")
-                .expect("first batch transfer merge");
-            tx.tx_call_hash = Some(second_call_hash);
-            second_delta
-                .merge_numeric_transfer_batch_into_transaction(&mut tx, &ALICE_ID)
-                .expect("second delta should be a single transfer")
-                .expect("second batch transfer merge");
-            tx.tx_call_hash = None;
-            tx.apply();
-        }
-        block_batch.add_committed_fragments(1);
-        assert_eq!(block_batch.committed_fragment_count(), 2);
-        let events_batch = block_batch.world.take_external_events();
-        let transcripts_batch = block_batch.drain_transfer_transcripts();
-        block_batch.commit().expect("commit batch detached block");
-
-        assert_eq!(events_seq, events_det);
-        assert_eq!(events_seq, events_existing_tx);
-        assert_eq!(transcripts_seq, transcripts_det);
-        assert_eq!(transcripts_seq, transcripts_existing_tx);
-        assert_eq!(
-            transcripts_seq.get(&call_hash),
-            transcripts_batch.get(&call_hash)
-        );
-        assert!(
-            transcripts_batch.contains_key(&second_call_hash),
-            "second batch transfer should keep its own transaction call hash"
-        );
-        assert!(
-            events_batch.len() > events_seq.len(),
-            "two-transfer batch should preserve both transfers' event stream"
-        );
-
-        let (world_batch_guard, _, _) = build_transfer_world(Some(0));
-        let kura_batch_guard = Kura::blank_kura_for_testing();
-        let query_batch_guard = crate::query::store::LiveQueryStore::start_test();
-        let state_batch_guard = State::new(
-            world_batch_guard,
-            Arc::clone(&kura_batch_guard),
-            query_batch_guard,
-        );
-        let mut block_batch_guard = state_batch_guard.block(header);
-        let mut batch_guard_tx = block_batch_guard.transaction();
-        assert!(
-            first_delta.supports_numeric_transfer_batch_merge(&batch_guard_tx),
-            "preseeded receiver assets without matching data triggers should batch"
-        );
-
-        let executable = iroha_data_model::transaction::Executable::Instructions(
-            iroha_primitives::const_vec::ConstVec::from(Vec::<InstructionBox>::new()),
-        );
-        let nonmatching_action =
-            crate::smartcontracts::triggers::specialized::SpecializedAction::new(
-                executable.clone(),
-                Repeats::Indefinitely,
-                ALICE_ID.clone(),
-                data_pre::DataEventFilter::Configuration(data_pre::ConfigurationEventFilter::new()),
-            )
-            .expect("test data-trigger action satisfies its authority invariant");
-        batch_guard_tx
-            .world
-            .triggers
-            .add_data_trigger(
-                crate::smartcontracts::triggers::specialized::SpecializedTrigger::new(
-                    "nonmatching_transfer_batch_guard"
-                        .parse()
-                        .expect("trigger id"),
-                    nonmatching_action,
-                ),
-            )
-            .expect("add nonmatching data trigger");
-        assert!(
-            first_delta.supports_numeric_transfer_batch_merge(&batch_guard_tx),
-            "unrelated data triggers should not disable transfer batching"
-        );
-
-        let matching_action = crate::smartcontracts::triggers::specialized::SpecializedAction::new(
-            executable,
-            Repeats::Indefinitely,
-            ALICE_ID.clone(),
-            data_pre::DataEventFilter::Asset(data_pre::AssetEventFilter::new()),
-        )
-        .expect("test data-trigger action satisfies its authority invariant");
-        batch_guard_tx
-            .world
-            .triggers
-            .add_data_trigger(
-                crate::smartcontracts::triggers::specialized::SpecializedTrigger::new(
-                    "matching_transfer_batch_guard".parse().expect("trigger id"),
-                    matching_action,
-                ),
-            )
-            .expect("add matching data trigger");
-        assert!(
-            !first_delta.supports_numeric_transfer_batch_merge(&batch_guard_tx),
-            "matching asset data triggers should keep per-transaction semantics"
-        );
-        drop(batch_guard_tx);
-
-        assert_eq!(balance(&state_det, &alice_asset_id), Quantity::from(7_u32));
-        assert_eq!(balance(&state_det, &bob_asset_id), Quantity::from(3_u32));
-        assert_eq!(
-            balance(&state_existing_tx, &alice_asset_id),
-            Quantity::from(7_u32)
-        );
-        assert_eq!(
-            balance(&state_existing_tx, &bob_asset_id),
-            Quantity::from(3_u32)
-        );
-        assert_eq!(
-            balance(&state_batch, &alice_asset_id),
-            Quantity::from(5_u32)
-        );
-        assert_eq!(balance(&state_batch, &bob_asset_id), Quantity::from(5_u32));
-        assert_eq!(
-            balance(&state_seq, &alice_asset_id),
-            balance(&state_det, &alice_asset_id)
-        );
-        assert_eq!(
-            balance(&state_seq, &bob_asset_id),
-            balance(&state_det, &bob_asset_id)
-        );
-        assert_eq!(
-            balance(&state_seq, &alice_asset_id),
-            balance(&state_existing_tx, &alice_asset_id)
-        );
-        assert_eq!(
-            balance(&state_seq, &bob_asset_id),
-            balance(&state_existing_tx, &bob_asset_id)
-        );
-        let transcript = transcripts_det
-            .get(&call_hash)
-            .and_then(|entry| entry.first())
-            .expect("detached transfer transcript recorded");
-        let transfer_delta = transcript
-            .deltas
-            .first()
-            .expect("single transfer delta recorded");
-        assert_eq!(transfer_delta.from_balance_before, Quantity::from(10_u32));
-        assert_eq!(transfer_delta.from_balance_after, Quantity::from(7_u32));
-        assert_eq!(transfer_delta.to_balance_before, Quantity::zero());
-        assert_eq!(transfer_delta.to_balance_after, Quantity::from(3_u32));
-        assert!(transcript.poseidon_preimage_digest.is_some());
-    }
-
-    #[test]
-    fn detached_multi_transfer_honors_exact_delegation_like_sequential_execution() {
-        use crate::smartcontracts::Execute as _;
-        use iroha_data_model::isi::Transfer;
-
-        fn build_transfer_world(grant_definition: bool) -> (World, AssetId, AssetId) {
-            let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-            let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
-            let asset_definition_id = AssetDefinitionId::derive_from_components(
-                domain_id,
-                "rose".parse().expect("asset name"),
-            );
-            let asset_definition = {
-                let __asset_definition_id = asset_definition_id.clone();
-                AssetDefinition::numeric(
-                    __asset_definition_id.clone(),
-                    "rose".to_owned(),
-                    iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
-                )
-            }
-            .build(&ALICE_ID);
-            let source_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
-            let destination_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-            let mut world = World::with_assets(
-                [domain],
-                [alice_account, bob_account],
-                [asset_definition],
-                [Asset::new(source_id.clone(), Quantity::from(10_u32))],
-                [],
-            );
-            let permission = if grant_definition {
-                iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition {
-                    asset_definition: asset_definition_id,
-                }
-                .into()
-            } else {
-                iroha_executor_data_model::permission::asset::CanTransferAsset {
-                    asset: source_id.clone(),
-                }
-                .into()
-            };
-            let mut permissions = Permissions::new();
-            assert!(permissions.insert(permission));
-            world
-                .account_permissions_mut_for_testing()
-                .insert(BOB_ID.clone(), permissions);
-            (world, source_id, destination_id)
-        }
-
-        fn balance(state: &State, asset_id: &AssetId) -> Quantity {
-            state
-                .view()
-                .world()
-                .assets()
-                .get(asset_id)
-                .map(|value| value.as_ref().clone())
-                .unwrap_or_else(Quantity::zero)
-        }
-
-        let call_hash = iroha_crypto::Hash::prehashed([0xA4; iroha_crypto::Hash::LENGTH]);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-
-        for grant_definition in [false, true] {
-            let (sequential_world, source_id, destination_id) =
-                build_transfer_world(grant_definition);
-            let sequential_state = State::new(
-                sequential_world,
-                Kura::blank_kura_for_testing(),
-                crate::query::store::LiveQueryStore::start_test(),
-            );
-            let mut sequential_block = sequential_state.block(header);
-            {
-                let mut transaction = sequential_block.transaction();
-                transaction.tx_call_hash = Some(call_hash);
-                for amount in [2_u32, 3_u32] {
-                    Transfer::asset_quantity(source_id.clone(), amount, BOB_ID.clone())
-                        .execute(&BOB_ID, &mut transaction)
-                        .expect("exact delegated permission must authorize sequential transfer");
-                }
-                transaction.apply();
-            }
-            let sequential_events = sequential_block.world.take_external_events();
-            let sequential_transcripts = sequential_block.drain_transfer_transcripts();
-            sequential_block
-                .commit()
-                .expect("commit sequential delegated transfers");
-
-            let (detached_world, _, _) = build_transfer_world(grant_definition);
-            let detached_state = State::new(
-                detached_world,
-                Kura::blank_kura_for_testing(),
-                crate::query::store::LiveQueryStore::start_test(),
-            );
-            let mut detached_block = detached_state.block(header);
-            let mut delta = DetachedStateTransactionDelta::default();
-            delta.transfer_asset(source_id.clone(), BOB_ID.clone(), Quantity::from(2_u32));
-            delta.transfer_asset(source_id.clone(), BOB_ID.clone(), Quantity::from(3_u32));
-            assert!(
-                delta.single_transfer_delta().is_none(),
-                "the regression must exercise the general multi-operation merge path"
-            );
-            delta
-                .merge_into_with_context(
-                    &mut detached_block,
-                    &BOB_ID,
-                    DetachedMergeContext {
-                        tx_call_hash: Some(call_hash),
-                        ..DetachedMergeContext::default()
-                    },
-                )
-                .expect("exact delegated permission must authorize detached multi-transfer merge");
-            let detached_events = detached_block.world.take_external_events();
-            let detached_transcripts = detached_block.drain_transfer_transcripts();
-            detached_block
-                .commit()
-                .expect("commit detached delegated transfers");
-
-            assert_eq!(
-                balance(&detached_state, &source_id),
-                balance(&sequential_state, &source_id)
-            );
-            assert_eq!(
-                balance(&detached_state, &destination_id),
-                balance(&sequential_state, &destination_id)
-            );
-            assert_eq!(detached_events, sequential_events);
-            assert_eq!(detached_transcripts, sequential_transcripts);
-        }
-    }
+    include!("state/transfer_transcript_tests.rs");
 }
 
 #[cfg(test)]
@@ -59855,342 +59664,7 @@ mod fastpq_tx_set_hash_tests {
 
 #[cfg(test)]
 mod block_proof_tests {
-    use iroha_crypto::SignatureOf;
-    use iroha_data_model::{
-        ChainId,
-        account::AccountId,
-        block::{BlockHeader, BlockPayload, BlockResult, BlockSignature},
-        transaction::{
-            ExecutionStep,
-            signed::{
-                TransactionBuilder, TransactionEntrypoint, TransactionResult,
-                TransactionResultInner,
-            },
-        },
-        trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
-    };
-    use iroha_primitives::const_vec::ConstVec;
-    use nonzero_ext::nonzero;
-    use norito::codec::{DecodeAll as _, Encode as _};
-
-    use super::*;
-    use crate::kura::Kura;
-
-    #[derive(norito::codec::Decode, norito::codec::Encode)]
-    struct MutableSignedBlockWire {
-        signatures: BTreeSet<BlockSignature>,
-        payload: BlockPayload,
-        result: Option<BlockResult>,
-    }
-
-    fn block_proof_fixture() -> (
-        SignedBlock,
-        HashOf<TransactionEntrypoint>,
-        HashOf<TransactionEntrypoint>,
-    ) {
-        let keypair = crate::state::checked_keypair();
-        let chain: ChainId = "block-proof-tests".parse().expect("chain id");
-        let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(
-            chain,
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .sign(keypair.private_key());
-        let scheduled = TimeTriggerEntrypoint {
-            id: "block_proof_schedule".parse().expect("trigger id"),
-            instructions: ExecutionStep(ConstVec::new_empty()),
-            authority,
-        };
-        let external_hash = tx.hash_as_entrypoint();
-        let scheduled_hash = scheduled.hash_as_entrypoint();
-
-        let external_tree: CanonMerkleTree<TransactionEntrypoint> =
-            [external_hash].into_iter().collect();
-        let header = BlockHeader::new(nonzero!(1_u64), None, external_tree.root(), None, 0, 0);
-        let signature = BlockSignature::new(
-            0,
-            SignatureOf::try_from_hash(keypair.private_key(), header.hash())
-                .expect("test block signing should succeed"),
-        );
-        let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-        block
-            .set_transaction_results(
-                vec![scheduled],
-                &[external_hash, scheduled_hash],
-                vec![
-                    TransactionResultInner::Ok(DataTriggerSequence::default()),
-                    TransactionResultInner::Ok(DataTriggerSequence::default()),
-                ],
-            )
-            .expect("test block entrypoints and results should align");
-        (block, external_hash, scheduled_hash)
-    }
-
-    fn mutate_stored_block(
-        block: &SignedBlock,
-        mutate: impl FnOnce(&mut BlockPayload, &mut BlockResult),
-    ) -> SignedBlock {
-        let encoded = block.encode();
-        let mut wire = MutableSignedBlockWire::decode_all(&mut encoded.as_slice())
-            .expect("fixture block wire should decode into mutable parts");
-        let result = wire.result.as_mut().expect("fixture block has results");
-        mutate(&mut wire.payload, result);
-        SignedBlock::decode_all(&mut wire.encode().as_slice())
-            .expect("tampered fixture should remain a structurally valid block wire")
-    }
-
-    fn proof_error(
-        block: SignedBlock,
-        requested_height: NonZeroU64,
-        entry_hash: HashOf<TransactionEntrypoint>,
-    ) -> BlockProofError {
-        let kura = Kura::blank_kura_for_testing();
-        kura.append_pending_block_for_bench(Arc::new(block));
-        block_proofs_for_entry_from_kura(kura.as_ref(), requested_height, entry_hash)
-            .expect_err("adversarial stored block must not produce a proof")
-    }
-
-    fn assert_entry_geometry_error(
-        error: BlockProofError,
-        entry_hash: HashOf<TransactionEntrypoint>,
-        block_height: NonZeroU64,
-    ) {
-        match error {
-            BlockProofError::MerkleProofUnavailable {
-                entry_hash: actual_entry_hash,
-                block_height: actual_block_height,
-            } => {
-                assert_eq!(actual_entry_hash, entry_hash);
-                assert_eq!(actual_block_height, block_height);
-            }
-            other => panic!("expected canonical entry geometry error, got {other:?}"),
-        }
-    }
-
-    fn assert_result_geometry_error(
-        error: BlockProofError,
-        entry_hash: HashOf<TransactionEntrypoint>,
-        block_height: NonZeroU64,
-    ) {
-        match error {
-            BlockProofError::ExecutionResultMissing {
-                entry_hash: actual_entry_hash,
-                block_height: actual_block_height,
-            } => {
-                assert_eq!(actual_entry_hash, entry_hash);
-                assert_eq!(actual_block_height, block_height);
-            }
-            other => panic!("expected canonical result geometry error, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn block_proofs_for_external_entry_use_full_executed_tree() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let world = World::default();
-        let state = State::new_for_testing(world, Arc::clone(&kura), query);
-        let (block, entry_hash, _) = block_proof_fixture();
-
-        let block_arc = Arc::new(block);
-        kura.store_block(Arc::clone(&block_arc))
-            .expect("store block");
-
-        {
-            let mut hashes = state.block_hashes.block();
-            hashes.push(block_arc.hash());
-            hashes.commit();
-        }
-
-        let proofs = state
-            .block_proofs_for_entry(block_arc.header().height(), entry_hash)
-            .expect("proofs available");
-
-        let external_root = block_arc
-            .header()
-            .merkle_root()
-            .expect("external entry merkle root");
-        let full_entry_root = block_arc
-            .full_entry_merkle_root()
-            .expect("full entry merkle root");
-        assert_ne!(external_root, full_entry_root);
-        assert_eq!(proofs.block_hash, block_arc.hash());
-        assert_eq!(
-            proofs.executed_block_wire_hash,
-            block_arc
-                .executed_block_wire_hash()
-                .expect("executed block wire hash")
-        );
-        assert_eq!(proofs.entry_commitment.root(), &full_entry_root);
-        assert_eq!(proofs.entry_commitment.leaf_count().get(), 2);
-        assert!(proofs.entry_proof.verify(&proofs.entry_commitment));
-
-        let result_root = block_arc
-            .header()
-            .result_merkle_root()
-            .expect("result merkle root");
-        let result_commitment = proofs.result_commitment;
-        assert_eq!(result_commitment.root(), &result_root);
-        assert_eq!(result_commitment.leaf_count().get(), 2);
-        let result_proof = proofs.result_proof;
-        assert!(result_proof.verify(&result_commitment));
-    }
-
-    #[test]
-    fn block_proofs_reject_stored_full_entry_root_drift() {
-        let block_height = nonzero!(1_u64);
-        let (block, external_hash, scheduled_hash) = block_proof_fixture();
-        let canonical_commitment = block
-            .full_entry_merkle_commitment()
-            .expect("fixture full entry commitment");
-        let substituted_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
-            b"substituted stored entry leaf",
-        ));
-        let substituted_tree: CanonMerkleTree<TransactionEntrypoint> =
-            [substituted_hash, scheduled_hash].into_iter().collect();
-        let substituted_commitment = substituted_tree
-            .commitment()
-            .expect("substituted entry commitment");
-        assert_eq!(
-            substituted_commitment.leaf_count(),
-            canonical_commitment.leaf_count()
-        );
-        assert_ne!(substituted_commitment.root(), canonical_commitment.root());
-
-        let tampered = mutate_stored_block(&block, |_, result| {
-            result.merkle = substituted_tree;
-        });
-        assert_entry_geometry_error(
-            proof_error(tampered, block_height, external_hash),
-            external_hash,
-            block_height,
-        );
-    }
-
-    #[test]
-    fn block_proofs_reject_stored_full_entry_count_drift() {
-        let block_height = nonzero!(1_u64);
-        let (block, external_hash, scheduled_hash) = block_proof_fixture();
-        let extra_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
-            b"extra stored entry leaf",
-        ));
-        let substituted_tree: CanonMerkleTree<TransactionEntrypoint> =
-            [external_hash, scheduled_hash, extra_hash]
-                .into_iter()
-                .collect();
-        assert_eq!(substituted_tree.leaf_count(), 3);
-
-        let tampered = mutate_stored_block(&block, |_, result| {
-            result.merkle = substituted_tree;
-        });
-        assert_entry_geometry_error(
-            proof_error(tampered, block_height, external_hash),
-            external_hash,
-            block_height,
-        );
-    }
-
-    #[test]
-    fn block_proofs_reject_stored_result_commitment_drift() {
-        let block_height = nonzero!(1_u64);
-        let (block, external_hash, _) = block_proof_fixture();
-        let canonical_hashes = block.result_hashes().collect::<Vec<_>>();
-        let substituted_hash = HashOf::<TransactionResult>::from_untyped_unchecked(Hash::new(
-            b"substituted stored result leaf",
-        ));
-        let substituted_tree: CanonMerkleTree<TransactionResult> =
-            [substituted_hash, canonical_hashes[1]]
-                .into_iter()
-                .collect();
-        assert_eq!(substituted_tree.leaf_count(), canonical_hashes.len());
-        assert_ne!(substituted_tree.root(), block.header().result_merkle_root());
-
-        let tampered = mutate_stored_block(&block, |_, result| {
-            result.result_merkle = substituted_tree;
-        });
-        assert_result_geometry_error(
-            proof_error(tampered, block_height, external_hash),
-            external_hash,
-            block_height,
-        );
-    }
-
-    #[test]
-    fn block_proofs_reject_header_result_root_drift() {
-        let block_height = nonzero!(1_u64);
-        let (block, external_hash, _) = block_proof_fixture();
-        let substituted_hash = HashOf::<TransactionResult>::from_untyped_unchecked(Hash::new(
-            b"substituted header result leaf",
-        ));
-        let substituted_tree: CanonMerkleTree<TransactionResult> =
-            [substituted_hash].into_iter().collect();
-        let substituted_root = substituted_tree.root();
-        assert_ne!(substituted_root, block.header().result_merkle_root());
-
-        let tampered = mutate_stored_block(&block, |payload, _| {
-            payload.header.result_merkle_root = substituted_root;
-        });
-        assert_result_geometry_error(
-            proof_error(tampered, block_height, external_hash),
-            external_hash,
-            block_height,
-        );
-    }
-
-    #[test]
-    fn block_proofs_reject_self_consistent_result_count_misalignment() {
-        let block_height = nonzero!(1_u64);
-        let (block, external_hash, _) = block_proof_fixture();
-        let tampered = mutate_stored_block(&block, |payload, result| {
-            result.transaction_results.truncate(1);
-            result.result_merkle = result
-                .transaction_results
-                .iter()
-                .map(TransactionResult::hash)
-                .collect();
-            payload.header.result_merkle_root = result.result_merkle.root();
-        });
-        assert_eq!(
-            tampered
-                .result_merkle_commitment()
-                .expect("tampered result commitment")
-                .leaf_count()
-                .get(),
-            1
-        );
-        assert_eq!(
-            tampered
-                .full_entry_merkle_commitment()
-                .expect("tampered entry commitment")
-                .leaf_count()
-                .get(),
-            2
-        );
-        assert_result_geometry_error(
-            proof_error(tampered, block_height, external_hash),
-            external_hash,
-            block_height,
-        );
-    }
-
-    #[test]
-    fn block_proofs_reject_requested_slot_header_height_mismatch() {
-        let requested_height = nonzero!(1_u64);
-        let actual_height = nonzero!(2_u64);
-        let (block, external_hash, _) = block_proof_fixture();
-        let tampered = mutate_stored_block(&block, |payload, _| {
-            payload.header.height = actual_height;
-        });
-
-        match proof_error(tampered, requested_height, external_hash) {
-            BlockProofError::BlockHeightMismatch { requested, actual } => {
-                assert_eq!(requested, requested_height);
-                assert_eq!(actual, actual_height);
-            }
-            other => panic!("expected canonical Kura slot/header error, got {other:?}"),
-        }
-    }
+    include!("state/block_proof_tests.rs");
 }
 
 fn load_verified_v2_replay_artifact(
@@ -60237,14 +59711,22 @@ fn load_verified_v2_replay_artifact(
             "replayed block #{height} v2 finality payload hash does not bind the canonical resultless proposal wire"
         ));
     }
-    let executed_block_wire_hash = block
-        .executed_block_wire_hash()
+    let executed_block_wire = block
+        .encode_wire()
         .wrap_err_with(|| format!("failed to encode replayed executed block #{height}"))?;
+    let executed_block_wire_len = u64::try_from(executed_block_wire.len())
+        .wrap_err_with(|| format!("replayed executed block #{height} length does not fit u64"))?;
+    let executed_block_wire_hash = Hash::new(&executed_block_wire);
     if artifact
         .commit_qc
         .execution_commitment
-        .executed_block_wire_hash
-        != executed_block_wire_hash
+        .executed_block_wire_len
+        != executed_block_wire_len
+        || artifact
+            .commit_qc
+            .execution_commitment
+            .executed_block_wire_hash
+            != executed_block_wire_hash
     {
         return Err(eyre!(
             "replayed block #{height} v2 execution commitment does not bind the exact result-bearing block wire"
@@ -61365,9 +60847,10 @@ fn replay_blocks_from_kura_range_inner(
                 eyre!("failed to derive replayed block #{height} Native AMX manifest: {error}")
             })?;
         let replayed_execution_commitment =
-            crate::sumeragi::exec::execution_commitment_from_witness(
+            crate::sumeragi::exec::execution_commitment_from_validated_block(
                 &witness,
                 &native_amx_manifest,
+                valid_block.as_ref(),
             )
             .map_err(|error| {
                 eyre!("failed to derive replayed block #{height} execution commitment: {error}")
@@ -61460,7 +60943,12 @@ fn replay_blocks_from_kura_range_inner(
         }
         let apply_without_execution_start = Instant::now();
         let _ = state_block
-            .apply_without_execution_with_verified_v2_finality_for_replay(&committed_block, roster);
+            .apply_without_execution_with_verified_v2_finality_for_replay(&committed_block, roster)
+            .map_err(|err| {
+                eyre!(err).wrap_err(format!(
+                    "failed to authorize replayed carrier metadata for block #{height}"
+                ))
+            })?;
         replay_timing.apply_without_execution += apply_without_execution_start.elapsed();
         let staged_merge_entry = state_block.staged_merge_entry().cloned();
         state_block.prepare_replay_checkpoint_preview();
@@ -61500,3011 +60988,10 @@ fn replay_blocks_from_kura_range_inner(
 mod strict_replay_tests;
 
 #[cfg(test)]
-mod replay_validation_tests {
-    use std::sync::Arc;
-
-    use iroha_data_model::{
-        ChainId, ValidationFail,
-        account::AccountId,
-        asset::{AssetDefinition, AssetDefinitionId, AssetId},
-        block::{SignedBlock, consensus_v2::ConsensusMode},
-        isi::{InstructionBox, Log, Mint, Register, SetKeyValue},
-        name::Name,
-        nexus::{
-            AssetPermissionManifest, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
-            LaneConfig, LaneId, LaneVisibility, ManifestVersion, UniversalAccountId,
-        },
-        peer::PeerId,
-        prelude::{Account, Domain, DomainId},
-        transaction::{TransactionBuilder, error::TransactionRejectionReason},
-    };
-    use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-
-    use super::*;
-
-    fn run_replay_validation_test_on_stack(name: &'static str, test: fn()) {
-        // The full replay pipeline has deep debug-mode stack use; do not depend on libtest's
-        // platform-default worker stack for these integration-heavy scenarios.
-        let handle = std::thread::Builder::new()
-            .name(name.to_owned())
-            .stack_size(16 * 1024 * 1024)
-            .spawn(test)
-            .expect("spawn replay validation test");
-        if let Err(payload) = handle.join() {
-            std::panic::resume_unwind(payload);
-        }
-    }
-
-    fn replay_blocks_from_kura(
-        kura: &Arc<Kura>,
-        state: &mut State,
-        topology: &crate::sumeragi::network_topology::Topology,
-        block_count: usize,
-        fallback_consensus_mode: ConsensusMode,
-    ) -> Result<()> {
-        replay_blocks_from_kura_range(
-            kura,
-            state,
-            topology,
-            1,
-            block_count,
-            fallback_consensus_mode,
-        )
-    }
-
-    /// Exercise legacy fixture blocks without weakening the production v2 replay boundary.
-    ///
-    /// Historical unit fixtures predate v2 finality artifacts. Production callers resolve to the
-    /// parent-module function, which never enters this test-only adapter.
-    pub(super) fn replay_blocks_from_kura_range(
-        kura: &Arc<Kura>,
-        state: &mut State,
-        topology: &crate::sumeragi::network_topology::Topology,
-        start_height: usize,
-        block_count: usize,
-        fallback_consensus_mode: ConsensusMode,
-    ) -> Result<()> {
-        if block_count == 0 || start_height > block_count {
-            return Ok(());
-        }
-        let genesis_account = state
-            .view()
-            .world()
-            .domain(&iroha_genesis::GENESIS_DOMAIN_ID)
-            .map_err(|error| eyre!(error))?
-            .owned_by()
-            .clone();
-        let time_source = TimeSource::new_system();
-        for height in start_height..=block_count {
-            let nz = NonZeroUsize::new(height).expect("test replay height is non-zero");
-            let Some(block) = kura.get_block(nz) else {
-                if super::hash_only_replay_snapshot_hash(kura, state, nz)?.is_some() {
-                    continue;
-                }
-                return Err(eyre!("missing block at height {height} during replay"));
-            };
-            let signed = block.as_ref().clone();
-            let height = signed.header().height().get();
-            let checkpoint = kura
-                .wsv_checkpoint(height)?
-                .ok_or_else(|| eyre!("missing WSV checkpoint for full block #{height}"))?;
-            let roster_snapshot = state.commit_roster_snapshot_for_block(height, signed.hash());
-            let roster = roster_snapshot
-                .as_ref()
-                .map(|snapshot| {
-                    if snapshot.commit_qc.validator_set.is_empty() {
-                        snapshot.validator_checkpoint.validator_set.clone()
-                    } else {
-                        snapshot.commit_qc.validator_set.clone()
-                    }
-                })
-                .filter(|roster| !roster.is_empty())
-                .unwrap_or_else(|| topology.as_ref().to_vec());
-            let mut validation_topology =
-                crate::sumeragi::network_topology::Topology::new(roster.clone());
-            let view = signed.header().view_change_index();
-            let (mode, seed) = {
-                let state_view = state.view();
-                (
-                    crate::sumeragi::effective_consensus_mode(&state_view, fallback_consensus_mode),
-                    crate::sumeragi::prf_seed_for_height(&state_view, height),
-                )
-            };
-            match mode {
-                ConsensusMode::Permissioned => {
-                    validation_topology.canonicalize_order();
-                    validation_topology.shuffle_prf(seed, height);
-                    validation_topology.nth_rotation(view);
-                }
-                ConsensusMode::Npos => {
-                    let leader = validation_topology.leader_index_prf(seed, height, view);
-                    validation_topology.rotate_preserve_view_to_front(leader);
-                }
-            }
-            let mut voting_block = None;
-            let (valid, mut state_block) = ValidBlock::validate_keep_voting_block_for_replay(
-                signed.clone(),
-                &validation_topology,
-                &state.chain_id,
-                &genesis_account,
-                &time_source,
-                state,
-                &mut voting_block,
-                false,
-                false,
-            )
-            .unpack(|_| {})
-            .map_err(|(_block, error)| eyre!(error))
-            .wrap_err_with(|| format!("failed to validate block #{height} during replay"))?;
-            let committed = valid.commit_unchecked().unpack(|_| {});
-            ensure_replayed_results_match_committed(height, &signed, committed.as_ref())
-                .wrap_err_with(|| {
-                    format!(
-                        "failed to verify replayed block #{height} against committed execution results"
-                    )
-                })?;
-            state_block.replay_compatibility = true;
-            prune_restored_commit_qcs_for_replay(&mut state_block, height);
-            let _ = state_block.apply_without_execution_with_commit_qc_for_replay(
-                &committed,
-                roster,
-                roster_snapshot.as_ref().map(|snapshot| &snapshot.commit_qc),
-            );
-            state_block.prepare_replay_checkpoint_preview();
-            let actual = crate::snapshot::canonical_staged_state_snapshot_hash(&state_block);
-            if actual != checkpoint.state_hash() {
-                return Err(eyre!(
-                    "replayed block #{height} WSV checkpoint mismatch: committed={:?} replayed={actual:?}",
-                    checkpoint.state_hash()
-                ));
-            }
-            state_block
-                .commit()
-                .map_err(|error| eyre!(error))
-                .wrap_err_with(|| format!("failed to commit replayed block #{height}"))?;
-        }
-        Ok(())
-    }
-
-    fn new_genesis_account(
-        account_id: &iroha_data_model::account::AccountId,
-    ) -> iroha_data_model::account::NewAccount {
-        Account::new(account_id.clone())
-    }
-
-    fn configure_replay_fixture_parameters(state: &State) {
-        let mut parameters = state.world.parameters.block();
-        parameters.sumeragi.key_require_hsm = false;
-        parameters.set_parameter(iroha_data_model::parameter::system::Parameter::Custom(
-            SumeragiNposParameters::default().into_custom_parameter(),
-        ));
-        parameters.commit();
-    }
-
-    fn rebind_test_execution_context_validators_and_resign(
-        block: &mut SignedBlock,
-        topology: &crate::sumeragi::network_topology::Topology,
-        private_key: &iroha_crypto::PrivateKey,
-    ) {
-        let mut context = block
-            .execution_context()
-            .cloned()
-            .expect("state-free block fixture must carry execution context");
-        let mut validators = topology.as_ref().to_vec();
-        validators.sort();
-        validators.dedup();
-        let validator_count =
-            u32::try_from(validators.len()).expect("test validator count fits u32");
-        let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-            validators.len(),
-        ))
-        .expect("test quorum fits u32");
-        for ownership in &mut context.lane_payload_ownerships {
-            ownership.lane_block_descriptor_validator_set = validators.clone();
-            ownership.lane_block_descriptor_validator_count = validator_count;
-            ownership.lane_block_descriptor_min_quorum = min_quorum;
-            let hashes = ownership
-                .compute_replay_hashes()
-                .expect("rebind state-free execution-context replay hashes");
-            ownership.subject_hash = hashes.subject_hash;
-            ownership.payload_ownership_hash = hashes.payload_ownership_hash;
-            ownership.rbc_instance_hash = hashes.rbc_instance_hash;
-            ownership.lane_block_descriptor_hash = Some(hashes.lane_block_descriptor_hash);
-        }
-        block.set_execution_context(Some(context));
-        let signature = iroha_data_model::block::BlockSignature::new(
-            0,
-            iroha_crypto::SignatureOf::try_from_hash(private_key, block.header().hash())
-                .expect("re-sign rebound test execution context"),
-        );
-        block
-            .replace_signatures(std::collections::BTreeSet::from([signature]))
-            .expect("replace rebound block signature");
-    }
-
-    fn clear_test_execution_context_and_resign(
-        block: &mut SignedBlock,
-        private_key: &iroha_crypto::PrivateKey,
-    ) {
-        block.set_execution_context(None);
-        let signature = iroha_data_model::block::BlockSignature::new(
-            0,
-            iroha_crypto::SignatureOf::try_from_hash(private_key, block.header().hash())
-                .expect("re-sign legacy replay fixture"),
-        );
-        block
-            .replace_signatures(std::collections::BTreeSet::from([signature]))
-            .expect("replace legacy replay fixture signature");
-    }
-
-    fn previous_roster_evidence_for_parent(
-        parent: &SignedBlock,
-        roster: &[PeerId],
-    ) -> iroha_data_model::consensus::PreviousRosterEvidence {
-        let zero_state_root = iroha_crypto::Hash::prehashed([0_u8; iroha_crypto::Hash::LENGTH]);
-        let mut signers_bitmap = vec![0_u8; roster.len().div_ceil(8)];
-        if let Some(first_byte) = signers_bitmap.first_mut() {
-            *first_byte = 1;
-        }
-        iroha_data_model::consensus::PreviousRosterEvidence {
-            height: parent.header().height().get(),
-            block_hash: parent.hash(),
-            validator_checkpoint: iroha_data_model::consensus::ValidatorSetCheckpoint::new(
-                parent.header().height().get(),
-                parent.header().view_change_index(),
-                parent.hash(),
-                zero_state_root,
-                zero_state_root,
-                roster.to_vec(),
-                signers_bitmap,
-                Vec::new(),
-                iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-                None,
-            ),
-            stake_snapshot: None,
-        }
-    }
-
-    fn commit_replay_validated_block_with_options(
-        state: &State,
-        topology: &crate::sumeragi::network_topology::Topology,
-        block: SignedBlock,
-        chain_id: &ChainId,
-        genesis_account: &AccountId,
-        skip_block_signatures: bool,
-        store_wsv_checkpoint: bool,
-    ) -> SignedBlock {
-        let time_source = TimeSource::new_system();
-        let mut voting_block = None;
-        let validation = if skip_block_signatures {
-            ValidBlock::validate_keep_voting_block_for_replay(
-                block,
-                topology,
-                chain_id,
-                genesis_account,
-                &time_source,
-                state,
-                &mut voting_block,
-                false,
-                true,
-            )
-        } else {
-            ValidBlock::validate_keep_voting_block(
-                block,
-                topology,
-                chain_id,
-                genesis_account,
-                &time_source,
-                state,
-                &mut voting_block,
-                false,
-            )
-        };
-        let (valid_block, mut state_block) = validation
-            .unpack(|_| {})
-            .expect("block validates for replay fixture");
-        let committed = valid_block.commit_unchecked().unpack(|_| {});
-        let committed_signed = committed.as_ref().clone();
-        state
-            .kura
-            .store_block(Arc::new(committed_signed.clone()))
-            .expect("store committed replay fixture block");
-        let _events = state_block.apply_without_execution(&committed, topology.as_ref().to_vec());
-        state_block.prepare_replay_checkpoint_preview();
-        let staged_hash = crate::snapshot::canonical_staged_state_snapshot_hash(&state_block);
-        state_block.commit().expect("commit replay fixture block");
-        assert_eq!(
-            staged_hash,
-            crate::snapshot::canonical_state_snapshot_hash(state),
-            "staged canonical snapshot hash must equal the exact committed WSV hash"
-        );
-        if store_wsv_checkpoint {
-            state
-                .kura
-                .store_wsv_checkpoint(
-                    committed_signed.header().height().get(),
-                    committed_signed.hash(),
-                    crate::snapshot::canonical_state_snapshot_hash(state),
-                )
-                .expect("store committed replay fixture WSV checkpoint");
-        }
-        committed_signed
-    }
-
-    fn commit_replay_validated_block_with_signature_mode(
-        state: &State,
-        topology: &crate::sumeragi::network_topology::Topology,
-        block: SignedBlock,
-        chain_id: &ChainId,
-        genesis_account: &AccountId,
-        skip_block_signatures: bool,
-    ) -> SignedBlock {
-        commit_replay_validated_block_with_options(
-            state,
-            topology,
-            block,
-            chain_id,
-            genesis_account,
-            skip_block_signatures,
-            true,
-        )
-    }
-
-    fn commit_replay_validated_block(
-        state: &State,
-        topology: &crate::sumeragi::network_topology::Topology,
-        block: SignedBlock,
-        chain_id: &ChainId,
-        genesis_account: &AccountId,
-    ) -> SignedBlock {
-        commit_replay_validated_block_with_signature_mode(
-            state,
-            topology,
-            block,
-            chain_id,
-            genesis_account,
-            false,
-        )
-    }
-
-    fn configure_private_replay_route(
-        state: &mut State,
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-    ) {
-        let lane_catalog = LaneCatalog::new(
-            std::num::NonZeroU32::new(4).expect("non-zero lane count"),
-            vec![
-                LaneConfig::default(),
-                LaneConfig {
-                    id: lane_id,
-                    dataspace_id,
-                    alias: "private-fixture".to_owned(),
-                    visibility: LaneVisibility::Restricted,
-                    ..LaneConfig::default()
-                },
-            ],
-        )
-        .expect("lane catalog");
-        let dataspace_catalog = DataSpaceCatalog::new(vec![
-            DataSpaceMetadata::default(),
-            DataSpaceMetadata {
-                id: dataspace_id,
-                alias: "private-fixture".to_owned(),
-                description: Some("private replay fixture dataspace".to_owned()),
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("dataspace catalog");
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.enabled = true;
-            nexus.lane_catalog = lane_catalog;
-            nexus.dataspace_catalog = dataspace_catalog.clone();
-            nexus.routing_policy.default_lane = lane_id;
-            nexus.routing_policy.default_dataspace = dataspace_id;
-        }
-    }
-
-    fn replay_fixture_state(
-        kura: Arc<Kura>,
-        chain_id: ChainId,
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-    ) -> State {
-        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-        let world = World::with(
-            [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
-            [new_genesis_account(&genesis_id).build(&genesis_id)],
-            [],
-        );
-        let mut state = State::new_with_chain(
-            world,
-            kura,
-            crate::query::store::LiveQueryStore::start_test(),
-            chain_id,
-        );
-        configure_private_replay_route(&mut state, lane_id, dataspace_id);
-        let configured_nexus = state.nexus.get_mut().clone();
-        state.install_pre_genesis_nexus_for_testing(configured_nexus);
-        let manifests = {
-            let nexus = state.nexus.get_mut();
-            Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance))
-        };
-        state.install_lane_manifests(&manifests);
-        configure_replay_fixture_parameters(&state);
-        state
-    }
-
-    fn seed_space_directory_manifest_for_legacy_checkpoint_test(
-        state: &State,
-        dataspace: DataSpaceId,
-    ) {
-        let uaid = UniversalAccountId::from_hash(iroha_crypto::Hash::new(
-            b"strict-replay-legacy-checkpoint-surface",
-        ));
-        let manifest = AssetPermissionManifest {
-            version: ManifestVersion::default(),
-            uaid,
-            dataspace,
-            issued_ms: 0,
-            activation_epoch: 1,
-            expiry_epoch: None,
-            entries: Vec::new(),
-        };
-        let mut record = crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(manifest);
-        record.lifecycle.mark_activated(1);
-        let mut set = crate::nexus::space_directory::SpaceDirectoryManifestSet::default();
-        set.upsert(record);
-        let mut manifests = state.world.space_directory_manifests.block();
-        manifests.insert(uaid, set);
-        manifests.commit();
-    }
-
-    fn replay_missing_checkpoint_fixture(
-        checkpoint_exists_only_at_later_height: bool,
-    ) -> (eyre::Report, usize) {
-        let suffix = if checkpoint_exists_only_at_later_height {
-            "before-first-present"
-        } else {
-            "height-one"
-        };
-        let chain_id = ChainId::try_from(format!("iroha:test:missing-replay-checkpoint:{suffix}"))
-            .expect("canonical replay-checkpoint test chain id");
-        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-        let tx = TransactionBuilder::new(
-            chain_id.clone(),
-            genesis_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
-        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-        let genesis = SignedBlock::genesis(
-            vec![tx],
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
-            None,
-            None,
-        );
-        let leader =
-            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
-            leader.public_key().clone(),
-        )]);
-        let kura = Kura::blank_kura_for_testing();
-        kura.store_block(Arc::new(genesis.clone()))
-            .expect("store genesis without checkpoint");
-
-        let block_count = if checkpoint_exists_only_at_later_height {
-            let block2 = crate::block::BlockBuilder::new(Vec::new())
-                .chain(0, Some(&genesis))
-                .sign(leader.private_key())
-                .unpack(|_| {});
-            let block2: SignedBlock = block2.into();
-            kura.store_block(Arc::new(block2.clone()))
-                .expect("store later block");
-            kura.store_wsv_checkpoint(
-                2,
-                block2.hash(),
-                iroha_crypto::Hash::new(b"unreachable later checkpoint"),
-            )
-            .expect("store checkpoint only after the missing prefix");
-            2
-        } else {
-            1
-        };
-
-        let world = World::with(
-            [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
-            [new_genesis_account(&genesis_id).build(&genesis_id)],
-            [],
-        );
-        let mut state = State::new_with_chain(
-            world,
-            Arc::clone(&kura),
-            crate::query::store::LiveQueryStore::start_test(),
-            chain_id,
-        );
-        let err = replay_blocks_from_kura(
-            &kura,
-            &mut state,
-            &topology,
-            block_count,
-            ConsensusMode::Permissioned,
-        )
-        .expect_err("full-body replay must require an exact WSV checkpoint at every height");
-        let height = state.view().height();
-        (err, height)
-    }
-
-    #[test]
-    fn replay_rejects_missing_wsv_checkpoint_at_height_one() {
-        let (err, height) = replay_missing_checkpoint_fixture(false);
-        assert_eq!(err.to_string(), "missing WSV checkpoint for full block #1");
-        assert_eq!(
-            height, 0,
-            "missing checkpoint must fail before WSV mutation"
-        );
-    }
-
-    #[test]
-    fn replay_rejects_missing_checkpoint_before_first_present_checkpoint() {
-        let (err, height) = replay_missing_checkpoint_fixture(true);
-        assert_eq!(err.to_string(), "missing WSV checkpoint for full block #1");
-        assert_eq!(
-            height, 0,
-            "a later checkpoint cannot authorize an unbound prefix"
-        );
-    }
-
-    #[test]
-    fn replay_always_rejects_corrupted_genesis_signature() {
-        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-        let genesis_account = iroha_data_model::account::AccountId::new(
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
-        );
-
-        let tx = TransactionBuilder::new(
-            chain_id,
-            genesis_account.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
-        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-
-        let rogue_signer = crate::state::checked_keypair();
-        let bad_block = SignedBlock::genesis(vec![tx], rogue_signer.private_key(), None, None);
-
-        let kura = Kura::blank_kura_for_testing();
-        let block_arc = Arc::new(bad_block);
-        kura.store_block(Arc::clone(&block_arc))
-            .expect("store corrupted genesis");
-        kura.store_wsv_checkpoint(
-            1,
-            block_arc.hash(),
-            iroha_crypto::Hash::new(b"unreachable corrupted genesis checkpoint"),
-        )
-        .expect("store checkpoint so signature validation is exercised");
-
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let world = World::with(
-            [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account)],
-            [new_genesis_account(&genesis_account).build(&genesis_account)],
-            [],
-        );
-        let mut state = State::new(world, Arc::clone(&kura), query_handle);
-
-        let leader =
-            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let topology = crate::sumeragi::network_topology::Topology::new(vec![
-            iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
-        ]);
-
-        let err =
-            replay_blocks_from_kura(&kura, &mut state, &topology, 1, ConsensusMode::Permissioned)
-                .expect_err("replay must never bypass a corrupt block signature");
-        assert!(
-            err.to_string()
-                .contains("failed to validate block #1 during replay"),
-            "unexpected replay rejection: {err:?}"
-        );
-        assert_eq!(
-            state.view().height(),
-            0,
-            "invalid block must not mutate WSV"
-        );
-    }
-
-    #[test]
-    fn replay_skips_hash_only_blocks_only_when_restored_state_hash_matches() {
-        let chain_id = ChainId::from("iroha:test:hash-only-replay");
-        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-        let make_state = |kura: Arc<Kura>| {
-            let world = World::with(
-                [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
-                [new_genesis_account(&genesis_id).build(&genesis_id)],
-                [],
-            );
-            State::new_with_chain(
-                world,
-                kura,
-                crate::query::store::LiveQueryStore::start_test(),
-                chain_id.clone(),
-            )
-        };
-
-        let kura = Kura::blank_kura_for_testing();
-        let snapshot_hash =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x7A; Hash::LENGTH]));
-        kura.extend_hash_only_prefix_from_snapshot(&[snapshot_hash])
-            .expect("install hash-only snapshot prefix");
-        let height = NonZeroUsize::new(1).expect("non-zero test height");
-        assert!(kura.is_hash_only_block_height(height));
-        assert!(kura.get_block(height).is_none());
-
-        let leader =
-            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
-            leader.public_key().clone(),
-        )]);
-        let mut restored_state = make_state(Arc::clone(&kura));
-        restored_state.push_block_hash_for_testing(snapshot_hash);
-        replay_blocks_from_kura_range(
-            &kura,
-            &mut restored_state,
-            &topology,
-            1,
-            1,
-            ConsensusMode::Permissioned,
-        )
-        .expect("hash-only block covered by the restored state snapshot should be skipped");
-
-        let mut unhydrated_state = make_state(Arc::clone(&kura));
-        let missing_snapshot = replay_blocks_from_kura_range(
-            &kura,
-            &mut unhydrated_state,
-            &topology,
-            1,
-            1,
-            ConsensusMode::Permissioned,
-        )
-        .expect_err("hash-only replay requires a restored state hash");
-        assert!(
-            missing_snapshot
-                .to_string()
-                .contains("not covered by the restored state block-hash list"),
-            "{missing_snapshot:?}"
-        );
-
-        let mut mismatched_state = make_state(Arc::clone(&kura));
-        mismatched_state.push_block_hash_for_testing(
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x7B; Hash::LENGTH])),
-        );
-        let mismatch = replay_blocks_from_kura_range(
-            &kura,
-            &mut mismatched_state,
-            &topology,
-            1,
-            1,
-            ConsensusMode::Permissioned,
-        )
-        .expect_err("hash-only replay requires the restored state hash to match Kura");
-        assert!(
-            mismatch
-                .to_string()
-                .contains("does not match restored state hash"),
-            "{mismatch:?}"
-        );
-    }
-
-    #[test]
-    fn replay_from_height_catches_up_state() {
-        run_replay_validation_test_on_stack(
-            "replay_from_height_catches_up_state",
-            replay_from_height_catches_up_state_impl,
-        );
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn replay_from_height_catches_up_state_impl() {
-        use std::borrow::Cow;
-
-        use iroha_crypto::Algorithm;
-        use iroha_data_model::peer::PeerId;
-        use iroha_genesis::GENESIS_DOMAIN_ID;
-
-        let chain_id = ChainId::from("iroha:test:partial-replay");
-        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-        let leader = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
-            leader.public_key().clone(),
-        )]);
-
-        let user_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
-        let user_domain_id: DomainId = DomainId::try_new("users", "universal").expect("domain id");
-        let user_id = iroha_data_model::account::AccountId::new(user_keypair.public_key().clone());
-        let tx_genesis = TransactionBuilder::new(
-            chain_id.clone(),
-            genesis_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
-        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-        let genesis_block = SignedBlock::genesis(
-            vec![tx_genesis],
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
-            None,
-            None,
-        );
-
-        let tx_block2 = TransactionBuilder::new(
-            chain_id.clone(),
-            user_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(iroha_logger::Level::INFO, "block2".to_owned())])
-        .sign(user_keypair.private_key());
-        let accepted_block2 =
-            crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block2));
-        let block2 = crate::block::BlockBuilder::new(vec![accepted_block2])
-            .chain(0, Some(&genesis_block))
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let signed_block2: SignedBlock = block2.into();
-
-        let tx_block3 = TransactionBuilder::new(
-            chain_id.clone(),
-            user_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(iroha_logger::Level::INFO, "block3".to_owned())])
-        .sign(user_keypair.private_key());
-        let accepted_block3 =
-            crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block3));
-        let block3 = crate::block::BlockBuilder::new(vec![accepted_block3])
-            .chain(0, Some(&signed_block2))
-            .with_previous_roster_evidence(Some(previous_roster_evidence_for_parent(
-                &signed_block2,
-                topology.as_ref(),
-            )))
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let signed_block3: SignedBlock = block3.into();
-
-        let make_world = || {
-            World::with(
-                [
-                    Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id),
-                    Domain::new(user_domain_id.clone()).build(&genesis_id),
-                ],
-                [
-                    new_genesis_account(&genesis_id).build(&genesis_id),
-                    Account::new(user_id.clone()).build(&genesis_id),
-                ],
-                [],
-            )
-        };
-        let kura = Kura::blank_kura_for_testing();
-        let materialize_state = State::new_with_chain(
-            make_world(),
-            Arc::clone(&kura),
-            crate::query::store::LiveQueryStore::start_test(),
-            chain_id.clone(),
-        );
-        configure_replay_fixture_parameters(&materialize_state);
-        let genesis_block = commit_replay_validated_block(
-            &materialize_state,
-            &topology,
-            genesis_block,
-            &chain_id,
-            &genesis_id,
-        );
-        let signed_block2 = commit_replay_validated_block(
-            &materialize_state,
-            &topology,
-            signed_block2,
-            &chain_id,
-            &genesis_id,
-        );
-        let signed_block3 = commit_replay_validated_block_with_options(
-            &materialize_state,
-            &topology,
-            signed_block3,
-            &chain_id,
-            &genesis_id,
-            false,
-            false,
-        );
-        kura.store_block(Arc::new(genesis_block))
-            .expect("store genesis");
-        kura.store_block(Arc::new(signed_block2.clone()))
-            .expect("store block2");
-        kura.store_block(Arc::new(signed_block3.clone()))
-            .expect("store block3");
-
-        let mut state = State::new_with_chain(
-            make_world(),
-            Arc::clone(&kura),
-            crate::query::store::LiveQueryStore::start_test(),
-            chain_id.clone(),
-        );
-        configure_replay_fixture_parameters(&state);
-
-        replay_blocks_from_kura(&kura, &mut state, &topology, 2, ConsensusMode::Permissioned)
-            .expect("replay first two blocks");
-        assert_eq!(state.view().height(), 2);
-
-        let missing_checkpoint = replay_blocks_from_kura_range(
-            &kura,
-            &mut state,
-            &topology,
-            3,
-            3,
-            ConsensusMode::Permissioned,
-        )
-        .expect_err("range replay must reject a missing full-body checkpoint");
-        assert!(
-            missing_checkpoint
-                .to_string()
-                .contains("missing WSV checkpoint for full block #3"),
-            "{missing_checkpoint:?}"
-        );
-        assert_eq!(state.view().height(), 2);
-
-        kura.store_wsv_checkpoint(
-            3,
-            signed_block3.hash(),
-            crate::snapshot::canonical_state_snapshot_hash(&materialize_state),
-        )
-        .expect("store block3 checkpoint");
-        replay_blocks_from_kura_range(
-            &kura,
-            &mut state,
-            &topology,
-            3,
-            3,
-            ConsensusMode::Permissioned,
-        )
-        .expect("replay remaining block");
-        let view = state.view();
-        assert_eq!(view.height(), 3);
-        assert_eq!(view.latest_block_hash(), Some(signed_block3.hash()));
-    }
-
-    #[test]
-    fn replay_rotates_topology_for_npos_prf_leader() {
-        run_replay_validation_test_on_stack(
-            "replay_rotates_topology_for_npos_prf_leader",
-            replay_rotates_topology_for_npos_prf_leader_impl,
-        );
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn replay_rotates_topology_for_npos_prf_leader_impl() {
-        use std::borrow::Cow;
-
-        use iroha_crypto::Algorithm;
-        use iroha_data_model::{
-            parameter::system::{Parameter, SumeragiConsensusMode, SumeragiNposParameters},
-            peer::PeerId,
-        };
-        use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisTopologyEntry};
-        use iroha_test_samples::{
-            SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
-        };
-
-        let chain_id = ChainId::from("iroha:test:npos-replay");
-        let peer_a = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let peer_b = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let peers = vec![
-            PeerId::new(peer_a.public_key().clone()),
-            PeerId::new(peer_b.public_key().clone()),
-        ];
-        let topology = crate::sumeragi::network_topology::Topology::new(peers.clone());
-
-        let height = 2;
-        let view = 0u64;
-        let seed = (1u8..=255)
-            .map(|byte| [byte; 32])
-            .find(|candidate| topology.leader_index_prf(*candidate, height, view) != 0)
-            .expect("seed should select non-zero leader index");
-        let leader_index = topology.leader_index_prf(seed, height, view);
-        assert_ne!(leader_index, 0, "leader rotation must be exercised");
-
-        let npos_params = SumeragiNposParameters {
-            epoch_seed: seed,
-            ..Default::default()
-        };
-
-        let topology_entries = vec![
-            GenesisTopologyEntry::new(
-                PeerId::new(peer_a.public_key().clone()),
-                iroha_crypto::bls_normal_pop_prove(peer_a.private_key()).expect("generate pop a"),
-            ),
-            GenesisTopologyEntry::new(
-                PeerId::new(peer_b.public_key().clone()),
-                iroha_crypto::bls_normal_pop_prove(peer_b.private_key()).expect("generate pop b"),
-            ),
-        ];
-
-        let (user_id, user_keypair) = gen_account_in("wonderland");
-        let mut genesis_builder =
-            GenesisBuilder::new_without_executor(chain_id.clone(), "ivm/libs/not/installed")
-                .set_topology(topology_entries)
-                .append_parameter(Parameter::Custom(npos_params.into_custom_parameter()));
-        genesis_builder = genesis_builder
-            .domain(DomainId::try_new("wonderland", "universal").expect("domain id"))
-            .account(user_keypair.public_key().clone())
-            .finish_domain();
-        let genesis_block = genesis_builder
-            .build_raw()
-            .with_consensus_mode(SumeragiConsensusMode::Npos)
-            .with_consensus_meta()
-            .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-            .expect("genesis");
-        let genesis_signed = genesis_block.0.clone();
-
-        let kura = Kura::blank_kura_for_testing();
-        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-        let make_world = || {
-            World::with(
-                [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
-                [new_genesis_account(&genesis_id).build(&genesis_id)],
-                [],
-            )
-        };
-
-        let tx = TransactionBuilder::new(
-            chain_id.clone(),
-            user_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(
-            iroha_logger::Level::INFO,
-            "npos replay".to_owned(),
-        )])
-        .sign(user_keypair.private_key());
-        let accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let mut base_topology = crate::sumeragi::network_topology::Topology::new(peers.clone());
-        base_topology.block_committed(peers.clone(), genesis_signed.hash());
-        let leader_peer = base_topology
-            .as_ref()
-            .get(leader_index)
-            .expect("leader index within topology");
-        let signer = if leader_peer.public_key() == peer_a.public_key() {
-            peer_a.private_key()
-        } else {
-            peer_b.private_key()
-        };
-        let new_block = crate::block::BlockBuilder::new(vec![accepted])
-            .chain(0, Some(&genesis_signed))
-            .sign(signer)
-            .unpack(|_| {});
-        let mut signed_block: SignedBlock = new_block.into();
-        let mut validation_topology =
-            crate::sumeragi::network_topology::Topology::new(peers.clone());
-        validation_topology.rotate_preserve_view_to_front(leader_index);
-        rebind_test_execution_context_validators_and_resign(
-            &mut signed_block,
-            &validation_topology,
-            signer,
-        );
-        let block_arc = Arc::new(signed_block);
-        let materialize_state = State::new_with_chain(
-            make_world(),
-            Arc::clone(&kura),
-            crate::query::store::LiveQueryStore::start_test(),
-            chain_id.clone(),
-        );
-        configure_replay_fixture_parameters(&materialize_state);
-        let genesis_signed = commit_replay_validated_block(
-            &materialize_state,
-            &topology,
-            genesis_signed,
-            &chain_id,
-            &genesis_id,
-        );
-        let signed_block = commit_replay_validated_block(
-            &materialize_state,
-            &validation_topology,
-            (*block_arc).clone(),
-            &chain_id,
-            &genesis_id,
-        );
-        kura.store_block(Arc::new(genesis_signed))
-            .expect("store genesis");
-        kura.store_block(Arc::new(signed_block))
-            .expect("store block");
-
-        let mut state = State::new_with_chain(
-            make_world(),
-            Arc::clone(&kura),
-            crate::query::store::LiveQueryStore::start_test(),
-            chain_id.clone(),
-        );
-        {
-            let mut params_block = state.world.parameters.block();
-            params_block.sumeragi.key_require_hsm = false;
-            params_block.commit();
-        }
-
-        replay_blocks_from_kura(&kura, &mut state, &topology, 2, ConsensusMode::Npos)
-            .expect("replay should validate prf leader");
-        assert_eq!(state.view().height(), 2);
-    }
-
-    #[test]
-    fn replay_uses_commit_roster_journal_for_signature_order() {
-        run_replay_validation_test_on_stack(
-            "replay_uses_commit_roster_journal_for_signature_order",
-            replay_uses_commit_roster_journal_for_signature_order_impl,
-        );
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn replay_uses_commit_roster_journal_for_signature_order_impl() {
-        use std::borrow::Cow;
-
-        use iroha_config::{
-            base::WithOrigin,
-            kura::InitMode,
-            parameters::actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
-        };
-        use iroha_crypto::Algorithm;
-        use iroha_data_model::{consensus::VALIDATOR_SET_HASH_VERSION_V1, peer::PeerId};
-        use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisTopologyEntry};
-        use iroha_test_samples::{
-            SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
-        };
-
-        let chain_id = ChainId::from("iroha:test:replay-roster-journal");
-        let temp_dir = tempfile::tempdir().expect("temp dir");
-        let kura_cfg = KuraConfig {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().join("kura")),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
-        };
-        let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
-
-        let peer_a = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let peer_b = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let roster = vec![
-            PeerId::new(peer_b.public_key().clone()),
-            PeerId::new(peer_a.public_key().clone()),
-        ];
-        let topology_entries = vec![
-            GenesisTopologyEntry::new(
-                roster[0].clone(),
-                iroha_crypto::bls_normal_pop_prove(peer_b.private_key()).expect("generate pop b"),
-            ),
-            GenesisTopologyEntry::new(
-                roster[1].clone(),
-                iroha_crypto::bls_normal_pop_prove(peer_a.private_key()).expect("generate pop a"),
-            ),
-        ];
-
-        let (user_id, user_keypair) = gen_account_in("wonderland");
-        let mut genesis_builder =
-            GenesisBuilder::new_without_executor(chain_id.clone(), "ivm/libs/not/installed")
-                .set_topology(topology_entries);
-        genesis_builder = genesis_builder
-            .domain(DomainId::try_new("wonderland", "universal").expect("domain id"))
-            .account(user_keypair.public_key().clone())
-            .finish_domain();
-        let genesis_block = genesis_builder
-            .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-            .expect("genesis");
-        let genesis_signed = genesis_block.0.clone();
-
-        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-        let world = World::with(
-            [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
-            [new_genesis_account(&genesis_id).build(&genesis_id)],
-            [],
-        );
-        let state = State::new_with_chain(
-            world,
-            Arc::clone(&kura),
-            crate::query::store::LiveQueryStore::start_test(),
-            chain_id.clone(),
-        );
-        {
-            let mut params_block = state.world.parameters.block();
-            params_block.sumeragi.key_require_hsm = false;
-            params_block.commit();
-        }
-        let genesis_signed = commit_replay_validated_block_with_options(
-            &state,
-            &crate::sumeragi::network_topology::Topology::new(roster.clone()),
-            genesis_signed,
-            &chain_id,
-            &genesis_id,
-            false,
-            true,
-        );
-        kura.store_block(Arc::new(genesis_signed.clone()))
-            .expect("store genesis");
-        configure_replay_fixture_parameters(&state);
-
-        let tx = TransactionBuilder::new(
-            chain_id.clone(),
-            user_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(
-            iroha_logger::Level::INFO,
-            "replay roster journal".to_owned(),
-        )])
-        .sign(user_keypair.private_key());
-        let accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let new_block = crate::block::BlockBuilder::new(vec![accepted])
-            .chain(0, Some(&genesis_signed))
-            .sign(peer_b.private_key())
-            .unpack(|_| {});
-        let mut signed_block: SignedBlock = new_block.into();
-        let height = signed_block.header().height().get();
-        let view = signed_block.header().view_change_index();
-        let prf_seed = {
-            let view = state.view();
-            crate::sumeragi::prf_seed_for_height(&view, height)
-        };
-        // Align the block signature with replay's PRF-rotated topology.
-        let mut signature_topology =
-            crate::sumeragi::network_topology::Topology::new(roster.clone());
-        signature_topology.canonicalize_order();
-        signature_topology.shuffle_prf(prf_seed, height);
-        signature_topology.nth_rotation(view);
-        let signer_key = if signature_topology.leader().public_key() == peer_a.public_key() {
-            peer_a.private_key()
-        } else {
-            peer_b.private_key()
-        };
-        rebind_test_execution_context_validators_and_resign(
-            &mut signed_block,
-            &signature_topology,
-            signer_key,
-        );
-
-        let signed_block = commit_replay_validated_block_with_options(
-            &state,
-            &signature_topology,
-            signed_block,
-            &chain_id,
-            &genesis_id,
-            false,
-            true,
-        );
-        kura.store_block(Arc::new(signed_block.clone()))
-            .expect("store block");
-
-        let signatures: Vec<_> = signed_block.signatures().cloned().collect();
-        let mut signers_bitmap = vec![0u8; roster.len().div_ceil(8)];
-        for signature in &signatures {
-            let idx = usize::try_from(signature.index()).unwrap_or(usize::MAX);
-            if idx < roster.len() {
-                signers_bitmap[idx / 8] |= 1u8 << (idx % 8);
-            }
-        }
-        let block_hash = signed_block.hash();
-        let validator_set_hash = HashOf::new(&roster);
-        let commit_cert = Qc {
-            phase: crate::sumeragi::consensus::Phase::Commit,
-            subject_block_hash: block_hash,
-            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            height,
-            view,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash,
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: roster.clone(),
-            aggregate: crate::sumeragi::consensus::QcAggregate {
-                signers_bitmap: signers_bitmap.clone(),
-                bls_aggregate_signature: Vec::new(),
-            },
-        };
-        let checkpoint = ValidatorSetCheckpoint::new(
-            height,
-            view,
-            block_hash,
-            commit_cert.parent_state_root,
-            commit_cert.post_state_root,
-            roster,
-            signers_bitmap,
-            Vec::new(),
-            VALIDATOR_SET_HASH_VERSION_V1,
-            None,
-        );
-        state
-            .record_commit_roster(&commit_cert, &checkpoint, None)
-            .expect("commit-roster test setup should retain known journal durability");
-
-        let replay_world = World::with(
-            [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
-            [new_genesis_account(&genesis_id).build(&genesis_id)],
-            [],
-        );
-        let mut replay_state = State::new_with_chain(
-            replay_world,
-            Arc::clone(&kura),
-            crate::query::store::LiveQueryStore::start_test(),
-            chain_id.clone(),
-        );
-        {
-            let mut params_block = replay_state.world.parameters.block();
-            params_block.sumeragi.key_require_hsm = false;
-            params_block.commit();
-        }
-
-        let fallback_topology = crate::sumeragi::network_topology::Topology::new(vec![
-            PeerId::new(peer_a.public_key().clone()),
-            PeerId::new(peer_b.public_key().clone()),
-        ]);
-
-        replay_blocks_from_kura_range(
-            &kura,
-            &mut replay_state,
-            &fallback_topology,
-            1,
-            1,
-            ConsensusMode::Permissioned,
-        )
-        .expect("replay permissioned genesis before installing test-only penalty parameters");
-        configure_replay_fixture_parameters(&replay_state);
-        replay_blocks_from_kura_range(
-            &kura,
-            &mut replay_state,
-            &fallback_topology,
-            2,
-            2,
-            ConsensusMode::Permissioned,
-        )
-        .expect("replay should honor commit roster journal ordering");
-        assert_eq!(replay_state.view().height(), 2);
-    }
-
-    #[test]
-    fn replay_rejects_non_authoritative_signature_topology_rotation() {
-        run_replay_validation_test_on_stack(
-            "replay_rejects_non_authoritative_signature_rotation",
-            replay_rejects_non_authoritative_signature_topology_rotation_impl,
-        );
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn replay_rejects_non_authoritative_signature_topology_rotation_impl() {
-        use std::borrow::Cow;
-
-        use iroha_crypto::Algorithm;
-        use iroha_data_model::{DomainId, account::AccountId, peer::PeerId};
-        use iroha_genesis::GENESIS_DOMAIN_ID;
-
-        let chain_id = ChainId::from("iroha:test:replay-signature-rotation-recovery");
-        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-        let user_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
-        let user_domain: DomainId = DomainId::try_new("users", "universal").expect("domain id");
-        let user_id = AccountId::new(user_keypair.public_key().clone());
-
-        crate::sumeragi::status::reset_commit_certs_for_tests();
-        crate::sumeragi::status::reset_validator_checkpoints_for_tests();
-
-        let peer_a = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let peer_b = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let fallback_peers = vec![
-            PeerId::new(peer_a.public_key().clone()),
-            PeerId::new(peer_b.public_key().clone()),
-        ];
-        let fallback_topology =
-            crate::sumeragi::network_topology::Topology::new(fallback_peers.clone());
-
-        let tx_genesis = TransactionBuilder::new(
-            chain_id.clone(),
-            genesis_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
-        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-        let genesis_block = SignedBlock::genesis(
-            vec![tx_genesis],
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
-            None,
-            None,
-        );
-
-        let world = World::with(
-            [
-                Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id),
-                Domain::new(user_domain.clone()).build(&genesis_id),
-            ],
-            [
-                new_genesis_account(&genesis_id).build(&genesis_id),
-                Account::new(user_id.clone()).build(&genesis_id),
-            ],
-            [],
-        );
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, Arc::clone(&kura), query, chain_id.clone());
-        configure_replay_fixture_parameters(&state);
-        let genesis_block = commit_replay_validated_block(
-            &state,
-            &fallback_topology,
-            genesis_block,
-            &chain_id,
-            &genesis_id,
-        );
-        kura.store_block(Arc::new(genesis_block.clone()))
-            .expect("store genesis");
-
-        let height = 2_u64;
-        let view = 0_u64;
-        let prf_seed = {
-            let state_view = state.view();
-            crate::sumeragi::prf_seed_for_height(&state_view, height)
-        };
-        let mut expected_topology =
-            crate::sumeragi::network_topology::Topology::new(fallback_peers);
-        expected_topology.canonicalize_order();
-        expected_topology.shuffle_prf(prf_seed, height);
-        expected_topology.nth_rotation(view);
-        let leader_is_peer_a = expected_topology.leader().public_key() == peer_a.public_key();
-        let mismatched_signer = if leader_is_peer_a {
-            peer_b.private_key()
-        } else {
-            peer_a.private_key()
-        };
-
-        let tx_block2 = TransactionBuilder::new(
-            chain_id.clone(),
-            user_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(
-            iroha_logger::Level::INFO,
-            "signature-rotation-replay".to_owned(),
-        )])
-        .sign(user_keypair.private_key());
-        let accepted_block2 =
-            crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block2));
-        let block2 = crate::block::BlockBuilder::new(vec![accepted_block2])
-            .chain(0, Some(&genesis_block))
-            // Produce a block then rewrite signatures to a deterministic index/signer mismatch.
-            .sign(mismatched_signer)
-            .unpack(|_| {});
-        let mut signed_block2: SignedBlock = block2.into();
-        rebind_test_execution_context_validators_and_resign(
-            &mut signed_block2,
-            &expected_topology,
-            mismatched_signer,
-        );
-
-        let signed_block2 = commit_replay_validated_block_with_signature_mode(
-            &state,
-            &expected_topology,
-            signed_block2,
-            &chain_id,
-            &genesis_id,
-            true,
-        );
-        kura.store_block(Arc::new(signed_block2.clone()))
-            .expect("store block2");
-
-        let replay_world = World::with(
-            [
-                Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id),
-                Domain::new(user_domain.clone()).build(&genesis_id),
-            ],
-            [
-                new_genesis_account(&genesis_id).build(&genesis_id),
-                Account::new(user_id.clone()).build(&genesis_id),
-            ],
-            [],
-        );
-        let mut replay_state = State::new_with_chain(
-            replay_world,
-            Arc::clone(&kura),
-            crate::query::store::LiveQueryStore::start_test(),
-            chain_id,
-        );
-        configure_replay_fixture_parameters(&replay_state);
-
-        let err = replay_blocks_from_kura(
-            &kura,
-            &mut replay_state,
-            &fallback_topology,
-            2,
-            ConsensusMode::Permissioned,
-        )
-        .expect_err("replay must not retry a failed block under non-authoritative rotations");
-        assert_eq!(
-            replay_state.view().height(),
-            1,
-            "wrong-leader block must not mutate WSV"
-        );
-        assert_eq!(
-            replay_state.view().latest_block_hash(),
-            Some(genesis_block.hash())
-        );
-        assert!(
-            err.to_string()
-                .contains("failed to validate block #2 during replay"),
-            "unexpected replay rejection: {err:?}"
-        );
-    }
-
-    #[test]
-    fn replay_rejects_committed_execution_result_mismatch_without_mutating_that_block() {
-        run_replay_validation_test_on_stack(
-            "replay_rejects_result_mismatch",
-            replay_rejects_committed_execution_result_mismatch_impl,
-        );
-    }
-
-    fn replay_rejects_committed_execution_result_mismatch_impl() {
-        use std::borrow::Cow;
-
-        use iroha_crypto::{Algorithm, Hash};
-        use iroha_data_model::transaction::signed::TransactionResultInner;
-
-        let chain_id = ChainId::from("iroha:test:replay-result-mismatch");
-        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-        let leader = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
-            leader.public_key().clone(),
-        )]);
-        let user_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
-        let user_domain_id: DomainId = DomainId::try_new("users", "universal").expect("domain id");
-        let user_id = AccountId::new(user_keypair.public_key().clone());
-        let make_world = || {
-            World::with(
-                [
-                    Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id),
-                    Domain::new(user_domain_id.clone()).build(&genesis_id),
-                ],
-                [
-                    new_genesis_account(&genesis_id).build(&genesis_id),
-                    Account::new(user_id.clone()).build(&genesis_id),
-                ],
-                [],
-            )
-        };
-
-        let kura = Kura::blank_kura_for_testing();
-        let materialize_state = State::new_with_chain(
-            make_world(),
-            Arc::clone(&kura),
-            crate::query::store::LiveQueryStore::start_test(),
-            chain_id.clone(),
-        );
-        configure_replay_fixture_parameters(&materialize_state);
-
-        let tx_genesis = TransactionBuilder::new(
-            chain_id.clone(),
-            genesis_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
-        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-        let genesis_block = SignedBlock::genesis(
-            vec![tx_genesis],
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
-            None,
-            None,
-        );
-        let genesis_block = commit_replay_validated_block(
-            &materialize_state,
-            &topology,
-            genesis_block,
-            &chain_id,
-            &genesis_id,
-        );
-        kura.store_block(Arc::new(genesis_block.clone()))
-            .expect("store genesis");
-
-        let tx_block2 = TransactionBuilder::new(
-            chain_id.clone(),
-            user_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(
-            iroha_logger::Level::INFO,
-            "result mismatch".to_owned(),
-        )])
-        .sign(user_keypair.private_key());
-        let accepted_block2 =
-            crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block2));
-        let block2 = crate::block::BlockBuilder::new(vec![accepted_block2])
-            .chain(0, Some(&genesis_block))
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let mut signed_block2: SignedBlock = block2.into();
-        let entry_hashes = signed_block2
-            .external_entrypoints_cloned()
-            .map(|entrypoint| entrypoint.hash())
-            .collect::<Vec<_>>();
-        let bad_result: TransactionResultInner = Err(TransactionRejectionReason::Validation(
-            ValidationFail::NotPermitted("forced mismatch".to_owned()),
-        ));
-        signed_block2
-            .set_transaction_results(Vec::new(), &entry_hashes, vec![bad_result])
-            .expect("test block entrypoint hash should match payload");
-        let block2_hash = signed_block2.hash();
-        kura.store_block(Arc::new(signed_block2))
-            .expect("store mismatched block");
-        kura.store_wsv_checkpoint(2, block2_hash, Hash::new(b"not the replayed WSV"))
-            .expect("store mismatched block WSV checkpoint");
-
-        let mut replay_state = State::new_with_chain(
-            make_world(),
-            Arc::clone(&kura),
-            crate::query::store::LiveQueryStore::start_test(),
-            chain_id,
-        );
-        configure_replay_fixture_parameters(&replay_state);
-
-        let err = replay_blocks_from_kura(
-            &kura,
-            &mut replay_state,
-            &topology,
-            2,
-            ConsensusMode::Permissioned,
-        )
-        .expect_err("replay must reject committed execution results that it cannot reproduce");
-        assert!(
-            err.to_string()
-                .contains("failed to verify replayed block #2 against committed execution results"),
-            "unexpected replay rejection: {err:?}"
-        );
-        assert_eq!(
-            replay_state.view().height(),
-            1,
-            "the result-mismatched block must be discarded atomically"
-        );
-        assert_eq!(
-            replay_state.view().latest_block_hash(),
-            Some(genesis_block.hash())
-        );
-    }
-
-    #[test]
-    fn replay_rejects_exact_wsv_checkpoint_mismatch() {
-        run_replay_validation_test_on_stack(
-            "replay_rejects_wsv_checkpoint_mismatch",
-            replay_rejects_exact_wsv_checkpoint_mismatch_impl,
-        );
-    }
-
-    fn replay_rejects_exact_wsv_checkpoint_mismatch_impl() {
-        use std::borrow::Cow;
-
-        use iroha_crypto::{Algorithm, Hash};
-
-        let chain_id = ChainId::from("iroha:test:replay-wsv-checkpoint-mismatch");
-        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-        let leader = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
-            leader.public_key().clone(),
-        )]);
-        let user_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
-        let user_domain_id: DomainId = DomainId::try_new("users", "universal").expect("domain id");
-        let user_id = AccountId::new(user_keypair.public_key().clone());
-        let make_world = || {
-            World::with(
-                [
-                    Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id),
-                    Domain::new(user_domain_id.clone()).build(&genesis_id),
-                ],
-                [
-                    new_genesis_account(&genesis_id).build(&genesis_id),
-                    Account::new(user_id.clone()).build(&genesis_id),
-                ],
-                [],
-            )
-        };
-
-        let kura = Kura::blank_kura_for_testing();
-        let materialize_state = State::new_with_chain(
-            make_world(),
-            Arc::clone(&kura),
-            crate::query::store::LiveQueryStore::start_test(),
-            chain_id.clone(),
-        );
-        configure_replay_fixture_parameters(&materialize_state);
-
-        let tx_genesis = TransactionBuilder::new(
-            chain_id.clone(),
-            genesis_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
-        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-        let genesis_block = SignedBlock::genesis(
-            vec![tx_genesis],
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
-            None,
-            None,
-        );
-        let genesis_block = commit_replay_validated_block(
-            &materialize_state,
-            &topology,
-            genesis_block,
-            &chain_id,
-            &genesis_id,
-        );
-        kura.store_block(Arc::new(genesis_block.clone()))
-            .expect("store genesis");
-
-        let tx_block2 = TransactionBuilder::new(
-            chain_id.clone(),
-            user_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(
-            iroha_logger::Level::INFO,
-            "checkpoint mismatch".to_owned(),
-        )])
-        .sign(user_keypair.private_key());
-        let accepted_block2 =
-            crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block2));
-        let block2 = crate::block::BlockBuilder::new(vec![accepted_block2])
-            .chain(0, Some(&genesis_block))
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let signed_block2 = commit_replay_validated_block(
-            &materialize_state,
-            &topology,
-            block2.into(),
-            &chain_id,
-            &genesis_id,
-        );
-        kura.store_block(Arc::new(signed_block2.clone()))
-            .expect("store block2");
-        let correct_checkpoint = crate::snapshot::canonical_state_snapshot_hash(&materialize_state);
-        kura.overwrite_wsv_checkpoint_without_validation_for_tests(
-            2,
-            Hash::new(b"not the replayed canonical WSV"),
-            None,
-        )
-        .expect("overwrite block2 WSV checkpoint");
-
-        let mut replay_state = State::new_with_chain(
-            make_world(),
-            Arc::clone(&kura),
-            crate::query::store::LiveQueryStore::start_test(),
-            chain_id,
-        );
-        configure_replay_fixture_parameters(&replay_state);
-
-        replay_blocks_from_kura_range(
-            &kura,
-            &mut replay_state,
-            &topology,
-            1,
-            1,
-            ConsensusMode::Permissioned,
-        )
-        .expect("genesis replay establishes the exact pre-block state");
-        let before_bytes = crate::snapshot::canonical_state_snapshot_bytes(&replay_state);
-        let before_height = replay_state.committed_height();
-        let before_hash = replay_state.latest_block_hash_fast();
-        let before_merge = replay_state.merge_ledger.snapshot();
-
-        let err = replay_blocks_from_kura_range(
-            &kura,
-            &mut replay_state,
-            &topology,
-            2,
-            2,
-            ConsensusMode::Permissioned,
-        )
-        .expect_err("replay must reject a WSV checkpoint with a forged state hash");
-        assert!(
-            err.to_string()
-                .contains("replayed block #2 WSV checkpoint mismatch"),
-            "unexpected replay rejection: {err:?}"
-        );
-        assert_eq!(replay_state.committed_height(), before_height);
-        assert_eq!(replay_state.latest_block_hash_fast(), before_hash);
-        assert_eq!(
-            crate::snapshot::canonical_state_snapshot_bytes(&replay_state),
-            before_bytes,
-            "checkpoint rejection must leave the live WSV byte-for-byte unchanged"
-        );
-        let after_merge = replay_state.merge_ledger.snapshot();
-        assert_eq!(after_merge.len(), before_merge.len());
-        assert!(
-            after_merge
-                .iter()
-                .zip(&before_merge)
-                .all(|(after, before)| after.as_ref() == before.as_ref()),
-            "checkpoint rejection must not publish merge-cache entries"
-        );
-
-        kura.overwrite_wsv_checkpoint_without_validation_for_tests(2, correct_checkpoint, None)
-            .expect("replace unbound forged checkpoint with the exact canonical state hash");
-        replay_blocks_from_kura_range(
-            &kura,
-            &mut replay_state,
-            &topology,
-            2,
-            2,
-            ConsensusMode::Permissioned,
-        )
-        .expect("corrected checkpoint must replay successfully after atomic rejection");
-        assert_eq!(replay_state.committed_height(), 2);
-        assert_eq!(
-            replay_state.latest_block_hash_fast(),
-            Some(signed_block2.hash())
-        );
-    }
-
-    #[test]
-    fn replay_rejects_legacy_space_directory_checkpoint_surface() {
-        run_replay_validation_test_on_stack(
-            "replay_rejects_legacy_checkpoint_surface",
-            replay_rejects_legacy_space_directory_checkpoint_surface_impl,
-        );
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
-        use std::borrow::Cow;
-
-        use iroha_crypto::Algorithm;
-        use iroha_primitives::json::Json;
-
-        let chain_id = ChainId::from("iroha:test:legacy-route-replay");
-        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-        let lane_id = LaneId::new(3);
-        let dataspace_id = DataSpaceId::new(10);
-        let leader = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
-            leader.public_key().clone(),
-        )]);
-        let kura = Kura::blank_kura_for_testing();
-        let original_state =
-            replay_fixture_state(Arc::clone(&kura), chain_id.clone(), lane_id, dataspace_id);
-        seed_space_directory_manifest_for_legacy_checkpoint_test(&original_state, dataspace_id);
-        let proof_policies = |height| {
-            crate::da::active_proof_policy_bundle_at_height(
-                &original_state.nexus_snapshot(),
-                height,
-            )
-        };
-
-        let tx_genesis = TransactionBuilder::new(
-            chain_id.clone(),
-            genesis_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
-        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-        let genesis_block = SignedBlock::genesis_with_da_proof_policies(
-            vec![tx_genesis],
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
-            None,
-            None,
-            Some(proof_policies(1)),
-        );
-        let genesis_block = commit_replay_validated_block(
-            &original_state,
-            &topology,
-            genesis_block,
-            &chain_id,
-            &genesis_id,
-        );
-        kura.store_block(Arc::new(genesis_block.clone()))
-            .expect("store genesis");
-
-        let user_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
-        let user_id = AccountId::new(user_keypair.public_key().clone());
-        let domain_id = DomainId::try_new("settlement", "private-fixture").expect("domain id");
-        let asset_definition_id = AssetDefinitionId::derive_from_components(
-            domain_id.clone(),
-            "credit".parse().expect("asset definition name"),
-        );
-        let asset_id = AssetId::of(asset_definition_id.clone(), user_id.clone());
-        let instructions = vec![
-            InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
-            InstructionBox::from(Register::account(Account::new(user_id.clone()))),
-            InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
-                asset_definition_id.clone(),
-                "credit".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            ))),
-            InstructionBox::from(Mint::asset_quantity(7_u32, asset_id.clone())),
-            InstructionBox::from(SetKeyValue::account(
-                user_id.clone(),
-                "tier".parse::<Name>().expect("account metadata key"),
-                Json::new("preferred"),
-            )),
-            InstructionBox::from(SetKeyValue::domain(
-                domain_id.clone(),
-                "quota".parse::<Name>().expect("domain metadata key"),
-                Json::new(7_u32),
-            )),
-            InstructionBox::from(SetKeyValue::asset_definition(
-                asset_definition_id,
-                "class".parse::<Name>().expect("asset metadata key"),
-                Json::new("retail"),
-            )),
-        ];
-        let tx = TransactionBuilder::new(
-            chain_id.clone(),
-            genesis_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions::<InstructionBox>(instructions)
-        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-        let accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let block = crate::block::BlockBuilder::new(vec![accepted])
-            .chain(0, Some(&genesis_block))
-            .with_da_proof_policies(Some(proof_policies(2)))
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let mut legacy_block: SignedBlock = block.into();
-        clear_test_execution_context_and_resign(&mut legacy_block, leader.private_key());
-        assert!(
-            legacy_block.execution_context().is_none(),
-            "legacy fixture must exercise replay compatibility without an execution context"
-        );
-        let legacy_block = commit_replay_validated_block_with_signature_mode(
-            &original_state,
-            &topology,
-            legacy_block,
-            &chain_id,
-            &genesis_id,
-            true,
-        );
-        assert!(legacy_block.has_results());
-        kura.store_block(Arc::new(legacy_block.clone()))
-            .expect("store legacy block");
-        let canonical_prefix =
-            crate::snapshot::canonical_state_snapshot_bytes_for_tests(&original_state);
-
-        let block3_instructions = vec![
-            InstructionBox::from(Mint::asset_quantity(5_u32, asset_id.clone())),
-            InstructionBox::from(SetKeyValue::account(
-                user_id.clone(),
-                "status".parse::<Name>().expect("account metadata key"),
-                Json::new("settled"),
-            )),
-            InstructionBox::from(SetKeyValue::domain(
-                domain_id.clone(),
-                "window".parse::<Name>().expect("domain metadata key"),
-                Json::new(2_u32),
-            )),
-        ];
-        let block3_tx = TransactionBuilder::new(
-            chain_id.clone(),
-            genesis_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions::<InstructionBox>(block3_instructions)
-        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-        let block3_accepted =
-            crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(block3_tx));
-        let block3 = crate::block::BlockBuilder::new(vec![block3_accepted])
-            .chain(0, Some(&legacy_block))
-            .with_previous_roster_evidence(Some(previous_roster_evidence_for_parent(
-                &legacy_block,
-                topology.as_ref(),
-            )))
-            .with_da_proof_policies(Some(proof_policies(3)))
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let mut legacy_block3: SignedBlock = block3.into();
-        clear_test_execution_context_and_resign(&mut legacy_block3, leader.private_key());
-        assert!(
-            legacy_block3.execution_context().is_none(),
-            "multi-block legacy fixture must retain missing-context replay compatibility"
-        );
-        let legacy_block3 = commit_replay_validated_block_with_signature_mode(
-            &original_state,
-            &topology,
-            legacy_block3,
-            &chain_id,
-            &genesis_id,
-            true,
-        );
-        assert!(legacy_block3.has_results());
-        kura.store_block(Arc::new(legacy_block3.clone()))
-            .expect("store second legacy block");
-        let canonical_checkpoint = crate::snapshot::canonical_state_snapshot_hash(&original_state);
-        let legacy_checkpoint =
-            crate::snapshot::legacy_state_snapshot_hash_without_space_directory_manifests(
-                &original_state,
-            );
-        assert_ne!(
-            canonical_checkpoint, legacy_checkpoint,
-            "test fixture must distinguish the exact first-release WSV from the retired surface"
-        );
-        kura.overwrite_wsv_checkpoint_without_validation_for_tests(3, legacy_checkpoint, None)
-            .expect("overwrite final WSV checkpoint with retired surface hash");
-
-        let replay_kura = Kura::blank_kura_for_testing();
-        let mut replay_state =
-            replay_fixture_state(Arc::clone(&replay_kura), chain_id, lane_id, dataspace_id);
-        seed_space_directory_manifest_for_legacy_checkpoint_test(&replay_state, dataspace_id);
-        for height in 1..=3 {
-            let height_index = NonZeroUsize::new(height).expect("replay height is non-zero");
-            let block = kura
-                .get_block(height_index)
-                .expect("source replay block exists");
-            let checkpoint = kura
-                .wsv_checkpoint(u64::try_from(height).expect("test height fits u64"))
-                .expect("read source replay checkpoint")
-                .expect("source replay checkpoint exists");
-            replay_kura
-                .store_block(Arc::clone(&block))
-                .expect("copy replay block after pre-genesis Nexus installation");
-            replay_kura
-                .store_wsv_checkpoint(
-                    u64::try_from(height).expect("test height fits u64"),
-                    block.hash(),
-                    checkpoint.state_hash(),
-                )
-                .expect("copy replay checkpoint");
-        }
-
-        let err = replay_blocks_from_kura(
-            &replay_kura,
-            &mut replay_state,
-            &topology,
-            3,
-            ConsensusMode::Permissioned,
-        )
-        .expect_err("the retired checkpoint surface must never authorize replayed state");
-        assert!(
-            err.to_string()
-                .contains("replayed block #3 WSV checkpoint mismatch"),
-            "unexpected replay rejection: {err:?}"
-        );
-        assert_eq!(
-            crate::snapshot::canonical_state_snapshot_bytes_for_tests(&replay_state),
-            canonical_prefix,
-            "checkpoint rejection must leave the last exactly authenticated prefix committed"
-        );
-    }
-}
+mod replay_validation_tests;
 
 #[cfg(test)]
-mod permission_cache_tests {
-    use std::collections::BTreeSet;
-
-    use iroha_data_model::{
-        account::AccountId,
-        domain::DomainId,
-        isi::{Grant, Revoke},
-        nexus::DataSpaceId,
-        permission::Permission,
-        prelude::{Account, Domain},
-        role::{Role, RoleId},
-        trigger::TriggerId,
-    };
-    use iroha_executor_data_model::permission::{
-        account::{AccountAliasPermissionScope, CanManageAccountAlias},
-        role::CanManageRoles,
-        trigger::{CanExecuteTrigger, CanRegisterTrigger},
-    };
-    use iroha_primitives::json::Json;
-    use iroha_test_samples::gen_account_in;
-    use nonzero_ext::nonzero;
-
-    use super::*;
-    use crate::{
-        prelude::{AcceptedTransaction, StateReadOnly},
-        smartcontracts::Execute,
-    };
-
-    fn wonderland_domain_id() -> DomainId {
-        DomainId::try_new("wonderland", "universal").expect("domain id")
-    }
-
-    fn new_wonderland_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
-        Account::new(account_id.clone())
-    }
-
-    fn new_genesis_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
-        Account::new(account_id.clone())
-    }
-
-    #[test]
-    fn revoke_permission_invalidates_trigger_cache() {
-        let (registrar, _) = gen_account_in("wonderland");
-        let (owner, _) = gen_account_in("wonderland");
-
-        let domain: Domain = Domain::new(wonderland_domain_id()).build(&registrar);
-        let registrar_account = new_wonderland_account(&registrar).build(&registrar);
-        let owner_account = new_wonderland_account(&owner).build(&registrar);
-        let world = World::with([domain], [registrar_account, owner_account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query);
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut stx = block.transaction();
-
-        let permission = CanRegisterTrigger {
-            authority: owner.clone(),
-        };
-
-        Grant::account_permission(permission.clone(), registrar.clone())
-            .execute(&registrar, &mut stx)
-            .expect("grant trigger permission");
-
-        assert!(
-            stx.can_register_trigger_for(&registrar, &owner),
-            "permission should allow trigger registration"
-        );
-
-        Revoke::account_permission(permission, registrar.clone())
-            .execute(&registrar, &mut stx)
-            .expect("revoke trigger permission");
-
-        assert!(
-            !stx.can_register_trigger_for(&registrar, &owner),
-            "cache must be invalidated after revoke"
-        );
-    }
-
-    #[test]
-    fn trigger_permission_payload_with_whitespace_decodes() {
-        let (registrar, _) = gen_account_in("wonderland");
-
-        let domain: Domain = Domain::new(wonderland_domain_id()).build(&registrar);
-        let registrar_account = new_wonderland_account(&registrar).build(&registrar);
-        let world = World::with([domain], [registrar_account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query);
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut stx = block.transaction();
-
-        let trigger_id: TriggerId = "trigger_alpha".parse().unwrap();
-        let raw_payload = "{  \"trigger\"  :   \"trigger_alpha\" }";
-        let permission = iroha_data_model::permission::Permission::new(
-            "CanExecuteTrigger".into(),
-            Json::from_raw_json(raw_payload.to_owned()).expect("valid permission JSON fixture"),
-        );
-
-        stx.world
-            .account_permissions
-            .insert(registrar.clone(), BTreeSet::from([permission]));
-
-        assert!(
-            stx.can_execute_trigger_for(&registrar, &trigger_id),
-            "Norito decoder should handle non-canonical JSON payloads"
-        );
-        assert!(stx.can_execute_trigger_for(&registrar, &trigger_id));
-    }
-
-    #[test]
-    fn permission_deserialized_from_json_matches_canonical_permission() {
-        let stored: Permission = norito::json::from_str(
-            r#"{
-                "name": "CanManageAccountAlias",
-                "payload": { "scope": { "scope": "dataspace", "value": 0 } }
-            }"#,
-        )
-        .expect("deserialize permission");
-        let target = Permission::from(CanManageAccountAlias {
-            scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
-        });
-
-        let permissions = BTreeSet::from([stored]);
-
-        assert!(
-            permissions.contains(&target),
-            "deserialized permissions should use canonical JSON payloads: stored={}, target={}",
-            permissions
-                .first()
-                .expect("stored permission")
-                .payload()
-                .get(),
-            target.payload().get(),
-        );
-    }
-
-    #[test]
-    fn role_granted_trigger_permissions_cache_and_invalidate() {
-        let (registrar, _) = gen_account_in("wonderland");
-        let (owner, _) = gen_account_in("wonderland");
-
-        let domain: Domain = Domain::new(wonderland_domain_id()).build(&registrar);
-        let registrar_account = new_wonderland_account(&registrar).build(&registrar);
-        let owner_account = new_wonderland_account(&owner).build(&registrar);
-
-        let role_id: RoleId = "trigger_role".parse().unwrap();
-        let trigger_id: TriggerId = "trigger_alpha".parse().unwrap();
-
-        let role = Role::new(role_id.clone(), registrar.clone())
-            .add_permission(CanRegisterTrigger {
-                authority: owner.clone(),
-            })
-            .add_permission(CanExecuteTrigger {
-                trigger: trigger_id.clone(),
-            })
-            .build(&registrar);
-
-        let mut world = World::with([domain], [registrar_account, owner_account], []);
-        assert!(world.roles.insert(role_id.clone(), role).is_none());
-
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query);
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut stx = block.transaction();
-
-        assert!(
-            !stx.can_register_trigger_for(&registrar, &owner),
-            "role permissions should not apply before membership"
-        );
-        assert!(
-            !stx.can_execute_trigger_for(&registrar, &trigger_id),
-            "role permissions should not apply before membership"
-        );
-
-        Grant::account_role(role_id.clone(), registrar.clone())
-            .execute(&registrar, &mut stx)
-            .expect("grant account role");
-
-        assert!(
-            stx.can_register_trigger_for(&registrar, &owner),
-            "granting role should allow trigger registration"
-        );
-        assert!(
-            stx.can_execute_trigger_for(&registrar, &trigger_id),
-            "granting role should allow trigger execution"
-        );
-
-        // Cached value should remain true while role membership stays in place.
-        assert!(stx.can_register_trigger_for(&registrar, &owner));
-        assert!(stx.can_execute_trigger_for(&registrar, &trigger_id));
-
-        Revoke::account_role(role_id, registrar.clone())
-            .execute(&registrar, &mut stx)
-            .expect("revoke account role");
-
-        assert!(
-            !stx.can_register_trigger_for(&registrar, &owner),
-            "revoking role should invalidate cache and revoke registration permission"
-        );
-        assert!(
-            !stx.can_execute_trigger_for(&registrar, &trigger_id),
-            "revoking role should invalidate cache and revoke execution permission"
-        );
-    }
-
-    fn previous_roster_evidence_for_parent(
-        parent: &SignedBlock,
-        roster: &[PeerId],
-    ) -> iroha_data_model::consensus::PreviousRosterEvidence {
-        let zero_state_root = iroha_crypto::Hash::prehashed([0_u8; iroha_crypto::Hash::LENGTH]);
-        let mut signers_bitmap = vec![0_u8; roster.len().div_ceil(8)];
-        if let Some(first_byte) = signers_bitmap.first_mut() {
-            *first_byte = 1;
-        }
-        iroha_data_model::consensus::PreviousRosterEvidence {
-            height: parent.header().height().get(),
-            block_hash: parent.hash(),
-            validator_checkpoint: iroha_data_model::consensus::ValidatorSetCheckpoint::new(
-                parent.header().height().get(),
-                parent.header().view_change_index(),
-                parent.hash(),
-                zero_state_root,
-                zero_state_root,
-                roster.to_vec(),
-                signers_bitmap,
-                Vec::new(),
-                iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-                None,
-            ),
-            stake_snapshot: None,
-        }
-    }
-
-    fn build_test_block(
-        accepted: AcceptedTransaction<'static>,
-        parent: Option<&SignedBlock>,
-        topology: &crate::sumeragi::network_topology::Topology,
-        signer: &iroha_crypto::PrivateKey,
-    ) -> crate::block::NewBlock {
-        let mut builder = crate::block::BlockBuilder::new(vec![accepted]).chain(0, parent);
-        if let Some(parent) = parent.filter(|block| block.header().height().get() >= 2) {
-            builder = builder.with_previous_roster_evidence(Some(
-                previous_roster_evidence_for_parent(parent, topology.as_ref()),
-            ));
-        }
-        builder.sign(signer).unpack(|_| {})
-    }
-
-    fn install_permission_cache_replay_parameters(state: &State) {
-        let mut parameters = state.world.parameters.block();
-        parameters.set_parameter(iroha_data_model::parameter::system::Parameter::Custom(
-            iroha_data_model::parameter::system::SumeragiNposParameters::default()
-                .into_custom_parameter(),
-        ));
-        parameters.commit();
-    }
-
-    fn replay_permission_cache_blocks(
-        kura: &Arc<Kura>,
-        state: &mut State,
-        topology: &crate::sumeragi::network_topology::Topology,
-        block_count: usize,
-    ) -> Result<()> {
-        super::replay_validation_tests::replay_blocks_from_kura_range(
-            kura,
-            state,
-            topology,
-            1,
-            1,
-            ConsensusMode::Permissioned,
-        )?;
-        install_permission_cache_replay_parameters(state);
-        if block_count > 1 {
-            super::replay_validation_tests::replay_blocks_from_kura_range(
-                kura,
-                state,
-                topology,
-                2,
-                block_count,
-                ConsensusMode::Permissioned,
-            )?;
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn permission_cache_rebuilds_after_restart() {
-        // The full replay pipeline has deep debug-mode stack use; do not depend on libtest's
-        // platform-default worker stack for this integration-heavy scenario.
-        let handle = std::thread::Builder::new()
-            .name("permission_cache_rebuilds_after_restart".to_owned())
-            .stack_size(16 * 1024 * 1024)
-            .spawn(permission_cache_rebuilds_after_restart_impl)
-            .expect("spawn permission cache replay test");
-        if let Err(payload) = handle.join() {
-            std::panic::resume_unwind(payload);
-        }
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn permission_cache_rebuilds_after_restart_impl() {
-        use std::{
-            borrow::Cow,
-            num::{NonZeroU64, NonZeroUsize},
-            sync::Arc,
-        };
-
-        use iroha_config::{
-            base::WithOrigin,
-            kura::InitMode,
-            parameters::{
-                actual::{Kura as Config, LaneConfig},
-                defaults::kura::BLOCKS_IN_MEMORY,
-            },
-        };
-        use iroha_data_model::{
-            ChainId,
-            block::{BlockHeader, SignedBlock},
-            domain::Domain,
-            isi::{Grant, InstructionBox},
-            prelude::PeerId,
-            transaction::TransactionBuilder,
-            trigger::TriggerId,
-        };
-        use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisTopologyEntry};
-        use iroha_primitives::time::TimeSource;
-        use iroha_test_samples::{
-            SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
-        };
-
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
-        let temp_dir = tempfile::tempdir().expect("temp dir");
-        #[cfg(debug_assertions)]
-        {
-            println!(
-                "permission_cache_rebuilds_after_restart temp dir: {}",
-                temp_dir.path().display()
-            );
-        }
-
-        let make_config = |dir: &tempfile::TempDir| Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(dir.path().to_path_buf()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
-        };
-        let lane_config = LaneConfig::default();
-
-        let (kura, _) = Kura::new(&make_config(&temp_dir), &lane_config).expect("init kura");
-        let live_query = {
-            let _guard = runtime.enter();
-            crate::query::store::LiveQueryStore::start_test()
-        };
-        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-        let make_world = || {
-            World::with(
-                [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
-                [new_genesis_account(&genesis_id).build(&genesis_id)],
-                [],
-            )
-        };
-        let state = State::new(make_world(), Arc::clone(&kura), live_query);
-        {
-            let mut params_block = state.world.parameters.block();
-            params_block.sumeragi.key_require_hsm = false;
-            params_block.commit();
-        }
-        let mut recorded_blocks: Vec<Arc<SignedBlock>> = Vec::new();
-
-        let leader_keypair =
-            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let (leader_public_key, leader_private_key) = leader_keypair.into_parts();
-        let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
-            leader_public_key.clone(),
-        )]);
-        let leader_pop =
-            iroha_crypto::bls_normal_pop_prove(&leader_private_key).expect("generate BLS PoP");
-        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-
-        let (registrar, registrar_keypair) = gen_account_in("wonderland");
-        let (owner, owner_keypair) = gen_account_in("wonderland");
-        let trigger_id: TriggerId = "trigger_alpha".parse().unwrap();
-        let mut genesis_builder =
-            GenesisBuilder::new_without_executor(chain_id.clone(), "ivm/libs/not/installed")
-                .set_topology(vec![GenesisTopologyEntry::new(
-                    PeerId::new(leader_public_key.clone()),
-                    leader_pop,
-                )]);
-        genesis_builder = genesis_builder
-            .domain(DomainId::try_new("wonderland", "universal").expect("domain id"))
-            .account(registrar_keypair.public_key().clone())
-            .account(owner_keypair.public_key().clone())
-            .finish_domain()
-            .append_instruction(Register::trigger(iroha_data_model::trigger::Trigger::new(
-                trigger_id.clone(),
-                iroha_data_model::trigger::action::Action::new(
-                    vec![InstructionBox::from(Log::new(
-                        iroha_logger::Level::INFO,
-                        "permission cache trigger".to_owned(),
-                    ))],
-                    iroha_data_model::trigger::action::Repeats::Indefinitely,
-                    owner.clone(),
-                    iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
-                        .for_trigger(trigger_id.clone())
-                        .under_authority(owner.clone()),
-                )
-                .expect("trigger action fixture satisfies validation invariants"),
-            )))
-            .append_instruction(Grant::account_permission(CanManageRoles, owner.clone()));
-        let genesis_block = genesis_builder
-            .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-            .expect("genesis");
-
-        {
-            let mut state_block = state.block(genesis_block.0.header());
-            let time_source = TimeSource::new_system();
-            let valid_genesis = crate::block::ValidBlock::validate_with_events(
-                genesis_block.0.clone(),
-                &topology,
-                &chain_id,
-                &genesis_id,
-                &time_source,
-                &mut state_block,
-                |_| {},
-            )
-            .unpack(|_| {})
-            .expect("valid genesis");
-            let committed_genesis = valid_genesis.commit_unchecked().unpack(|_| {});
-            let _ = state_block
-                .apply_without_execution(&committed_genesis, topology.as_ref().to_owned());
-            state_block.commit().unwrap();
-            let block_arc = Arc::new(committed_genesis.into());
-            kura.store_block(Arc::clone(&block_arc))
-                .expect("store genesis block");
-            let height = block_arc.header().height().get();
-            kura.store_wsv_checkpoint(
-                height,
-                block_arc.hash(),
-                crate::snapshot::canonical_state_snapshot_hash(&state),
-            )
-            .expect("store genesis WSV checkpoint");
-            let height_usize =
-                usize::try_from(height).expect("block height must fit in usize for tests");
-            assert!(
-                kura.get_block(NonZeroUsize::new(height_usize).expect("height fits"))
-                    .is_some(),
-                "genesis block should persist"
-            );
-            recorded_blocks.push(Arc::clone(&block_arc));
-        }
-        install_permission_cache_replay_parameters(&state);
-        {
-            let state_view = state.view();
-            let world_view = state_view.world();
-            assert!(
-                world_view.accounts().get(&registrar).is_some(),
-                "registrar account should exist after genesis"
-            );
-            assert!(
-                world_view.accounts().get(&owner).is_some(),
-                "owner account should exist after genesis"
-            );
-        }
-        let permission_register = CanRegisterTrigger {
-            authority: owner.clone(),
-        };
-        let permission_execute = CanExecuteTrigger {
-            trigger: trigger_id.clone(),
-        };
-        {
-            let latest_hash = state
-                .view()
-                .latest_block()
-                .as_ref()
-                .map(|block| block.hash());
-            let next_height = NonZeroU64::new(2).expect("non-zero height");
-            let next_header = BlockHeader::new(next_height, latest_hash, None, None, 0, 0);
-            let mut block = state.block(next_header);
-            let mut stx = block.transaction();
-            Grant::account_permission(permission_register.clone(), registrar.clone())
-                .execute(&owner, &mut stx)
-                .expect("dry-run grant register");
-            Grant::account_permission(permission_execute.clone(), registrar.clone())
-                .execute(&owner, &mut stx)
-                .expect("dry-run grant execute");
-        }
-
-        let grant_tx = TransactionBuilder::new(
-            chain_id.clone(),
-            owner.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([
-            InstructionBox::from(Grant::account_permission(
-                permission_register.clone(),
-                registrar.clone(),
-            )),
-            InstructionBox::from(Grant::account_permission(
-                permission_execute.clone(),
-                registrar.clone(),
-            )),
-        ])
-        .sign(owner_keypair.private_key());
-        let accepted_grant = AcceptedTransaction::new_unchecked(Cow::Owned(grant_tx));
-
-        let latest_block = state.view().latest_block();
-        let unverified_grant = build_test_block(
-            accepted_grant,
-            latest_block.as_deref(),
-            &topology,
-            &leader_private_key,
-        );
-        {
-            let mut state_block = state.block(unverified_grant.header());
-            let committed_grant = unverified_grant
-                .validate_and_record_transactions(&mut state_block)
-                .unpack(|_| {})
-                .commit_unchecked()
-                .unpack(|_| {});
-            let _ =
-                state_block.apply_without_execution(&committed_grant, topology.as_ref().to_owned());
-            state_block.commit().unwrap();
-            let signed_block: SignedBlock = committed_grant.into();
-            assert!(
-                signed_block.error(0).is_none(),
-                "grant transaction rejected: {:?}",
-                signed_block.error(0)
-            );
-            let block_arc = Arc::new(signed_block);
-            kura.store_block(Arc::clone(&block_arc))
-                .expect("store grant block");
-            let height = block_arc.header().height().get();
-            kura.store_wsv_checkpoint(
-                height,
-                block_arc.hash(),
-                crate::snapshot::canonical_state_snapshot_hash(&state),
-            )
-            .expect("store grant WSV checkpoint");
-            let height_usize =
-                usize::try_from(height).expect("block height must fit in usize for tests");
-            assert!(
-                kura.get_block(NonZeroUsize::new(height_usize).expect("height fits"))
-                    .is_some(),
-                "grant block should persist"
-            );
-            recorded_blocks.push(Arc::clone(&block_arc));
-        }
-        {
-            let state_view = state.view();
-            let world_view = state_view.world();
-            assert!(
-                world_view.account_permissions().get(&registrar).is_some(),
-                "grant block should register permissions"
-            );
-        }
-        {
-            let latest_hash = state
-                .view()
-                .latest_block()
-                .as_ref()
-                .map(|block| block.hash());
-            let next_height = NonZeroU64::new(3).expect("non-zero height");
-            let next_header = BlockHeader::new(next_height, latest_hash, None, None, 0, 0);
-            let mut block = state.block(next_header);
-            let mut stx = block.transaction();
-            let summary = stx.ensure_permission_summary(&registrar);
-            let reg_cached = summary.reg_trigger_authorities.len();
-            let exec_cached = summary.exec_trigger_ids.len();
-            assert!(
-                stx.can_register_trigger_for(&registrar, &owner),
-                "permission should exist before restart (cached reg entries: {reg_cached})"
-            );
-            assert!(
-                stx.can_execute_trigger_for(&registrar, &trigger_id),
-                "execute permission should exist before restart (cached exec entries: {exec_cached})"
-            );
-        }
-
-        drop(state);
-        let live_query = {
-            let _guard = runtime.enter();
-            crate::query::store::LiveQueryStore::start_test()
-        };
-        let mut state = State::new(make_world(), Arc::clone(&kura), live_query);
-        {
-            let mut params_block = state.world.parameters.block();
-            params_block.sumeragi.key_require_hsm = false;
-            params_block.commit();
-        }
-        replay_permission_cache_blocks(&kura, &mut state, &topology, recorded_blocks.len())
-            .expect("replay stored blocks");
-        {
-            let latest_hash = state
-                .view()
-                .latest_block()
-                .as_ref()
-                .map(|block| block.hash());
-            let next_height =
-                NonZeroU64::new((recorded_blocks.len() + 1) as u64).expect("non-zero height");
-            let next_header = BlockHeader::new(next_height, latest_hash, None, None, 0, 0);
-            let mut block = state.block(next_header);
-            let mut stx = block.transaction();
-            let mut summary = AccountPermissionSummary::default();
-            summary.apply_grant(
-                &stx.world,
-                &stx.nexus.dataspace_catalog,
-                &registrar,
-                &Permission::from(permission_register.clone()),
-                stx.block_unix_timestamp_ms(),
-            );
-            summary.apply_grant(
-                &stx.world,
-                &stx.nexus.dataspace_catalog,
-                &registrar,
-                &Permission::from(permission_execute.clone()),
-                stx.block_unix_timestamp_ms(),
-            );
-            stx.perm_cache.insert_summary(registrar.clone(), summary);
-            assert!(
-                stx.can_register_trigger_for(&registrar, &owner),
-                "permission should exist after replay"
-            );
-            assert!(
-                stx.can_execute_trigger_for(&registrar, &trigger_id),
-                "execute permission should exist after replay"
-            );
-            let summary = stx.ensure_permission_summary(&registrar);
-            let reg_cached = summary.reg_trigger_authorities.len();
-            let exec_cached = summary.exec_trigger_ids.len();
-            assert_eq!(reg_cached, 1);
-            assert_eq!(exec_cached, 1);
-            assert!(
-                stx.can_register_trigger_for(&registrar, &owner),
-                "repeat hit should stay cached"
-            );
-            assert_eq!(
-                stx.ensure_permission_summary(&registrar)
-                    .reg_trigger_authorities
-                    .len(),
-                reg_cached
-            );
-        }
-        let revoke_tx = TransactionBuilder::new(
-            chain_id.clone(),
-            owner.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([
-            InstructionBox::from(Revoke::account_permission(
-                permission_register.clone(),
-                registrar.clone(),
-            )),
-            InstructionBox::from(Revoke::account_permission(
-                permission_execute.clone(),
-                registrar.clone(),
-            )),
-        ])
-        .sign(owner_keypair.private_key());
-        let accepted_revoke = AcceptedTransaction::new_unchecked(Cow::Owned(revoke_tx));
-        let latest_block = state.view().latest_block();
-        let unverified_revoke = build_test_block(
-            accepted_revoke,
-            latest_block.as_deref(),
-            &topology,
-            &leader_private_key,
-        );
-        {
-            let mut state_block = state.block(unverified_revoke.header());
-            let committed_revoke = unverified_revoke
-                .validate_and_record_transactions(&mut state_block)
-                .unpack(|_| {})
-                .commit_unchecked()
-                .unpack(|_| {});
-            let _ = state_block
-                .apply_without_execution(&committed_revoke, topology.as_ref().to_owned());
-            state_block.commit().unwrap();
-            let block_arc = Arc::new(committed_revoke.into());
-            kura.store_block(Arc::clone(&block_arc))
-                .expect("store revoke block");
-            let height = block_arc.header().height().get();
-            kura.store_wsv_checkpoint(
-                height,
-                block_arc.hash(),
-                crate::snapshot::canonical_state_snapshot_hash(&state),
-            )
-            .expect("store revoke WSV checkpoint");
-            let height_usize =
-                usize::try_from(height).expect("block height must fit in usize for tests");
-            assert!(
-                kura.get_block(NonZeroUsize::new(height_usize).expect("height fits"))
-                    .is_some(),
-                "revoke block should persist"
-            );
-            recorded_blocks.push(Arc::clone(&block_arc));
-        }
-
-        let latest_hash = state
-            .view()
-            .latest_block()
-            .as_ref()
-            .map(|block| block.hash());
-        let next_height =
-            NonZeroU64::new((recorded_blocks.len() + 1) as u64).expect("non-zero height");
-        let next_header = BlockHeader::new(next_height, latest_hash, None, None, 0, 0);
-        {
-            let mut block = state.block(next_header);
-            let mut stx = block.transaction();
-            assert!(
-                stx.perm_cache.needs_hydration(&registrar),
-                "cache should be invalidated after revoke"
-            );
-            assert!(
-                !stx.can_register_trigger_for(&registrar, &owner),
-                "registration permission revoked"
-            );
-            assert!(
-                !stx.can_execute_trigger_for(&registrar, &trigger_id),
-                "execution permission revoked"
-            );
-        }
-
-        drop(state);
-        let live_query = {
-            let _guard = runtime.enter();
-            crate::query::store::LiveQueryStore::start_test()
-        };
-        let mut state = State::new(make_world(), Arc::clone(&kura), live_query);
-        {
-            let mut params_block = state.world.parameters.block();
-            params_block.sumeragi.key_require_hsm = false;
-            params_block.commit();
-        }
-        replay_permission_cache_blocks(&kura, &mut state, &topology, recorded_blocks.len())
-            .expect("replay stored blocks after revoke");
-        {
-            let state_view = state.view();
-            let world_view = state_view.world();
-            assert!(
-                world_view.accounts().get(&registrar).is_some(),
-                "registrar account should exist after replay"
-            );
-            assert!(
-                world_view.accounts().get(&owner).is_some(),
-                "owner account should exist after replay"
-            );
-        }
-
-        let latest_hash = state
-            .view()
-            .latest_block()
-            .as_ref()
-            .map(|block| block.hash());
-        let next_height =
-            NonZeroU64::new((recorded_blocks.len() + 1) as u64).expect("non-zero height");
-        let next_header = BlockHeader::new(next_height, latest_hash, None, None, 0, 0);
-        {
-            let mut block = state.block(next_header);
-            let mut stx = block.transaction();
-            assert!(
-                !stx.can_register_trigger_for(&registrar, &owner),
-                "registration should remain revoked after restart"
-            );
-            assert!(
-                !stx.can_execute_trigger_for(&registrar, &trigger_id),
-                "execution should remain revoked after restart"
-            );
-        }
-
-        let role_id: RoleId = "trigger_role_restart".parse().unwrap();
-        let role = Role::new(role_id.clone(), owner.clone())
-            .add_permission(permission_register.clone())
-            .add_permission(permission_execute.clone());
-
-        let register_role_tx = TransactionBuilder::new(
-            chain_id.clone(),
-            owner.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([
-            InstructionBox::from(Register::role(role)),
-            InstructionBox::from(Grant::account_role(role_id.clone(), registrar.clone())),
-        ])
-        .sign(owner_keypair.private_key());
-        let accepted_role = AcceptedTransaction::new_unchecked(Cow::Owned(register_role_tx));
-        let latest_block = state.view().latest_block();
-        let unverified_role = build_test_block(
-            accepted_role,
-            latest_block.as_deref(),
-            &topology,
-            &leader_private_key,
-        );
-        {
-            let mut state_block = state.block(unverified_role.header());
-            let committed_role = unverified_role
-                .validate_and_record_transactions(&mut state_block)
-                .unpack(|_| {})
-                .commit_unchecked()
-                .unpack(|_| {});
-            let _ =
-                state_block.apply_without_execution(&committed_role, topology.as_ref().to_owned());
-            state_block.commit().unwrap();
-            let signed_block: SignedBlock = committed_role.into();
-            assert!(
-                signed_block.error(0).is_none(),
-                "role registration transaction rejected: {:?}",
-                signed_block.error(0)
-            );
-            let block_arc = Arc::new(signed_block);
-            kura.store_block(Arc::clone(&block_arc))
-                .expect("store role block");
-            let height = block_arc.header().height().get();
-            kura.store_wsv_checkpoint(
-                height,
-                block_arc.hash(),
-                crate::snapshot::canonical_state_snapshot_hash(&state),
-            )
-            .expect("store role WSV checkpoint");
-            let height_usize =
-                usize::try_from(height).expect("block height must fit in usize for tests");
-            assert!(
-                kura.get_block(NonZeroUsize::new(height_usize).expect("height fits"))
-                    .is_some(),
-                "role registration block should persist"
-            );
-            recorded_blocks.push(Arc::clone(&block_arc));
-        }
-
-        let latest_hash = state
-            .view()
-            .latest_block()
-            .as_ref()
-            .map(|block| block.hash());
-        let next_height =
-            NonZeroU64::new((recorded_blocks.len() + 1) as u64).expect("non-zero height");
-        let next_header = BlockHeader::new(next_height, latest_hash, None, None, 0, 0);
-        {
-            let mut block = state.block(next_header);
-            let mut stx = block.transaction();
-            assert!(
-                stx.can_register_trigger_for(&registrar, &owner),
-                "role membership should allow trigger registration"
-            );
-            assert!(
-                stx.can_execute_trigger_for(&registrar, &trigger_id),
-                "role membership should allow trigger execution"
-            );
-        }
-
-        drop(state);
-        let live_query = {
-            let _guard = runtime.enter();
-            crate::query::store::LiveQueryStore::start_test()
-        };
-        let mut state = State::new(make_world(), Arc::clone(&kura), live_query);
-        {
-            let mut params_block = state.world.parameters.block();
-            params_block.sumeragi.key_require_hsm = false;
-            params_block.commit();
-        }
-        replay_permission_cache_blocks(&kura, &mut state, &topology, recorded_blocks.len())
-            .expect("replay stored blocks after role grant");
-
-        let latest_hash = state
-            .view()
-            .latest_block()
-            .as_ref()
-            .map(|block| block.hash());
-        let next_height =
-            NonZeroU64::new((recorded_blocks.len() + 1) as u64).expect("non-zero height");
-        let next_header = BlockHeader::new(next_height, latest_hash, None, None, 0, 0);
-        {
-            let mut block = state.block(next_header);
-            let mut stx = block.transaction();
-            assert!(
-                stx.can_register_trigger_for(&registrar, &owner),
-                "role-based registration permission should survive restart"
-            );
-            assert!(
-                stx.can_execute_trigger_for(&registrar, &trigger_id),
-                "role-based execution permission should survive restart"
-            );
-        }
-
-        let revoke_role_tx = TransactionBuilder::new(
-            chain_id.clone(),
-            owner.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([InstructionBox::from(Revoke::account_role(
-            role_id.clone(),
-            registrar.clone(),
-        ))])
-        .sign(owner_keypair.private_key());
-        let accepted_revoke_role = AcceptedTransaction::new_unchecked(Cow::Owned(revoke_role_tx));
-        let latest_block = state.view().latest_block();
-        let unverified_revoke_role = build_test_block(
-            accepted_revoke_role,
-            latest_block.as_deref(),
-            &topology,
-            &leader_private_key,
-        );
-        {
-            let mut state_block = state.block(unverified_revoke_role.header());
-            let committed_revoke_role = unverified_revoke_role
-                .validate_and_record_transactions(&mut state_block)
-                .unpack(|_| {})
-                .commit_unchecked()
-                .unpack(|_| {});
-            let _ = state_block
-                .apply_without_execution(&committed_revoke_role, topology.as_ref().to_owned());
-            state_block.commit().unwrap();
-            let signed_block: SignedBlock = committed_revoke_role.into();
-            assert!(
-                signed_block.error(0).is_none(),
-                "role revocation transaction rejected: {:?}",
-                signed_block.error(0)
-            );
-            let block_arc = Arc::new(signed_block);
-            kura.store_block(Arc::clone(&block_arc))
-                .expect("store revoke role block");
-            let height = block_arc.header().height().get();
-            kura.store_wsv_checkpoint(
-                height,
-                block_arc.hash(),
-                crate::snapshot::canonical_state_snapshot_hash(&state),
-            )
-            .expect("store role revocation WSV checkpoint");
-            let height_usize =
-                usize::try_from(height).expect("block height must fit in usize for tests");
-            assert!(
-                kura.get_block(NonZeroUsize::new(height_usize).expect("height fits"))
-                    .is_some(),
-                "role revocation block should persist"
-            );
-            recorded_blocks.push(Arc::clone(&block_arc));
-        }
-
-        let latest_hash = state
-            .view()
-            .latest_block()
-            .as_ref()
-            .map(|block| block.hash());
-        let next_height =
-            NonZeroU64::new((recorded_blocks.len() + 1) as u64).expect("non-zero height");
-        let next_header = BlockHeader::new(next_height, latest_hash, None, None, 0, 0);
-        {
-            let mut block = state.block(next_header);
-            let mut stx = block.transaction();
-            assert!(
-                stx.perm_cache.needs_hydration(&registrar),
-                "revoking role should invalidate cached permissions"
-            );
-            assert!(
-                !stx.can_register_trigger_for(&registrar, &owner),
-                "role revocation should remove trigger registration permission"
-            );
-            assert!(
-                !stx.can_execute_trigger_for(&registrar, &trigger_id),
-                "role revocation should remove trigger execution permission"
-            );
-        }
-
-        drop(state);
-        let live_query = {
-            let _guard = runtime.enter();
-            crate::query::store::LiveQueryStore::start_test()
-        };
-        let mut state = State::new(make_world(), Arc::clone(&kura), live_query);
-        {
-            let mut params_block = state.world.parameters.block();
-            params_block.sumeragi.key_require_hsm = false;
-            params_block.commit();
-        }
-        replay_permission_cache_blocks(&kura, &mut state, &topology, recorded_blocks.len())
-            .expect("replay stored blocks after role revoke");
-
-        let latest_hash = state
-            .view()
-            .latest_block()
-            .as_ref()
-            .map(|block| block.hash());
-        let next_height =
-            NonZeroU64::new((recorded_blocks.len() + 1) as u64).expect("non-zero height");
-        let next_header = BlockHeader::new(next_height, latest_hash, None, None, 0, 0);
-        {
-            let mut block = state.block(next_header);
-            let mut stx = block.transaction();
-            assert!(
-                !stx.can_register_trigger_for(&registrar, &owner),
-                "role revocation should persist after restart"
-            );
-            assert!(
-                !stx.can_execute_trigger_for(&registrar, &trigger_id),
-                "role revocation should persist after restart"
-            );
-        }
-    }
-}
+mod permission_cache_tests;
 
 impl StateTransaction<'_, '_> {
     /// Expected confidential feature digest for the current transaction context.
@@ -67289,343 +63776,7 @@ impl StateTransaction<'_, '_> {
 
 /// Bounds for `range` queries
 mod range_bounds {
-    use core::ops::{Bound, RangeBounds};
-
-    use iroha_data_model::proof::ProofId;
-    use iroha_primitives::{cmpext::MinMaxExt, impl_as_dyn_key};
-
-    use super::*;
-    use crate::role::RoleIdWithOwner;
-
-    /// Key for range queries over account for roles
-    #[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
-    pub struct RoleIdByAccount<'role> {
-        account_id: &'role AccountId,
-        role_id: MinMaxExt<&'role RoleId>,
-    }
-
-    /// Bounds for range quired over account for roles
-    pub struct RoleIdByAccountBounds<'role> {
-        start: RoleIdByAccount<'role>,
-        end: RoleIdByAccount<'role>,
-    }
-
-    impl<'role> RoleIdByAccountBounds<'role> {
-        /// Create range bounds for range quires of roles over account
-        pub fn new(account_id: &'role AccountId) -> Self {
-            Self {
-                start: RoleIdByAccount {
-                    account_id,
-                    role_id: MinMaxExt::Min,
-                },
-                end: RoleIdByAccount {
-                    account_id,
-                    role_id: MinMaxExt::Max,
-                },
-            }
-        }
-    }
-
-    impl<'role> RangeBounds<dyn AsRoleIdByAccount + 'role> for RoleIdByAccountBounds<'role> {
-        fn start_bound(&self) -> Bound<&(dyn AsRoleIdByAccount + 'role)> {
-            Bound::Excluded(&self.start)
-        }
-
-        fn end_bound(&self) -> Bound<&(dyn AsRoleIdByAccount + 'role)> {
-            Bound::Excluded(&self.end)
-        }
-    }
-
-    impl AsRoleIdByAccount for RoleIdWithOwner {
-        fn as_key(&self) -> RoleIdByAccount<'_> {
-            RoleIdByAccount {
-                account_id: &self.account,
-                role_id: (&self.id).into(),
-            }
-        }
-    }
-
-    impl_as_dyn_key! {
-        target: RoleIdWithOwner,
-        key: RoleIdByAccount<'_>,
-        trait: AsRoleIdByAccount
-    }
-
-    /// `DomainId` wrapper for fetching NFTs belonging to a domain from the global store
-    #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone)]
-    pub struct NftIdDomainCompare<'a> {
-        domain_id: &'a DomainId,
-        name: MinMaxExt<&'a Name>,
-    }
-
-    /// Bounds for range quired over NFTs by domain
-    pub struct NftByDomainBounds<'a> {
-        start: NftIdDomainCompare<'a>,
-        end: NftIdDomainCompare<'a>,
-    }
-
-    impl<'a> NftByDomainBounds<'a> {
-        /// Create range bounds for range quires over NFTs by domain
-        pub fn new(domain_id: &'a DomainId) -> Self {
-            Self {
-                start: NftIdDomainCompare {
-                    domain_id,
-                    name: MinMaxExt::Min,
-                },
-                end: NftIdDomainCompare {
-                    domain_id,
-                    name: MinMaxExt::Max,
-                },
-            }
-        }
-    }
-
-    impl<'a> RangeBounds<dyn AsNftIdDomainCompare + 'a> for NftByDomainBounds<'a> {
-        fn start_bound(&self) -> Bound<&(dyn AsNftIdDomainCompare + 'a)> {
-            Bound::Excluded(&self.start)
-        }
-
-        fn end_bound(&self) -> Bound<&(dyn AsNftIdDomainCompare + 'a)> {
-            Bound::Excluded(&self.end)
-        }
-    }
-
-    impl AsNftIdDomainCompare for NftId {
-        fn as_key(&self) -> NftIdDomainCompare<'_> {
-            NftIdDomainCompare {
-                domain_id: self.domain(),
-                name: self.name().into(),
-            }
-        }
-    }
-
-    impl_as_dyn_key! {
-        target: NftId,
-        key: NftIdDomainCompare<'_>,
-        trait: AsNftIdDomainCompare
-    }
-
-    /// `DomainId` wrapper for fetching RWAs belonging to a domain from the global store.
-    #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone)]
-    pub struct RwaIdDomainCompare<'a> {
-        domain_id: &'a DomainId,
-        hash: MinMaxExt<&'a Hash>,
-    }
-
-    /// Bounds for range queries over RWAs by domain.
-    pub struct RwaByDomainBounds<'a> {
-        start: RwaIdDomainCompare<'a>,
-        end: RwaIdDomainCompare<'a>,
-    }
-
-    impl<'a> RwaByDomainBounds<'a> {
-        /// Create range bounds for range queries over RWAs by domain.
-        pub fn new(domain_id: &'a DomainId) -> Self {
-            Self {
-                start: RwaIdDomainCompare {
-                    domain_id,
-                    hash: MinMaxExt::Min,
-                },
-                end: RwaIdDomainCompare {
-                    domain_id,
-                    hash: MinMaxExt::Max,
-                },
-            }
-        }
-    }
-
-    impl<'a> RangeBounds<dyn AsRwaIdDomainCompare + 'a> for RwaByDomainBounds<'a> {
-        fn start_bound(&self) -> Bound<&(dyn AsRwaIdDomainCompare + 'a)> {
-            Bound::Excluded(&self.start)
-        }
-
-        fn end_bound(&self) -> Bound<&(dyn AsRwaIdDomainCompare + 'a)> {
-            Bound::Excluded(&self.end)
-        }
-    }
-
-    impl AsRwaIdDomainCompare for RwaId {
-        fn as_key(&self) -> RwaIdDomainCompare<'_> {
-            RwaIdDomainCompare {
-                domain_id: self.domain(),
-                hash: self.hash().into(),
-            }
-        }
-    }
-
-    impl_as_dyn_key! {
-        target: RwaId,
-        key: RwaIdDomainCompare<'_>,
-        trait: AsRwaIdDomainCompare
-    }
-
-    /// `ProofId` wrapper for fetching proof records belonging to one backend.
-    #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone)]
-    pub struct ProofIdBackendCompare<'a> {
-        backend: &'a str,
-        proof_hash: MinMaxExt<&'a [u8; 32]>,
-    }
-
-    /// Bounds for range queries over proofs by backend.
-    pub struct ProofByBackendBounds<'a> {
-        start: ProofIdBackendCompare<'a>,
-        end: ProofIdBackendCompare<'a>,
-    }
-
-    impl<'a> ProofByBackendBounds<'a> {
-        /// Create range bounds for proof queries by backend.
-        pub fn new(backend: &'a str) -> Self {
-            Self {
-                start: ProofIdBackendCompare {
-                    backend,
-                    proof_hash: MinMaxExt::Min,
-                },
-                end: ProofIdBackendCompare {
-                    backend,
-                    proof_hash: MinMaxExt::Max,
-                },
-            }
-        }
-    }
-
-    impl<'a> RangeBounds<dyn AsProofIdBackendCompare + 'a> for ProofByBackendBounds<'a> {
-        fn start_bound(&self) -> Bound<&(dyn AsProofIdBackendCompare + 'a)> {
-            Bound::Excluded(&self.start)
-        }
-
-        fn end_bound(&self) -> Bound<&(dyn AsProofIdBackendCompare + 'a)> {
-            Bound::Excluded(&self.end)
-        }
-    }
-
-    impl AsProofIdBackendCompare for ProofId {
-        fn as_key(&self) -> ProofIdBackendCompare<'_> {
-            ProofIdBackendCompare {
-                backend: self.backend.as_str(),
-                proof_hash: (&self.proof_hash).into(),
-            }
-        }
-    }
-
-    impl_as_dyn_key! {
-        target: ProofId,
-        key: ProofIdBackendCompare<'_>,
-        trait: AsProofIdBackendCompare
-    }
-
-    /// `AccountId` wrapper for fetching assets beloning to an account from the global store
-    #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone)]
-    pub struct AssetIdAccountCompare<'a> {
-        account_id: &'a AccountId,
-        definition: MinMaxExt<&'a AssetDefinitionId>,
-    }
-
-    /// Bounds for range quired over assets by account
-    pub struct AssetByAccountBounds<'a> {
-        start: AssetIdAccountCompare<'a>,
-        end: AssetIdAccountCompare<'a>,
-    }
-
-    impl<'a> AssetByAccountBounds<'a> {
-        /// Create range bounds for range quires over assets by account
-        pub fn new(account_id: &'a AccountId) -> Self {
-            Self {
-                start: AssetIdAccountCompare {
-                    account_id,
-                    definition: MinMaxExt::Min,
-                },
-                end: AssetIdAccountCompare {
-                    account_id,
-                    definition: MinMaxExt::Max,
-                },
-            }
-        }
-    }
-
-    impl<'a> RangeBounds<dyn AsAssetIdAccountCompare + 'a> for AssetByAccountBounds<'a> {
-        fn start_bound(&self) -> Bound<&(dyn AsAssetIdAccountCompare + 'a)> {
-            Bound::Excluded(&self.start)
-        }
-
-        fn end_bound(&self) -> Bound<&(dyn AsAssetIdAccountCompare + 'a)> {
-            Bound::Excluded(&self.end)
-        }
-    }
-
-    /// `AccountId + AssetDefinitionId` wrapper for fetching definition partitions in an account.
-    #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone)]
-    pub struct AssetIdAccountDefinitionCompare<'a> {
-        account_id: &'a AccountId,
-        definition: &'a AssetDefinitionId,
-        scope: MinMaxExt<&'a AssetBalanceScope>,
-    }
-
-    /// Bounds for range queries over assets by account and definition.
-    pub struct AssetByAccountDefinitionBounds<'a> {
-        start: AssetIdAccountDefinitionCompare<'a>,
-        end: AssetIdAccountDefinitionCompare<'a>,
-    }
-
-    impl<'a> AssetByAccountDefinitionBounds<'a> {
-        /// Create range bounds for range queries over assets by account and definition.
-        pub fn new(account_id: &'a AccountId, definition: &'a AssetDefinitionId) -> Self {
-            Self {
-                start: AssetIdAccountDefinitionCompare {
-                    account_id,
-                    definition,
-                    scope: MinMaxExt::Min,
-                },
-                end: AssetIdAccountDefinitionCompare {
-                    account_id,
-                    definition,
-                    scope: MinMaxExt::Max,
-                },
-            }
-        }
-    }
-
-    impl<'a> RangeBounds<dyn AsAssetIdAccountDefinitionCompare + 'a>
-        for AssetByAccountDefinitionBounds<'a>
-    {
-        fn start_bound(&self) -> Bound<&(dyn AsAssetIdAccountDefinitionCompare + 'a)> {
-            Bound::Excluded(&self.start)
-        }
-
-        fn end_bound(&self) -> Bound<&(dyn AsAssetIdAccountDefinitionCompare + 'a)> {
-            Bound::Excluded(&self.end)
-        }
-    }
-
-    impl AsAssetIdAccountCompare for AssetId {
-        fn as_key(&self) -> AssetIdAccountCompare<'_> {
-            AssetIdAccountCompare {
-                account_id: self.account(),
-                definition: self.definition().into(),
-            }
-        }
-    }
-
-    impl AsAssetIdAccountDefinitionCompare for AssetId {
-        fn as_key(&self) -> AssetIdAccountDefinitionCompare<'_> {
-            AssetIdAccountDefinitionCompare {
-                account_id: self.account(),
-                definition: self.definition(),
-                scope: self.scope().into(),
-            }
-        }
-    }
-
-    impl_as_dyn_key! {
-        target: AssetId,
-        key: AssetIdAccountCompare<'_>,
-        trait: AsAssetIdAccountCompare
-    }
-
-    impl_as_dyn_key! {
-        target: AssetId,
-        key: AssetIdAccountDefinitionCompare<'_>,
-        trait: AsAssetIdAccountDefinitionCompare
-    }
+    include!("state/range_bounds.rs");
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -67758,5444 +63909,11 @@ pub(crate) struct SnapshotSpaceDirectoryManifestSet {
 }
 
 pub(crate) mod deserialize {
-    use std::marker::PhantomData;
-
-    use norito::codec::DecodeAll;
-    use norito::json::{self, JsonDeserialize};
-
-    use super::{default_oracle, *};
-
-    #[derive(Clone, Copy)]
-    pub struct IvmSeed<'e, T> {
-        pub ivm: &'e IVM,
-        _marker: PhantomData<T>,
-    }
-
-    impl<'e, T> IvmSeed<'e, T> {
-        pub fn cast<U>(&self) -> IvmSeed<'e, U> {
-            IvmSeed {
-                ivm: self.ivm,
-                _marker: PhantomData,
-            }
-        }
-    }
-
-    impl IvmSeed<'_, TriggerSet> {
-        #[allow(clippy::unused_self)]
-        pub fn parse_trigger_set(self, value: &json::Value) -> Result<TriggerSet, json::Error> {
-            let json = json::to_json(value)?;
-            let mut parser = json::Parser::new(&json);
-            TriggerSet::json_deserialize(&mut parser)
-        }
-    }
-
-    pub struct KuraSeed {
-        pub kura: Arc<Kura>,
-        pub query_handle: LiveQueryStoreHandle,
-        #[cfg(feature = "telemetry")]
-        pub telemetry: StateTelemetry,
-    }
-
-    impl KuraSeed {
-        pub fn into_state_from_json(self, value: json::Value) -> Result<State, json::Error> {
-            self.into_state_from_json_with_recovery_mode(value, true)
-        }
-
-        /// Decode a State without loading, promoting, truncating, or otherwise
-        /// recovering any durable Kura-adjacent journal.
-        ///
-        /// Replay prevalidation uses this constructor for an isolated dry run;
-        /// its in-memory merge and query authority is populated explicitly
-        /// from the already authenticated live State.
-        pub(crate) fn into_state_from_json_without_durable_recovery(
-            self,
-            value: json::Value,
-        ) -> Result<State, json::Error> {
-            self.into_state_from_json_with_recovery_mode(value, false)
-        }
-
-        fn into_state_from_json_with_recovery_mode(
-            self,
-            value: json::Value,
-            allow_durable_recovery: bool,
-        ) -> Result<State, json::Error> {
-            let json::Value::Object(mut map) = value else {
-                return Err(json::Error::InvalidField {
-                    field: "state".into(),
-                    message: "expected object".into(),
-                });
-            };
-
-            let world_value = map
-                .remove("world")
-                .ok_or_else(|| json::Error::missing_field("world"))?;
-            if world_value
-                .as_object()
-                .is_none_or(|world| !world.contains_key("contract_subject_bindings"))
-            {
-                return Err(json::Error::missing_field(
-                    "world.contract_subject_bindings",
-                ));
-            }
-            let ivm_runtime = IVM::new(0);
-            let ivm_seed = IvmSeed {
-                ivm: &ivm_runtime,
-                _marker: PhantomData,
-            };
-            let mut world = parse_world(world_value, &ivm_seed)?;
-            let public_lane_validators: Vec<SnapshotNoritoBlob> =
-                take_required(&mut map, "public_lane_validators")?;
-            let public_lane_stake_shares: Vec<SnapshotNoritoBlob> =
-                take_required(&mut map, "public_lane_stake_shares")?;
-            let public_lane_rewards: Vec<SnapshotNoritoBlob> =
-                take_required(&mut map, "public_lane_rewards")?;
-            let public_lane_reward_claims: Vec<SnapshotPublicLaneRewardClaim> =
-                take_required(&mut map, "public_lane_reward_claims")?;
-            let space_directory_manifests: Vec<SnapshotSpaceDirectoryManifestSet> =
-                take_required(&mut map, "space_directory_manifests")?;
-            let snapshot_nexus_runtime: SnapshotNexusRuntime = map
-                .remove("nexus_runtime")
-                .ok_or_else(|| json::Error::missing_field("nexus_runtime"))
-                .and_then(|value| {
-                    json::value::from_value(value).map_err(|err| json::Error::InvalidField {
-                        field: "nexus_runtime".to_owned(),
-                        message: err.to_string(),
-                    })
-                })?;
-
-            let chain_id: ChainId = take_required(&mut map, "chain_id")?;
-            let block_hashes_vec: Vec<HashOf<BlockHeader>> =
-                take_required(&mut map, "block_hashes")?;
-            let committed_height =
-                u64::try_from(block_hashes_vec.len()).map_err(|_| json::Error::InvalidField {
-                    field: "state.block_hashes".to_owned(),
-                    message: "committed height does not fit u64".to_owned(),
-                })?;
-            validate_musubi_resolver_checkpoint_anchors(&world, &block_hashes_vec)?;
-            world
-                .privacy_consensus_policy
-                .view()
-                .get()
-                .validate_at_committed_height(committed_height)
-                .map_err(|error| json::Error::InvalidField {
-                    field: "state.world.privacy_consensus_policy".to_owned(),
-                    message: error.to_string(),
-                })?;
-            crate::privacy_state::validate_privacy_activations_at_committed_height_v1(
-                &world.privacy_activations.view(),
-                committed_height,
-            )
-            .map_err(|message| json::Error::InvalidField {
-                field: "state.world.privacy_activations".to_owned(),
-                message,
-            })?;
-            let (
-                restored_nexus,
-                lane_incarnations,
-                lane_incarnation_activation_heights,
-                lane_incarnation_lineage,
-                autoscale_sample_history,
-            ) = nexus_from_snapshot_runtime(snapshot_nexus_runtime, &block_hashes_vec)?;
-            let nexus_runtime_restored_from_snapshot = true;
-            let transactions: TransactionsStorage = take_required(&mut map, "transactions")?;
-            let commit_topology = take_topology_cell(&mut map, "commit_topology")?;
-            let prev_commit_topology = take_topology_cell(&mut map, "prev_commit_topology")?;
-            let snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord> = map
-                .remove("sumeragi_v2_bootstrap")
-                .map(json::value::from_value)
-                .transpose()
-                .map_err(|err| json::Error::InvalidField {
-                    field: "sumeragi_v2_bootstrap".to_owned(),
-                    message: err.to_string(),
-                })?;
-
-            reject_unknown(&map, "state")?;
-
-            crate::smartcontracts::code::rebuild_contract_subject_addresses(&mut world).map_err(
-                |message| json::Error::InvalidField {
-                    field: "contract_subject_bindings".into(),
-                    message,
-                },
-            )?;
-            crate::smartcontracts::code::validate_contract_subject_bindings(&world).map_err(
-                |message| json::Error::InvalidField {
-                    field: "contract_subject_bindings".into(),
-                    message,
-                },
-            )?;
-
-            let public_lane_validator_records =
-                decode_public_lane_validator_records(public_lane_validators)?;
-            let public_lane_stake_share_records =
-                decode_public_lane_stake_share_records(public_lane_stake_shares)?;
-
-            world.public_lane_validators = public_lane_validator_records
-                .into_iter()
-                .map(|record| ((record.lane_id, record.validator.clone()), record))
-                .collect();
-            world.public_lane_stake_shares = public_lane_stake_share_records
-                .into_iter()
-                .map(|record| {
-                    (
-                        (
-                            record.lane_id,
-                            record.validator.clone(),
-                            record.staker.clone(),
-                        ),
-                        record,
-                    )
-                })
-                .collect();
-            world.public_lane_rewards = decode_snapshot_records::<PublicLaneRewardRecord>(
-                public_lane_rewards,
-                "public_lane_rewards",
-            )?
-            .into_iter()
-            .map(|record| ((record.lane_id, record.epoch), record))
-            .collect();
-            world.public_lane_reward_claims = public_lane_reward_claims
-                .into_iter()
-                .map(|record| {
-                    (
-                        (record.lane_id, record.account.clone(), record.asset.clone()),
-                        record.last_claimed_epoch,
-                    )
-                })
-                .collect();
-            world.space_directory_manifests =
-                decode_space_directory_manifest_sets(space_directory_manifests)?;
-
-            world
-                .validate_quantity_ledger_invariants()
-                .map_err(|message| json::Error::InvalidField {
-                    field: "state.world.numeric_ledgers".to_owned(),
-                    message,
-                })?;
-
-            let state = build_state(
-                BuildStateInputs {
-                    world,
-                    block_hashes: BlockHashes::new(block_hashes_vec),
-                    transactions,
-                    commit_topology,
-                    prev_commit_topology,
-                    ivm: ivm_runtime,
-                    nexus: restored_nexus,
-                    lane_incarnations,
-                    lane_incarnation_activation_heights,
-                    lane_incarnation_lineage,
-                    autoscale_sample_history,
-                    chain_id,
-                    snapshot_v2_bootstrap_candidate,
-                    nexus_runtime_restored_from_snapshot,
-                    kura: self.kura,
-                    query_handle: self.query_handle,
-                    #[cfg(feature = "telemetry")]
-                    telemetry: self.telemetry,
-                },
-                allow_durable_recovery,
-            )
-            .map_err(|error| json::Error::InvalidField {
-                field: "state.durable_merge_ledger".to_owned(),
-                message: error.to_string(),
-            })?;
-            validate_restored_commit_qcs(&state)?;
-            super::validate_sccp_state_local_profile(&state).map_err(|message| {
-                json::Error::InvalidField {
-                    field: "state.world.sccp".to_owned(),
-                    message,
-                }
-            })?;
-            Ok(state)
-        }
-    }
-
-    fn validate_restored_commit_qcs(state: &State) -> Result<(), json::Error> {
-        let block_hashes = state.block_hashes.view();
-        let commit_qcs = state.world.commit_qcs.view();
-        for (archive_key, commit_qc) in commit_qcs.iter() {
-            let canonical_hash = commit_qc
-                .height
-                .checked_sub(1)
-                .and_then(|index| usize::try_from(index).ok())
-                .and_then(|index| block_hashes.get(index))
-                .copied();
-            if canonical_hash != Some(*archive_key)
-                || !super::commit_qc_matches_block(commit_qc, commit_qc.height, *archive_key)
-            {
-                return Err(json::Error::InvalidField {
-                    field: "world.commit_qcs".to_owned(),
-                    message: format!(
-                        "commit-QC archive entry {archive_key} is not an exact commit-phase certificate for its canonical height {}",
-                        commit_qc.height
-                    ),
-                });
-            }
-        }
-        Ok(())
-    }
-
-    fn nexus_from_snapshot_runtime(
-        runtime: SnapshotNexusRuntime,
-        committed_block_hashes: &[HashOf<BlockHeader>],
-    ) -> Result<
-        (
-            iroha_config::parameters::actual::Nexus,
-            BTreeMap<LaneId, Hash>,
-            BTreeMap<LaneId, u64>,
-            BTreeMap<LaneId, LaneIncarnationLineage>,
-            VecDeque<AutoscaleSampleRecord>,
-        ),
-        json::Error,
-    > {
-        if runtime.version != SnapshotNexusRuntime::VERSION {
-            return Err(json::Error::InvalidField {
-                field: "nexus_runtime.version".to_owned(),
-                message: format!(
-                    "unsupported Nexus runtime snapshot version {}; expected {}",
-                    runtime.version,
-                    SnapshotNexusRuntime::VERSION
-                ),
-            });
-        }
-        let autoscale_scale_out_window_blocks = std::num::NonZeroU16::new(
-            runtime.autoscale_scale_out_window_blocks,
-        )
-        .ok_or_else(|| json::Error::InvalidField {
-            field: "nexus_runtime.autoscale_scale_out_window_blocks".to_owned(),
-            message: "autoscale scale-out window must be non-zero".to_owned(),
-        })?;
-        let autoscale_scale_in_window_blocks = std::num::NonZeroU16::new(
-            runtime.autoscale_scale_in_window_blocks,
-        )
-        .ok_or_else(|| json::Error::InvalidField {
-            field: "nexus_runtime.autoscale_scale_in_window_blocks".to_owned(),
-            message: "autoscale scale-in window must be non-zero".to_owned(),
-        })?;
-        let autoscale_sample_history =
-            validate_snapshot_autoscale_sample_history(&runtime, committed_block_hashes)?;
-        let lane_count = std::num::NonZeroU32::new(runtime.lane_count).ok_or_else(|| {
-            json::Error::InvalidField {
-                field: "nexus_runtime.lane_count".to_owned(),
-                message: "lane_count must be non-zero".to_owned(),
-            }
-        })?;
-        let catalog = LaneCatalog::new(lane_count, runtime.lanes).map_err(|err| {
-            json::Error::InvalidField {
-                field: "nexus_runtime.lanes".to_owned(),
-                message: err.to_string(),
-            }
-        })?;
-        if !catalog.lanes().iter().any(|lane| lane.id == LaneId::SINGLE) {
-            return Err(json::Error::InvalidField {
-                field: "nexus_runtime.lanes".to_owned(),
-                message: "routing default lane 0 is missing".to_owned(),
-            });
-        }
-        let mut lane_incarnation_lineage = BTreeMap::new();
-        for entry in runtime.lane_incarnation_lineage {
-            if lane_incarnation_is_zero(entry.incarnation) {
-                return Err(json::Error::InvalidField {
-                    field: "nexus_runtime.lane_incarnation_lineage".to_owned(),
-                    message: format!(
-                        "lane {} has an all-zero incarnation commitment",
-                        entry.lane_id
-                    ),
-                });
-            }
-            if lane_incarnation_lineage
-                .insert(
-                    entry.lane_id,
-                    LaneIncarnationLineage {
-                        generation: entry.generation,
-                        incarnation: entry.incarnation,
-                        activation_height: entry.activation_height,
-                    },
-                )
-                .is_some()
-            {
-                return Err(json::Error::InvalidField {
-                    field: "nexus_runtime.lane_incarnation_lineage".to_owned(),
-                    message: format!("duplicate entry for lane {}", entry.lane_id),
-                });
-            }
-        }
-        let mut lane_incarnations = BTreeMap::new();
-        let mut lane_incarnation_activation_heights = BTreeMap::new();
-        for lane in catalog.lanes() {
-            let entry = lane_incarnation_lineage.get(&lane.id).ok_or_else(|| {
-                json::Error::InvalidField {
-                    field: "nexus_runtime.lane_incarnation_lineage".to_owned(),
-                    message: format!("active lane {} is missing lineage", lane.id),
-                }
-            })?;
-            lane_incarnations.insert(lane.id, entry.incarnation);
-            lane_incarnation_activation_heights.insert(lane.id, entry.activation_height);
-        }
-        let committed_height = u64::try_from(committed_block_hashes.len()).unwrap_or(u64::MAX);
-        validate_lane_incarnation_lineage(
-            &catalog,
-            &lane_incarnations,
-            &lane_incarnation_activation_heights,
-            &lane_incarnation_lineage,
-        )
-        .map_err(|err| json::Error::InvalidField {
-            field: "nexus_runtime.lane_incarnation_lineage".to_owned(),
-            message: err.to_string(),
-        })?;
-        if lane_incarnation_activation_heights.get(&LaneId::SINGLE) != Some(&0) {
-            return Err(json::Error::InvalidField {
-                field: "nexus_runtime.lane_incarnation_lineage".to_owned(),
-                message: "physical primary lane 0 must have activation height 0".to_owned(),
-            });
-        }
-        if let Some((lane_id, activation_height)) = lane_incarnation_lineage
-            .iter()
-            .map(|(lane_id, entry)| (lane_id, entry.activation_height))
-            .find(|(_, activation_height)| *activation_height > committed_height)
-        {
-            return Err(json::Error::InvalidField {
-                field: "nexus_runtime.lane_incarnation_lineage".to_owned(),
-                message: format!(
-                    "lane {lane_id} activation height {activation_height} exceeds snapshot height {committed_height}"
-                ),
-            });
-        }
-        if runtime.autoscale_last_transition_height > committed_height {
-            return Err(json::Error::InvalidField {
-                field: "nexus_runtime.autoscale_last_transition_height".to_owned(),
-                message: format!(
-                    "transition height {} exceeds snapshot height {committed_height}",
-                    runtime.autoscale_last_transition_height
-                ),
-            });
-        }
-        let mut latest_managed_creation_height = 0_u64;
-        for lane in catalog.lanes() {
-            if !lane_uses_reserved_autoscale_metadata(lane) {
-                continue;
-            }
-            ensure_autoscale_managed_lane_shape(lane)
-                .and_then(|()| {
-                    ensure_autoscale_managed_lane_created_height_not_future(lane, committed_height)
-                })
-                .and_then(|()| ensure_autoscale_lane_drain_close_not_future(lane, committed_height))
-                .map_err(|err| json::Error::InvalidField {
-                    field: format!("nexus_runtime.lanes[{}]", lane.id.as_u32()),
-                    message: err.to_string(),
-                })?;
-            let committee = decode_autoscale_lane_committee(lane)
-                .ok()
-                .flatten()
-                .expect("validated autoscale lane carries a canonical committee pin");
-            validate_autoscale_lane_committee_pops(&committee).map_err(|reason| {
-                json::Error::InvalidField {
-                    field: format!("nexus_runtime.lanes[{}]", lane.id.as_u32()),
-                    message: reason.to_owned(),
-                }
-            })?;
-            latest_managed_creation_height = latest_managed_creation_height.max(
-                lane.autoscale_created_height()
-                    .expect("validated managed lane carries a creation height"),
-            );
-        }
-        if runtime.autoscale_last_transition_height < latest_managed_creation_height {
-            return Err(json::Error::InvalidField {
-                field: "nexus_runtime.autoscale_last_transition_height".to_owned(),
-                message: format!(
-                    "transition height {} precedes managed lane creation height {latest_managed_creation_height}",
-                    runtime.autoscale_last_transition_height
-                ),
-            });
-        }
-
-        let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog);
-        nexus.lane_catalog = catalog;
-        // These windows determine both the serialized history cap and which retained samples
-        // influence the first post-restart autoscale decision. Restore the snapshot-authenticated
-        // values before canonical reserialization; substituting process defaults here makes a
-        // writer-created snapshot non-canonical whenever operators tune either window.
-        nexus.autoscale.scale_out_window_blocks = autoscale_scale_out_window_blocks;
-        nexus.autoscale.scale_in_window_blocks = autoscale_scale_in_window_blocks;
-        nexus.autoscale.last_transition_height = runtime.autoscale_last_transition_height;
-        Ok((
-            nexus,
-            lane_incarnations,
-            lane_incarnation_activation_heights,
-            lane_incarnation_lineage,
-            autoscale_sample_history,
-        ))
-    }
-
-    fn validate_snapshot_autoscale_sample_history(
-        runtime: &SnapshotNexusRuntime,
-        committed_block_hashes: &[HashOf<BlockHeader>],
-    ) -> Result<VecDeque<AutoscaleSampleRecord>, json::Error> {
-        let field = "nexus_runtime.autoscale_sample_history";
-        let cap = usize::try_from(runtime.autoscale_sample_history_cap).map_err(|_| {
-            json::Error::InvalidField {
-                field: "nexus_runtime.autoscale_sample_history_cap".to_owned(),
-                message: "history cap does not fit this platform".to_owned(),
-            }
-        })?;
-        if !(2..=MAX_AUTOSCALE_SAMPLE_HISTORY_ENTRIES).contains(&cap) {
-            return Err(json::Error::InvalidField {
-                field: "nexus_runtime.autoscale_sample_history_cap".to_owned(),
-                message: format!(
-                    "history cap {cap} is outside the supported range 2..={MAX_AUTOSCALE_SAMPLE_HISTORY_ENTRIES}"
-                ),
-            });
-        }
-        let scale_out_window = usize::from(runtime.autoscale_scale_out_window_blocks);
-        let scale_in_window = usize::from(runtime.autoscale_scale_in_window_blocks);
-        if scale_out_window == 0 || scale_in_window == 0 {
-            return Err(json::Error::InvalidField {
-                field: "nexus_runtime.autoscale_sample_history_cap".to_owned(),
-                message: "autoscale snapshot windows must be non-zero".to_owned(),
-            });
-        }
-        let required_cap = scale_out_window.max(scale_in_window).saturating_add(1);
-        if cap != required_cap {
-            return Err(json::Error::InvalidField {
-                field: "nexus_runtime.autoscale_sample_history_cap".to_owned(),
-                message: format!(
-                    "history cap {cap} does not match the configured snapshot windows (required {required_cap})"
-                ),
-            });
-        }
-        let history = &runtime.autoscale_sample_history;
-        if history.len() > cap {
-            return Err(json::Error::InvalidField {
-                field: field.to_owned(),
-                message: format!(
-                    "history contains {} records but its declared cap is {cap}",
-                    history.len()
-                ),
-            });
-        }
-        if committed_block_hashes.is_empty() {
-            if history.is_empty() {
-                return Ok(VecDeque::new());
-            }
-            return Err(json::Error::InvalidField {
-                field: field.to_owned(),
-                message: "history must be empty at snapshot height zero".to_owned(),
-            });
-        }
-        if history.is_empty() {
-            return Err(json::Error::InvalidField {
-                field: field.to_owned(),
-                message: "history must retain the latest committed block".to_owned(),
-            });
-        }
-
-        let committed_height =
-            u64::try_from(committed_block_hashes.len()).map_err(|_| json::Error::InvalidField {
-                field: field.to_owned(),
-                message: "committed height does not fit u64".to_owned(),
-            })?;
-        let history_len = u64::try_from(history.len()).map_err(|_| json::Error::InvalidField {
-            field: field.to_owned(),
-            message: "history length does not fit u64".to_owned(),
-        })?;
-        let expected_first_height = committed_height
-            .checked_sub(history_len.saturating_sub(1))
-            .ok_or_else(|| json::Error::InvalidField {
-                field: field.to_owned(),
-                message: "history is longer than the committed chain".to_owned(),
-            })?;
-        if expected_first_height == 0 {
-            return Err(json::Error::InvalidField {
-                field: field.to_owned(),
-                message: "history contains a zero block height".to_owned(),
-            });
-        }
-
-        let mut previous_timestamp = None;
-        for (index, record) in history.iter().enumerate() {
-            let offset = u64::try_from(index).map_err(|_| json::Error::InvalidField {
-                field: field.to_owned(),
-                message: "history index does not fit u64".to_owned(),
-            })?;
-            let expected_height = expected_first_height.checked_add(offset).ok_or_else(|| {
-                json::Error::InvalidField {
-                    field: field.to_owned(),
-                    message: "history height overflow".to_owned(),
-                }
-            })?;
-            if record.block_height != expected_height {
-                return Err(json::Error::InvalidField {
-                    field: field.to_owned(),
-                    message: format!(
-                        "record {index} has height {}; expected consecutive height {expected_height}",
-                        record.block_height
-                    ),
-                });
-            }
-            let hash_index =
-                usize::try_from(record.block_height.saturating_sub(1)).map_err(|_| {
-                    json::Error::InvalidField {
-                        field: field.to_owned(),
-                        message: format!("record {index} height does not fit this platform"),
-                    }
-                })?;
-            if committed_block_hashes.get(hash_index) != Some(&record.block_hash) {
-                return Err(json::Error::InvalidField {
-                    field: field.to_owned(),
-                    message: format!(
-                        "record {index} hash does not match committed height {}",
-                        record.block_height
-                    ),
-                });
-            }
-            if record.creation_time_ms == 0 || record.creation_time_ms == u64::MAX {
-                return Err(json::Error::InvalidField {
-                    field: field.to_owned(),
-                    message: format!(
-                        "record {index} has an invalid creation timestamp {}",
-                        record.creation_time_ms
-                    ),
-                });
-            }
-            if previous_timestamp.is_some_and(|previous| record.creation_time_ms <= previous) {
-                return Err(json::Error::InvalidField {
-                    field: field.to_owned(),
-                    message: format!(
-                        "record {index} creation timestamp {} is not strictly increasing",
-                        record.creation_time_ms
-                    ),
-                });
-            }
-            if record.work_count == u64::MAX {
-                return Err(json::Error::InvalidField {
-                    field: field.to_owned(),
-                    message: format!("record {index} work count is outside the supported range"),
-                });
-            }
-            previous_timestamp = Some(record.creation_time_ms);
-        }
-
-        Ok(history.iter().copied().collect())
-    }
-
-    fn decode_snapshot_records<T>(
-        records: Vec<SnapshotNoritoBlob>,
-        field: &str,
-    ) -> Result<Vec<T>, json::Error>
-    where
-        T: DecodeAll,
-    {
-        records
-            .into_iter()
-            .enumerate()
-            .map(|(index, record)| {
-                let bytes =
-                    hex::decode(&record.encoded_hex).map_err(|err| json::Error::InvalidField {
-                        field: field.to_owned(),
-                        message: format!("record {index} hex decode failed: {err}"),
-                    })?;
-                let mut cursor = bytes.as_slice();
-                T::decode_all(&mut cursor).map_err(|err| json::Error::InvalidField {
-                    field: field.to_owned(),
-                    message: format!("record {index} norito decode failed: {err}"),
-                })
-            })
-            .collect()
-    }
-
-    fn decode_public_lane_validator_records(
-        records: Vec<SnapshotNoritoBlob>,
-    ) -> Result<Vec<PublicLaneValidatorRecord>, json::Error> {
-        let mut decoded = Vec::with_capacity(records.len());
-        for (index, record) in records.into_iter().enumerate() {
-            let bytes =
-                hex::decode(&record.encoded_hex).map_err(|err| json::Error::InvalidField {
-                    field: "public_lane_validators".to_owned(),
-                    message: format!("record {index} hex decode failed: {err}"),
-                })?;
-            let mut cursor = bytes.as_slice();
-            decoded.push(
-                PublicLaneValidatorRecord::decode_all(&mut cursor).map_err(|err| {
-                    json::Error::InvalidField {
-                        field: "public_lane_validators".to_owned(),
-                        message: format!("record {index} norito decode failed: {err}"),
-                    }
-                })?,
-            );
-        }
-        Ok(decoded)
-    }
-
-    fn decode_public_lane_stake_share_records(
-        records: Vec<SnapshotNoritoBlob>,
-    ) -> Result<Vec<PublicLaneStakeShare>, json::Error> {
-        let mut decoded = Vec::with_capacity(records.len());
-        for (index, record) in records.into_iter().enumerate() {
-            let bytes =
-                hex::decode(&record.encoded_hex).map_err(|err| json::Error::InvalidField {
-                    field: "public_lane_stake_shares".to_owned(),
-                    message: format!("record {index} hex decode failed: {err}"),
-                })?;
-            let mut cursor = bytes.as_slice();
-            decoded.push(
-                PublicLaneStakeShare::decode_all(&mut cursor).map_err(|err| {
-                    json::Error::InvalidField {
-                        field: "public_lane_stake_shares".to_owned(),
-                        message: format!("record {index} norito decode failed: {err}"),
-                    }
-                })?,
-            );
-        }
-        Ok(decoded)
-    }
-
-    fn decode_space_directory_manifest_sets(
-        records: Vec<SnapshotSpaceDirectoryManifestSet>,
-    ) -> Result<Storage<UniversalAccountId, SpaceDirectoryManifestSet>, json::Error> {
-        let mut storage = Storage::default();
-        for (index, record) in records.into_iter().enumerate() {
-            let bytes =
-                hex::decode(&record.encoded_hex).map_err(|err| json::Error::InvalidField {
-                    field: "space_directory_manifests".to_owned(),
-                    message: format!("record {index} hex decode failed: {err}"),
-                })?;
-            let mut cursor = bytes.as_slice();
-            let manifest_set =
-                SpaceDirectoryManifestSet::decode_all(&mut cursor).map_err(|err| {
-                    json::Error::InvalidField {
-                        field: "space_directory_manifests".to_owned(),
-                        message: format!("record {index} norito decode failed: {err}"),
-                    }
-                })?;
-            if storage.insert(record.uaid, manifest_set).is_some() {
-                return Err(json::Error::InvalidField {
-                    field: "space_directory_manifests".to_owned(),
-                    message: format!("duplicate UAID at record {index}"),
-                });
-            }
-        }
-        Ok(storage)
-    }
-
-    fn take_required<T: JsonDeserialize>(
-        map: &mut json::native::Map,
-        key: &str,
-    ) -> Result<T, json::Error> {
-        let value = map
-            .remove(key)
-            .ok_or_else(|| json::Error::missing_field(key))?;
-        json::value::from_value(value).map_err(|err| json::Error::InvalidField {
-            field: key.to_owned(),
-            message: err.to_string(),
-        })
-    }
-
-    fn take_optional_default<T>(map: &mut json::native::Map, key: &str) -> Result<T, json::Error>
-    where
-        T: JsonDeserialize + Default,
-    {
-        map.remove(key).map_or_else(
-            || Ok(T::default()),
-            |value| {
-                json::value::from_value(value).map_err(|err| json::Error::InvalidField {
-                    field: key.to_owned(),
-                    message: err.to_string(),
-                })
-            },
-        )
-    }
-
-    fn take_musubi_namespace_bindings(
-        map: &mut json::native::Map,
-    ) -> Result<Storage<MusubiNamespaceV1, MusubiNamespaceBindingV1>, json::Error> {
-        let bindings: Storage<MusubiNamespaceV1, MusubiNamespaceBindingV1> =
-            take_required(map, "musubi_namespace_bindings")?;
-        for (namespace, binding) in bindings.view().iter() {
-            if namespace != &binding.namespace {
-                return Err(json::Error::InvalidField {
-                    field: "musubi_namespace_bindings".to_owned(),
-                    message: format!(
-                        "binding key '{namespace}' does not match embedded namespace '{}'",
-                        binding.namespace
-                    ),
-                });
-            }
-            binding
-                .validate()
-                .map_err(|error| json::Error::InvalidField {
-                    field: "musubi_namespace_bindings".to_owned(),
-                    message: error.to_string(),
-                })?;
-        }
-        Ok(bindings)
-    }
-
-    fn take_musubi_domain_ownership_generations(
-        map: &mut json::native::Map,
-    ) -> Result<Storage<DomainId, u64>, json::Error> {
-        let generations: Storage<DomainId, u64> =
-            take_required(map, "musubi_domain_ownership_generations")?;
-        for (domain, generation) in generations.view().iter() {
-            if *generation < 2 {
-                return Err(json::Error::InvalidField {
-                    field: "musubi_domain_ownership_generations".to_owned(),
-                    message: format!(
-                        "domain '{domain}' stores noncanonical generation {generation}; absent means generation 1 and persisted entries start at 2"
-                    ),
-                });
-            }
-        }
-        Ok(generations)
-    }
-
-    fn take_musubi_registry_policy(
-        map: &mut json::native::Map,
-    ) -> Result<Cell<MusubiRegistryPolicyV1>, json::Error> {
-        let policy: Cell<MusubiRegistryPolicyV1> = take_required(map, "musubi_registry_policy")?;
-        policy
-            .view()
-            .get()
-            .validate()
-            .map_err(|error| json::Error::InvalidField {
-                field: "musubi_registry_policy".to_owned(),
-                message: error.to_string(),
-            })?;
-        Ok(policy)
-    }
-
-    fn take_musubi_resolver_index_revision(
-        map: &mut json::native::Map,
-    ) -> Result<Cell<MusubiResolverIndexRevisionV1>, json::Error> {
-        let revision: Cell<MusubiResolverIndexRevisionV1> =
-            take_required(map, "musubi_resolver_index_revision")?;
-        if revision.view().get().get() == 0 {
-            return Err(json::Error::InvalidField {
-                field: "musubi_resolver_index_revision".to_owned(),
-                message: "Musubi resolver-index revision must be non-zero".to_owned(),
-            });
-        }
-        Ok(revision)
-    }
-
-    fn take_musubi_resolver_index_checkpoints(
-        map: &mut json::native::Map,
-    ) -> Result<Storage<MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>, json::Error> {
-        take_required(map, "musubi_resolver_index_checkpoints")
-    }
-
-    fn take_musubi_replication_shortfall_releases(
-        map: &mut json::native::Map,
-    ) -> Result<Cell<u64>, json::Error> {
-        take_required(map, "musubi_replication_shortfall_releases")
-    }
-
-    fn validate_provider_ingest_completion_authorities(
-        provider_owners: &Storage<ProviderId, AccountId>,
-        authorities: &Storage<ProviderId, ProviderIngestCompletionAuthorityV1>,
-    ) -> Result<(), json::Error> {
-        let owners = provider_owners.view();
-        for (provider_id, authority) in authorities.view().iter() {
-            if !authority.is_valid() || owners.get(provider_id) != Some(&authority.provider_owner) {
-                return Err(json::Error::InvalidField {
-                    field: "provider_ingest_completion_authorities".to_owned(),
-                    message: format!(
-                        "provider {} has a noncanonical or owner-mismatched completion authority",
-                        hex::encode(provider_id.as_bytes())
-                    ),
-                });
-            }
-        }
-        Ok(())
-    }
-
-    pub(super) fn validate_ram_lfe_program_policies(
-        policies: &Storage<RamLfeProgramId, RamLfeProgramPolicy>,
-    ) -> Result<(), json::Error> {
-        for (program_id, policy) in policies.view().iter() {
-            crate::smartcontracts::isi::ram_lfe::validate_program_policy(policy).map_err(
-                |err| json::Error::InvalidField {
-                    field: format!("world.ram_lfe_program_policies.{program_id}"),
-                    message: err.to_string(),
-                },
-            )?;
-        }
-        Ok(())
-    }
-
-    fn validate_sccp_inbound_messages(
-        messages: &Storage<SccpInboundMessageKeyV1, SccpInboundMessageRecordV1>,
-    ) -> Result<(), json::Error> {
-        for (key, record) in messages.view().iter() {
-            if !key.is_well_formed() {
-                return Err(json::Error::InvalidField {
-                    field: "world.sccp_inbound_messages".to_owned(),
-                    message:
-                        "replay key is not an exact external-to-SORA lane with a nonzero message id"
-                            .to_owned(),
-                });
-            }
-            if !record.is_well_formed_for_lane(key.lane) {
-                return Err(json::Error::InvalidField {
-                    field: "world.sccp_inbound_messages".to_owned(),
-                    message: format!(
-                        "replay record for {} -> {} contains invalid evidence or a mismatched native backend",
-                        key.lane.source.profile_key(),
-                        key.lane.target.profile_key()
-                    ),
-                });
-            }
-        }
-        Ok(())
-    }
-
-    fn validate_sccp_outbound_pending_messages(
-        messages: &Storage<SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1>,
-    ) -> Result<(), json::Error> {
-        for (key, record) in messages.view().iter() {
-            crate::bridge::validate_sccp_outbound_message_record_v1(key, record).ok_or_else(|| {
-                json::Error::InvalidField {
-                    field: "world.sccp_outbound_pending_messages".to_owned(),
-                    message: "outbound replay entry must carry one bounded canonical payload bound to its exact lane, governed context, message id, and payload hash".to_owned(),
-                }
-            })?;
-        }
-        Ok(())
-    }
-
-    fn validate_sccp_outbound_pending_usage(
-        messages: &Storage<SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1>,
-        usage: &Cell<SccpOutboundPendingUsageV1>,
-    ) -> Result<(), json::Error> {
-        let mut expected = SccpOutboundPendingUsageV1::default();
-        for (_, record) in messages.view().iter() {
-            expected = expected
-                .checked_add_payload(record.payload_bytes.len())
-                .ok_or_else(|| json::Error::InvalidField {
-                    field: "world.sccp_outbound_pending_usage".to_owned(),
-                    message: "pending outbound usage overflows its fixed counters".to_owned(),
-                })?;
-        }
-        let actual = *usage.view().get();
-        if !actual.is_structurally_valid() || actual != expected {
-            return Err(json::Error::InvalidField {
-                field: "world.sccp_outbound_pending_usage".to_owned(),
-                message: format!(
-                    "pending outbound usage does not match payload-bearing records: expected {expected:?}, found {actual:?}"
-                ),
-            });
-        }
-        Ok(())
-    }
-
-    fn validate_sccp_outbound_proofs(
-        proofs: &Storage<SccpOutboundMessageKeyV1, SccpOutboundProofRecordV1>,
-        locator: &Storage<[u8; 32], SccpOutboundMessageKeyV1>,
-    ) -> Result<(), json::Error> {
-        let locator = locator.view();
-        for (key, proof) in proofs.view().iter() {
-            if !proof.is_well_formed_for_key(key) {
-                return Err(json::Error::InvalidField {
-                    field: "world.sccp_outbound_proofs".to_owned(),
-                    message: "outbound proof replay entry must use one exact outbound lane/message key, ordered nonzero heights, and six distinct nonzero hash roles".to_owned(),
-                });
-            }
-            if locator.get(&key.message_id) != Some(key) {
-                return Err(json::Error::InvalidField {
-                    field: "world.sccp_outbound_proofs".to_owned(),
-                    message: "outbound proof replay key is inconsistent with the global outbound message locator".to_owned(),
-                });
-            }
-        }
-        Ok(())
-    }
-
-    fn validate_sccp_outbound_indexes(
-        pending: &Storage<SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1>,
-        terminal: &Storage<SccpOutboundMessageKeyV1, SccpOutboundProofRecordV1>,
-        locator: &Storage<[u8; 32], SccpOutboundMessageKeyV1>,
-        ordered: &Storage<SccpOutboundMessageIndexKeyV1, ()>,
-    ) -> Result<(), json::Error> {
-        let pending = pending.view();
-        let terminal = terminal.view();
-        let locator = locator.view();
-        let ordered = ordered.view();
-        let union_len = pending
-            .iter()
-            .count()
-            .checked_add(terminal.iter().count())
-            .ok_or_else(|| json::Error::InvalidField {
-                field: "world.sccp_outbound_message_index".to_owned(),
-                message: "outbound replay union cardinality overflows".to_owned(),
-            })?;
-        if union_len != locator.iter().count() || union_len != ordered.iter().count() {
-            return Err(json::Error::InvalidField {
-                field: "world.sccp_outbound_message_index".to_owned(),
-                message: "pending/terminal outbound replay union, global locator, and ordered index cardinalities differ".to_owned(),
-            });
-        }
-        for (key, record) in pending.iter() {
-            if terminal.get(key).is_some() {
-                return Err(json::Error::InvalidField {
-                    field: "world.sccp_outbound_proofs".to_owned(),
-                    message: "one outbound replay key appears in both pending and terminal state"
-                        .to_owned(),
-                });
-            }
-            if locator.get(&key.message_id) != Some(key) {
-                return Err(json::Error::InvalidField {
-                    field: "world.sccp_outbound_message_locator".to_owned(),
-                    message: "global message-id locator is missing or aliases another replay key"
-                        .to_owned(),
-                });
-            }
-            let index_key = SccpOutboundMessageIndexKeyV1::new(*key, record).ok_or_else(|| {
-                json::Error::InvalidField {
-                    field: "world.sccp_outbound_message_index".to_owned(),
-                    message: "authoritative outbound entry cannot form a valid ordered locator"
-                        .to_owned(),
-                }
-            })?;
-            if ordered.get(&index_key).is_none() {
-                return Err(json::Error::InvalidField {
-                    field: "world.sccp_outbound_message_index".to_owned(),
-                    message: "ordered outbound locator is missing".to_owned(),
-                });
-            }
-        }
-        for (key, record) in terminal.iter() {
-            if locator.get(&key.message_id) != Some(key) {
-                return Err(json::Error::InvalidField {
-                    field: "world.sccp_outbound_message_locator".to_owned(),
-                    message: "global message-id locator is missing or aliases another terminal replay key".to_owned(),
-                });
-            }
-            let index_key =
-                SccpOutboundMessageIndexKeyV1::from_terminal(*key, record).ok_or_else(|| {
-                    json::Error::InvalidField {
-                        field: "world.sccp_outbound_message_index".to_owned(),
-                        message: "terminal outbound entry cannot form a valid ordered locator"
-                            .to_owned(),
-                    }
-                })?;
-            if ordered.get(&index_key).is_none() {
-                return Err(json::Error::InvalidField {
-                    field: "world.sccp_outbound_message_index".to_owned(),
-                    message: "ordered terminal outbound locator is missing".to_owned(),
-                });
-            }
-        }
-        for (message_id, key) in locator.iter() {
-            let present =
-                usize::from(pending.get(key).is_some()) + usize::from(terminal.get(key).is_some());
-            if *message_id != key.message_id || present != 1 {
-                return Err(json::Error::InvalidField {
-                    field: "world.sccp_outbound_message_locator".to_owned(),
-                    message:
-                        "global locator must name exactly one pending or terminal replay entry"
-                            .to_owned(),
-                });
-            }
-        }
-        let mut current_height = None;
-        let mut expected_commitment_index = 0_u32;
-        for (index_key, ()) in ordered.iter() {
-            if current_height != Some(index_key.recorded_at_height) {
-                current_height = Some(index_key.recorded_at_height);
-                expected_commitment_index = 0;
-            }
-            if expected_commitment_index
-                >= iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
-            {
-                return Err(json::Error::InvalidField {
-                    field: "world.sccp_outbound_message_index".to_owned(),
-                    message: format!(
-                        "height {} exceeds the fixed {}-message SCCP outbox bound",
-                        index_key.recorded_at_height,
-                        iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
-                    ),
-                });
-            }
-            if !index_key.is_well_formed() {
-                return Err(json::Error::InvalidField {
-                    field: "world.sccp_outbound_message_index".to_owned(),
-                    message: "ordered locator is malformed".to_owned(),
-                });
-            }
-            if index_key.commitment_index != expected_commitment_index {
-                return Err(json::Error::InvalidField {
-                    field: "world.sccp_outbound_message_index".to_owned(),
-                    message: format!(
-                        "height {} commitment indices must be dense from zero: expected {}, found {}",
-                        index_key.recorded_at_height,
-                        expected_commitment_index,
-                        index_key.commitment_index
-                    ),
-                });
-            }
-            let key = index_key.message_key();
-            let pending_index = pending
-                .get(&key)
-                .and_then(|record| SccpOutboundMessageIndexKeyV1::new(key, record));
-            let terminal_index = terminal
-                .get(&key)
-                .and_then(|record| SccpOutboundMessageIndexKeyV1::from_terminal(key, record));
-            if !matches!((pending_index, terminal_index), (Some(actual), None) | (None, Some(actual)) if actual == *index_key)
-            {
-                return Err(json::Error::InvalidField {
-                    field: "world.sccp_outbound_message_index".to_owned(),
-                    message:
-                        "ordered locator height, commitment index, or replay key is inconsistent"
-                            .to_owned(),
-                });
-            }
-            expected_commitment_index += 1;
-        }
-        Ok(())
-    }
-
-    fn take_ram_lfe_program_policies(
-        map: &mut json::native::Map,
-    ) -> Result<Storage<RamLfeProgramId, RamLfeProgramPolicy>, json::Error> {
-        let value = map
-            .remove("ram_lfe_program_policies")
-            .ok_or_else(|| json::Error::missing_field("ram_lfe_program_policies"))?;
-        json::value::from_value(value).map_err(|err| json::Error::InvalidField {
-            field: "ram_lfe_program_policies".to_owned(),
-            message: err.to_string(),
-        })
-    }
-
-    fn take_parameters_cell(
-        map: &mut json::native::Map,
-        key: &str,
-    ) -> Result<Cell<Parameters>, json::Error> {
-        let value = map
-            .remove(key)
-            .ok_or_else(|| json::Error::missing_field(key))?;
-        json::value::from_value(value).map_err(|err| json::Error::InvalidField {
-            field: key.to_owned(),
-            message: err.to_string(),
-        })
-    }
-
-    fn take_topology_cell(
-        map: &mut json::native::Map,
-        key: &str,
-    ) -> Result<Cell<Vec<PeerId>>, json::Error> {
-        let value = map
-            .remove(key)
-            .ok_or_else(|| json::Error::missing_field(key))?;
-        match value {
-            json::Value::Array(_) => {
-                let peers: Vec<PeerId> = json::value::from_value(value)?;
-                Ok(Cell::new(peers))
-            }
-            other => json::value::from_value(other),
-        }
-    }
-
-    fn reject_legacy_musubi_state(
-        smart_contract_state: &Storage<StatePath, Vec<u8>>,
-    ) -> Result<(), json::Error> {
-        let legacy = smart_contract_state.view().iter().find_map(|(key, _)| {
-            let key = key.as_ref();
-            is_legacy_musubi_state_path(key).then_some(key.to_owned())
-        });
-        if let Some(key) = legacy {
-            return Err(json::Error::InvalidField {
-                field: "smart_contract_state".to_owned(),
-                message: format!(
-                    "legacy pre-release Musubi state `{key}` is unsupported; reset registry state"
-                ),
-            });
-        }
-        Ok(())
-    }
-
-    fn is_legacy_musubi_state_path(path: &str) -> bool {
-        path == "musubi"
-            || path.starts_with("musubi_")
-            || path.starts_with("musubi/")
-            || path.starts_with("musubi.")
-            || path.starts_with("musubi:")
-    }
-
-    pub(super) fn validate_musubi_location_reverse_indices(
-        locations: &Storage<MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>,
-        by_pin: &Storage<ManifestDigest, MusubiPinLocationReferenceV1>,
-        by_order: &Storage<ReplicationOrderId, MusubiReplicationOrderLocationReferenceV1>,
-        by_provider: &Storage<MusubiProviderLocationKeyV1, ()>,
-    ) -> Result<(), json::Error> {
-        let invalid = |message: String| json::Error::InvalidField {
-            field: "world.musubi_location_reverse_indices".to_owned(),
-            message,
-        };
-        let locations = locations.view();
-        let by_pin = by_pin.view();
-        let by_order = by_order.view();
-        let by_provider = by_provider.view();
-
-        for (digest, reference) in by_pin.iter() {
-            reference
-                .validate()
-                .map_err(|error| invalid(error.to_string()))?;
-            if digest != &reference.pin_manifest {
-                return Err(invalid(
-                    "pin reverse-index key does not match its duplicated manifest digest".into(),
-                ));
-            }
-            let target = locations.get(&reference.location).ok_or_else(|| {
-                invalid("pin reverse reference targets a missing location".into())
-            })?;
-            if reference.active {
-                if target.state == MusubiArchiveLocationStateV1::Retired
-                    || target.pin_manifest != *digest
-                {
-                    return Err(invalid(
-                        "active pin reverse reference does not match its current location".into(),
-                    ));
-                }
-            }
-        }
-        for (order, reference) in by_order.iter() {
-            reference
-                .validate()
-                .map_err(|error| invalid(error.to_string()))?;
-            if order != &reference.replication_order {
-                return Err(invalid(
-                    "order reverse-index key does not match its duplicated order identity".into(),
-                ));
-            }
-            let target = locations.get(&reference.location).ok_or_else(|| {
-                invalid("order reverse reference targets a missing location".into())
-            })?;
-            if reference.active {
-                if target.state == MusubiArchiveLocationStateV1::Retired
-                    || target.replication_order != *order
-                {
-                    return Err(invalid(
-                        "active order reverse reference does not match its current location".into(),
-                    ));
-                }
-            }
-        }
-        for (key, ()) in by_provider.iter() {
-            key.validate().map_err(|error| invalid(error.to_string()))?;
-            let location = locations.get(&key.location).ok_or_else(|| {
-                invalid("provider reverse reference targets a missing location".into())
-            })?;
-            if location.state == MusubiArchiveLocationStateV1::Retired
-                || location.providers.binary_search(&key.provider_id).is_err()
-            {
-                return Err(invalid(
-                    "provider reverse reference does not match its current location".into(),
-                ));
-            }
-        }
-        for (key, location) in locations.iter() {
-            location
-                .validate()
-                .map_err(|error| invalid(error.to_string()))?;
-            if key != &location.key() {
-                return Err(invalid(
-                    "archive-location key does not match the stored record".into(),
-                ));
-            }
-            if location.state == MusubiArchiveLocationStateV1::Retired {
-                if !by_pin
-                    .get(&location.pin_manifest)
-                    .is_some_and(|reference| !reference.active && reference.location == *key)
-                    || !by_order
-                        .get(&location.replication_order)
-                        .is_some_and(|reference| !reference.active && reference.location == *key)
-                {
-                    return Err(invalid(
-                        "retired archive location is missing an immutable reuse tombstone".into(),
-                    ));
-                }
-                continue;
-            }
-            if !by_pin
-                .get(&location.pin_manifest)
-                .is_some_and(|reference| reference.active && reference.location == *key)
-                || !by_order
-                    .get(&location.replication_order)
-                    .is_some_and(|reference| reference.active && reference.location == *key)
-                || location.providers.iter().any(|provider| {
-                    by_provider
-                        .get(&MusubiProviderLocationKeyV1::new(*provider, *key))
-                        .is_none()
-                })
-            {
-                return Err(invalid(
-                    "current archive location is missing an exact reverse-index entry".into(),
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn invalid_musubi_state(field: &str, message: impl Into<String>) -> json::Error {
-        json::Error::InvalidField {
-            field: format!("world.{field}"),
-            message: message.into(),
-        }
-    }
-
-    fn validate_musubi_resolver_checkpoint_structure(
-        checkpoints: &Storage<MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>,
-        current_revision: u64,
-    ) -> Result<(), json::Error> {
-        let checkpoints = checkpoints.view();
-        let mut previous_height = None;
-        let mut latest_revision = None;
-        for (revision, checkpoint) in checkpoints.iter() {
-            checkpoint.validate().map_err(|error| {
-                invalid_musubi_state("musubi_resolver_index_checkpoints", error.to_string())
-            })?;
-            if revision.get() != checkpoint.index_revision {
-                return Err(invalid_musubi_state(
-                    "musubi_resolver_index_checkpoints",
-                    "resolver checkpoint key does not match its embedded revision",
-                ));
-            }
-            if previous_height.is_none() && checkpoint.finalized_height != 1 {
-                return Err(invalid_musubi_state(
-                    "musubi_resolver_index_checkpoints",
-                    "resolver checkpoint history must begin at genesis",
-                ));
-            }
-            if previous_height.is_some_and(|height| height >= checkpoint.finalized_height) {
-                return Err(invalid_musubi_state(
-                    "musubi_resolver_index_checkpoints",
-                    "resolver checkpoint activation heights must increase strictly",
-                ));
-            }
-            previous_height = Some(checkpoint.finalized_height);
-            latest_revision = Some(revision.get());
-        }
-        if latest_revision.is_some_and(|revision| revision != current_revision) {
-            return Err(invalid_musubi_state(
-                "musubi_resolver_index_checkpoints",
-                "latest resolver checkpoint does not match the current resolver-index revision",
-            ));
-        }
-        Ok(())
-    }
-
-    fn validate_musubi_resolver_checkpoint_anchors(
-        world: &World,
-        block_hashes: &[HashOf<BlockHeader>],
-    ) -> Result<(), json::Error> {
-        let current_revision = world.musubi_resolver_index_revision.view().get().get();
-        validate_musubi_resolver_checkpoint_structure(
-            &world.musubi_resolver_index_checkpoints,
-            current_revision,
-        )?;
-
-        let checkpoints = world.musubi_resolver_index_checkpoints.view();
-        let history_is_empty = checkpoints.is_empty();
-        if block_hashes.is_empty() {
-            if !history_is_empty {
-                return Err(invalid_musubi_state(
-                    "musubi_resolver_index_checkpoints",
-                    "pregenesis state cannot contain resolver checkpoints",
-                ));
-            }
-            return Ok(());
-        }
-        if history_is_empty {
-            return Err(invalid_musubi_state(
-                "musubi_resolver_index_checkpoints",
-                "committed state must retain the genesis resolver checkpoint",
-            ));
-        }
-        for (_, checkpoint) in checkpoints.iter() {
-            let index = checkpoint
-                .finalized_height
-                .checked_sub(1)
-                .and_then(|index| usize::try_from(index).ok());
-            let canonical_hash = index
-                .and_then(|index| block_hashes.get(index))
-                .map(|hash| *hash.as_ref());
-            if canonical_hash != Some(checkpoint.finalized_block_hash) {
-                return Err(invalid_musubi_state(
-                    "musubi_resolver_index_checkpoints",
-                    "resolver checkpoint is not anchored to its canonical finalized block",
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    struct MusubiPersistedState<'a> {
-        namespace_bindings: &'a Storage<MusubiNamespaceV1, MusubiNamespaceBindingV1>,
-        packages: &'a Storage<MusubiPackageIdV1, MusubiPackageRecordV1>,
-        package_metadata: &'a Storage<MusubiPackageIdV1, MusubiPackageMetadataRecordV1>,
-        package_members: &'a Storage<MusubiPackageMemberKeyV1, MusubiPackageMemberV1>,
-        package_invitations: &'a Storage<MusubiInviteIdV1, MusubiMaintainerInvitationV1>,
-        maintainer_directory:
-            &'a Storage<MusubiMaintainerDirectoryKeyV1, MusubiMaintainerDirectoryEntryV1>,
-        releases: &'a Storage<MusubiReleaseIdV1, MusubiReleaseRecordV1>,
-        archives: &'a Storage<ArchiveId, MusubiArchiveRecordV1>,
-        provider_bundle_attestations: &'a Storage<
-            MusubiProviderBundleAttestationKeyV1,
-            MusubiProviderBundleAttestationRecordV1,
-        >,
-        archive_locations: &'a Storage<MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>,
-        archive_availability: &'a Storage<ArchiveId, MusubiArchiveAvailabilityV1>,
-        archive_reverse_references: &'a Storage<ArchiveId, MusubiArchiveReverseReferencesV1>,
-        resolver_index: &'a Storage<MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
-        resolver_index_checkpoints:
-            &'a Storage<MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>,
-        public_directory: &'a Storage<MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
-        aliases: &'a Storage<MusubiAliasNameV1, MusubiAliasRecordV1>,
-        alias_history: &'a Storage<MusubiAliasHistoryKeyV1, MusubiAliasHistoryEntryV1>,
-        governance_decisions: &'a Storage<[u8; 32], MusubiGovernanceDecisionConsumptionV1>,
-        resolver_index_revision: u64,
-        replication_shortfall_releases: u64,
-    }
-
-    impl MusubiPersistedState<'_> {
-        #[allow(clippy::too_many_lines)]
-        fn validate(self) -> Result<(), json::Error> {
-            let namespace_bindings = self.namespace_bindings.view();
-            let packages = self.packages.view();
-            let package_metadata = self.package_metadata.view();
-            let package_members = self.package_members.view();
-            let package_invitations = self.package_invitations.view();
-            let maintainer_directory = self.maintainer_directory.view();
-            let releases = self.releases.view();
-            let archives = self.archives.view();
-            let provider_bundle_attestations = self.provider_bundle_attestations.view();
-            let archive_locations = self.archive_locations.view();
-            let archive_availability = self.archive_availability.view();
-            let archive_reverse_references = self.archive_reverse_references.view();
-            let resolver_index = self.resolver_index.view();
-            validate_musubi_resolver_checkpoint_structure(
-                self.resolver_index_checkpoints,
-                self.resolver_index_revision,
-            )?;
-            let public_directory = self.public_directory.view();
-            let aliases = self.aliases.view();
-            let alias_history = self.alias_history.view();
-            let governance_decisions = self.governance_decisions.view();
-
-            let mut decision_actions = Vec::new();
-            for (decision_id, consumption) in governance_decisions.iter() {
-                consumption.validate().map_err(|error| {
-                    invalid_musubi_state("musubi_governance_decisions", error.to_string())
-                })?;
-                let decision = &consumption.decision;
-                if decision_id != &decision.decision_id {
-                    return Err(invalid_musubi_state(
-                        "musubi_governance_decisions",
-                        "governance-decision key does not match its embedded decision id",
-                    ));
-                }
-                decision_actions.push(decision.action_digest);
-            }
-
-            for (package_id, metadata) in package_metadata.iter() {
-                metadata.package.validate().map_err(|error| {
-                    invalid_musubi_state("musubi_package_metadata", error.to_string())
-                })?;
-                metadata.validate().map_err(|error| {
-                    invalid_musubi_state("musubi_package_metadata", error.to_string())
-                })?;
-                if package_id != &metadata.package || packages.get(package_id).is_none() {
-                    return Err(invalid_musubi_state(
-                        "musubi_package_metadata",
-                        "metadata key/identity is inconsistent with the package store",
-                    ));
-                }
-            }
-
-            let mut member_accounts = BTreeMap::<MusubiPackageIdV1, Vec<AccountId>>::new();
-            let mut owner_accounts = BTreeMap::<MusubiPackageIdV1, Vec<AccountId>>::new();
-            for (member_key, member) in package_members.iter() {
-                member.package.validate().map_err(|error| {
-                    invalid_musubi_state("musubi_package_members", error.to_string())
-                })?;
-                member.validate().map_err(|error| {
-                    invalid_musubi_state("musubi_package_members", error.to_string())
-                })?;
-                let package = packages.get(&member.package).ok_or_else(|| {
-                    invalid_musubi_state(
-                        "musubi_package_members",
-                        "member references a missing package",
-                    )
-                })?;
-                if member_key != &member.key()
-                    || member.governance_revision > package.revisions.governance
-                {
-                    return Err(invalid_musubi_state(
-                        "musubi_package_members",
-                        "member key or governance revision is inconsistent with its package",
-                    ));
-                }
-                let directory_key = MusubiMaintainerDirectoryKeyV1::accepted(
-                    member.package.clone(),
-                    member.account.clone(),
-                );
-                if maintainer_directory.get(&directory_key)
-                    != Some(&MusubiMaintainerDirectoryEntryV1::Accepted(member.clone()))
-                {
-                    return Err(invalid_musubi_state(
-                        "musubi_maintainer_directory",
-                        "accepted member is missing from the exact maintainer directory",
-                    ));
-                }
-                member_accounts
-                    .entry(member.package.clone())
-                    .or_default()
-                    .push(member.account.clone());
-                if matches!(
-                    member.role,
-                    iroha_data_model::musubi::MusubiPackageRoleV1::Owner
-                ) {
-                    owner_accounts
-                        .entry(member.package.clone())
-                        .or_default()
-                        .push(member.account.clone());
-                }
-            }
-
-            for (invite_id, invitation) in package_invitations.iter() {
-                invitation.package.validate().map_err(|error| {
-                    invalid_musubi_state("musubi_package_invitations", error.to_string())
-                })?;
-                invitation.validate().map_err(|error| {
-                    invalid_musubi_state("musubi_package_invitations", error.to_string())
-                })?;
-                let package = packages.get(&invitation.package).ok_or_else(|| {
-                    invalid_musubi_state(
-                        "musubi_package_invitations",
-                        "invitation references a missing package",
-                    )
-                })?;
-                let revision_is_invalid = if invitation.state
-                    == iroha_data_model::musubi::MusubiInvitationStateV1::Pending
-                {
-                    invitation.expected_governance_revision != package.revisions.governance
-                } else {
-                    invitation.expected_governance_revision > package.revisions.governance
-                };
-                if invite_id != &invitation.invite_id || revision_is_invalid {
-                    return Err(invalid_musubi_state(
-                        "musubi_package_invitations",
-                        "invitation key or pending governance revision is inconsistent with its package",
-                    ));
-                }
-                let directory_key = MusubiMaintainerDirectoryKeyV1::pending(
-                    invitation.package.clone(),
-                    invitation.invited_account.clone(),
-                    invitation.invite_id,
-                );
-                let indexed = maintainer_directory.get(&directory_key);
-                if invitation.state == iroha_data_model::musubi::MusubiInvitationStateV1::Pending {
-                    if indexed
-                        != Some(&MusubiMaintainerDirectoryEntryV1::PendingInvitation(
-                            invitation.clone(),
-                        ))
-                    {
-                        return Err(invalid_musubi_state(
-                            "musubi_maintainer_directory",
-                            "pending invitation is missing from the exact maintainer directory",
-                        ));
-                    }
-                } else if indexed.is_some() {
-                    return Err(invalid_musubi_state(
-                        "musubi_maintainer_directory",
-                        "non-pending invitation remains selectable in the maintainer directory",
-                    ));
-                }
-            }
-
-            let mut pending_directory_counts = BTreeMap::<MusubiPackageIdV1, usize>::new();
-            for (directory_key, entry) in maintainer_directory.iter() {
-                entry.validate().map_err(|error| {
-                    invalid_musubi_state("musubi_maintainer_directory", error.to_string())
-                })?;
-                if directory_key != &entry.key() {
-                    return Err(invalid_musubi_state(
-                        "musubi_maintainer_directory",
-                        "maintainer directory key disagrees with its embedded entry",
-                    ));
-                }
-                let authoritative = match entry {
-                    MusubiMaintainerDirectoryEntryV1::Accepted(member) => package_members
-                        .get(&member.key())
-                        .is_some_and(|stored| stored == member),
-                    MusubiMaintainerDirectoryEntryV1::PendingInvitation(invitation) => {
-                        let count = pending_directory_counts
-                            .entry(invitation.package.clone())
-                            .or_default();
-                        *count = count.saturating_add(1);
-                        if *count > MUSUBI_MAX_PENDING_INVITATIONS_V1 {
-                            return Err(invalid_musubi_state(
-                                "musubi_maintainer_directory",
-                                "package exceeds the pending-invitation bound",
-                            ));
-                        }
-                        package_invitations
-                            .get(&invitation.invite_id)
-                            .is_some_and(|stored| stored == invitation)
-                    }
-                };
-                if !authoritative {
-                    return Err(invalid_musubi_state(
-                        "musubi_maintainer_directory",
-                        "maintainer directory entry lacks an exact authoritative record",
-                    ));
-                }
-            }
-
-            for (package_id, package) in packages.iter() {
-                package
-                    .validate()
-                    .map_err(|error| invalid_musubi_state("musubi_packages", error.to_string()))?;
-                if package_id != &package.package {
-                    return Err(invalid_musubi_state(
-                        "musubi_packages",
-                        "package key does not match the embedded package identity",
-                    ));
-                }
-                let binding = namespace_bindings
-                    .get(&package.claimed_namespace)
-                    .ok_or_else(|| {
-                        invalid_musubi_state(
-                            "musubi_packages",
-                            "package references a missing immutable namespace binding",
-                        )
-                    })?;
-                if binding.digest() != package.claimed_namespace_binding
-                    || binding.home_dataspace != package.package.home_dataspace
-                    || binding.scope != package.package.scope
-                {
-                    return Err(invalid_musubi_state(
-                        "musubi_packages",
-                        "package identity disagrees with its immutable namespace binding",
-                    ));
-                }
-                let metadata = package_metadata.get(package_id).ok_or_else(|| {
-                    invalid_musubi_state(
-                        "musubi_package_metadata",
-                        "package is missing its authoritative metadata projection",
-                    )
-                })?;
-                if metadata.revision != package.revisions.metadata {
-                    return Err(invalid_musubi_state(
-                        "musubi_package_metadata",
-                        "metadata revision disagrees with the package revision",
-                    ));
-                }
-                let actual_members = member_accounts.remove(package_id).unwrap_or_default();
-                let actual_owners = owner_accounts.remove(package_id).unwrap_or_default();
-                if actual_members != package.member_accounts || actual_owners != package.owners {
-                    return Err(invalid_musubi_state(
-                        "musubi_package_members",
-                        "authoritative member roles disagree with package owner/member indexes",
-                    ));
-                }
-            }
-
-            let mut current_location_ids = BTreeMap::<
-                ArchiveId,
-                Vec<iroha_data_model::musubi::MusubiArchiveLocationIdV1>,
-            >::new();
-            let mut location_providers = BTreeMap::<
-                ArchiveId,
-                BTreeSet<iroha_data_model::sorafs::capacity::ProviderId>,
-            >::new();
-
-            for (attestation_key, record) in provider_bundle_attestations.iter() {
-                record.validate().map_err(|error| {
-                    invalid_musubi_state("musubi_provider_bundle_attestations", error.to_string())
-                })?;
-                if attestation_key != &record.key {
-                    return Err(invalid_musubi_state(
-                        "musubi_provider_bundle_attestations",
-                        "provider-attestation key does not match the stored record",
-                    ));
-                }
-                let archive = archives.get(&record.key.archive_id).ok_or_else(|| {
-                    invalid_musubi_state(
-                        "musubi_provider_bundle_attestations",
-                        "provider attestation references a missing archive",
-                    )
-                })?;
-                let receipt = &archive.staging_receipt.payload.binding;
-                let binding = &record.attestation.payload.binding;
-                if record.registered_at_height < archive.registered_at_height
-                    || binding.chain_id != receipt.chain_id
-                    || binding.genesis_block_hash != receipt.genesis_block_hash
-                    || binding.archive_id != archive.archive_id
-                    || binding.bundle_digest != archive.commitment.bundle_digest
-                    || binding.descriptor_digest != archive.commitment.descriptor_digest
-                    || binding.semantic_release_manifest_digest
-                        != receipt.semantic_release_manifest_digest
-                    || binding.source_tree_digest != archive.commitment.source_tree_digest
-                {
-                    return Err(invalid_musubi_state(
-                        "musubi_provider_bundle_attestations",
-                        "provider attestation does not match the archive and ingress receipt commitments",
-                    ));
-                }
-            }
-
-            for (location_key, location) in archive_locations.iter() {
-                location.validate().map_err(|error| {
-                    invalid_musubi_state("musubi_archive_locations", error.to_string())
-                })?;
-                let archive = archives.get(&location.archive_id).ok_or_else(|| {
-                    invalid_musubi_state(
-                        "musubi_archive_locations",
-                        "archive location references a missing archive",
-                    )
-                })?;
-
-                let mut attestation_references = Vec::with_capacity(location.providers.len());
-                let mut verification_lock_digest = None;
-                for provider_id in &location.providers {
-                    let key = MusubiProviderBundleAttestationKeyV1 {
-                        archive_id: location.archive_id,
-                        replication_order: location.replication_order,
-                        provider_id: *provider_id,
-                    };
-                    let record = provider_bundle_attestations.get(&key).ok_or_else(|| {
-                        invalid_musubi_state(
-                            "musubi_archive_locations",
-                            "archive location references a missing exact provider attestation",
-                        )
-                    })?;
-                    let digest = record.attestation.payload.binding.verification_lock_digest;
-                    if verification_lock_digest.is_some_and(|expected| expected != digest) {
-                        return Err(invalid_musubi_state(
-                            "musubi_archive_locations",
-                            "archive-location provider attestations disagree on the verification lock",
-                        ));
-                    }
-                    verification_lock_digest = Some(digest);
-                    attestation_references.push(MusubiProviderBundleAttestationRefV1 {
-                        provider_id: *provider_id,
-                        digest: record.attestation_digest,
-                    });
-                }
-                let attestation_set_digest = musubi_provider_bundle_attestation_set_digest_v1(
-                    location.archive_id,
-                    location.replication_order,
-                    &attestation_references,
-                )
-                .map_err(|error| {
-                    invalid_musubi_state("musubi_archive_locations", error.to_string())
-                })?;
-                if attestation_set_digest != location.provider_attestation_set_digest {
-                    return Err(invalid_musubi_state(
-                        "musubi_archive_locations",
-                        "archive-location provider-attestation set digest is not exact",
-                    ));
-                }
-                if location_key != &location.key() || location.revision > archive.location_revision
-                {
-                    return Err(invalid_musubi_state(
-                        "musubi_archive_locations",
-                        "archive-location key or revision is inconsistent with its archive",
-                    ));
-                }
-                if location.state != MusubiArchiveLocationStateV1::Retired {
-                    current_location_ids
-                        .entry(location.archive_id)
-                        .or_default()
-                        .push(location.location_id);
-                    location_providers
-                        .entry(location.archive_id)
-                        .or_default()
-                        .extend(location.providers.iter().copied());
-                }
-            }
-
-            for (archive_id, archive) in archives.iter() {
-                archive
-                    .validate()
-                    .map_err(|error| invalid_musubi_state("musubi_archives", error.to_string()))?;
-                if archive_id != &archive.archive_id {
-                    return Err(invalid_musubi_state(
-                        "musubi_archives",
-                        "archive key does not match the embedded archive identity",
-                    ));
-                }
-                let mut expected_locations =
-                    current_location_ids.remove(archive_id).unwrap_or_default();
-                expected_locations.sort();
-                if expected_locations != archive.location_ids {
-                    return Err(invalid_musubi_state(
-                        "musubi_archives",
-                        "archive location directory is not the exact current non-retired set",
-                    ));
-                }
-            }
-
-            for (archive_id, availability) in archive_availability.iter() {
-                availability.validate().map_err(|error| {
-                    invalid_musubi_state("musubi_archive_availability", error.to_string())
-                })?;
-                let archive = archives.get(archive_id).ok_or_else(|| {
-                    invalid_musubi_state(
-                        "musubi_archive_availability",
-                        "availability projection references a missing archive",
-                    )
-                })?;
-                let provider_bound = location_providers.get(archive_id).map_or(0, BTreeSet::len);
-                if archive_id != &availability.archive_id
-                    || usize::from(availability.active_locations) > archive.location_ids.len()
-                    || usize::from(availability.healthy_replicas) > provider_bound
-                    || availability.index_revision > self.resolver_index_revision
-                {
-                    return Err(invalid_musubi_state(
-                        "musubi_archive_availability",
-                        "availability key, counts, or revision disagrees with authoritative archive state",
-                    ));
-                }
-            }
-            for (archive_id, _) in archives.iter() {
-                if archive_availability.get(archive_id).is_none() {
-                    return Err(invalid_musubi_state(
-                        "musubi_archive_availability",
-                        "archive is missing its authoritative availability projection",
-                    ));
-                }
-            }
-
-            let mut expected_references = BTreeMap::<ArchiveId, Vec<MusubiReleaseIdV1>>::new();
-            for (archive_id, _) in archives.iter() {
-                expected_references.insert(*archive_id, Vec::new());
-            }
-            for (release_id, release) in releases.iter() {
-                release
-                    .validate()
-                    .map_err(|error| invalid_musubi_state("musubi_releases", error.to_string()))?;
-                if release_id != &release.manifest.release
-                    || packages.get(&release_id.package).is_none()
-                {
-                    return Err(invalid_musubi_state(
-                        "musubi_releases",
-                        "release key or package reference is inconsistent",
-                    ));
-                }
-                let archive = archives.get(&release.manifest.archive_id).ok_or_else(|| {
-                    invalid_musubi_state("musubi_releases", "release references a missing archive")
-                })?;
-                let receipt = &archive.staging_receipt.payload.binding;
-                if release.manifest.semantic_digest() != receipt.semantic_release_manifest_digest
-                    || release.published_by != receipt.publisher
-                {
-                    return Err(invalid_musubi_state(
-                        "musubi_releases",
-                        "release does not match its archive ingress receipt",
-                    ));
-                }
-                let references = expected_references
-                    .get_mut(&release.manifest.archive_id)
-                    .expect("validated archive has a reverse-reference accumulator");
-                references.push(release_id.clone());
-                if let iroha_data_model::musubi::MusubiArtifactGovernanceStateV1::TakenDown(
-                    takedown,
-                ) = &release.artifact_governance
-                    && !decision_actions.contains(&takedown.action_digest)
-                {
-                    return Err(invalid_musubi_state(
-                        "musubi_releases",
-                        "artifact takedown does not reference a retained governance decision",
-                    ));
-                }
-            }
-
-            for (archive_id, references) in archive_reverse_references.iter() {
-                references.validate().map_err(|error| {
-                    invalid_musubi_state("musubi_archive_reverse_references", error.to_string())
-                })?;
-                let expected = expected_references.get(archive_id).ok_or_else(|| {
-                    invalid_musubi_state(
-                        "musubi_archive_reverse_references",
-                        "reverse-reference record names a missing archive",
-                    )
-                })?;
-                if archive_id != &references.archive_id || &references.releases != expected {
-                    return Err(invalid_musubi_state(
-                        "musubi_archive_reverse_references",
-                        "archive reverse references are not the exact release set",
-                    ));
-                }
-            }
-            let mut expected_replication_shortfall_releases = 0_u64;
-            for (archive_id, expected) in &expected_references {
-                if archive_reverse_references.get(archive_id).is_none() {
-                    return Err(invalid_musubi_state(
-                        "musubi_archive_reverse_references",
-                        format!(
-                            "archive is missing its reverse-reference set of {} releases",
-                            expected.len()
-                        ),
-                    ));
-                }
-                let availability = archive_availability
-                    .get(archive_id)
-                    .expect("every validated archive has an availability projection");
-                if availability.availability != MusubiStorageAvailabilityV1::Selectable {
-                    let release_count = u64::try_from(expected.len()).map_err(|_| {
-                        invalid_musubi_state(
-                            "musubi_replication_shortfall_releases",
-                            "archive reverse-reference count overflows u64",
-                        )
-                    })?;
-                    expected_replication_shortfall_releases =
-                        expected_replication_shortfall_releases
-                            .checked_add(release_count)
-                            .ok_or_else(|| {
-                                invalid_musubi_state(
-                                    "musubi_replication_shortfall_releases",
-                                    "replication-shortfall release count overflows u64",
-                                )
-                            })?;
-                }
-            }
-            if self.replication_shortfall_releases != expected_replication_shortfall_releases {
-                return Err(invalid_musubi_state(
-                    "musubi_replication_shortfall_releases",
-                    format!(
-                        "persisted count {} does not match the exact derived count {expected_replication_shortfall_releases}",
-                        self.replication_shortfall_releases
-                    ),
-                ));
-            }
-
-            let mut latest_selectable = BTreeMap::<
-                MusubiPackageIdV1,
-                Option<iroha_data_model::musubi::MusubiVersionV1>,
-            >::new();
-            for (package_id, _) in packages.iter() {
-                latest_selectable.insert(package_id.clone(), None);
-            }
-            for (release_id, row) in resolver_index.iter() {
-                row.validate().map_err(|error| {
-                    invalid_musubi_state("musubi_resolver_index", error.to_string())
-                })?;
-                let release = releases.get(release_id).ok_or_else(|| {
-                    invalid_musubi_state(
-                        "musubi_resolver_index",
-                        "resolver row references a missing release",
-                    )
-                })?;
-                let archive = archives.get(&release.manifest.archive_id).ok_or_else(|| {
-                    invalid_musubi_state(
-                        "musubi_resolver_index",
-                        "resolver row references a missing archive",
-                    )
-                })?;
-                let availability = archive_availability
-                    .get(&release.manifest.archive_id)
-                    .ok_or_else(|| {
-                        invalid_musubi_state(
-                            "musubi_resolver_index",
-                            "resolver row is missing its authoritative storage projection",
-                        )
-                    })?;
-                if release_id != &row.release
-                    || row.release_digest != release.release_digest
-                    || row.archive_id != release.manifest.archive_id
-                    || row.source_digest != archive.commitment.source_tree_digest
-                    || row.interface_digest != release.manifest.interface_digest
-                    || row.abi != release.manifest.abi
-                    || row.dependencies.as_slice() != release.manifest.dependencies.as_slice()
-                    || row.selection.yank != release.yank
-                    || row.selection.governance != release.artifact_governance
-                    || row.selection.storage != *availability
-                    || row.index_revision > self.resolver_index_revision
-                {
-                    return Err(invalid_musubi_state(
-                        "musubi_resolver_index",
-                        "resolver row diverges from authoritative release/archive projections",
-                    ));
-                }
-                if row.selection.fresh_selectable() {
-                    let latest = latest_selectable
-                        .get_mut(&release_id.package)
-                        .expect("validated release package has a directory accumulator");
-                    if latest
-                        .as_ref()
-                        .is_none_or(|version| version < &release_id.version)
-                    {
-                        *latest = Some(release_id.version.clone());
-                    }
-                }
-            }
-            for (release_id, _) in releases.iter() {
-                if resolver_index.get(release_id).is_none() {
-                    return Err(invalid_musubi_state(
-                        "musubi_resolver_index",
-                        "release is missing its exact resolver row",
-                    ));
-                }
-            }
-
-            for (selector, entry) in public_directory.iter() {
-                entry.validate().map_err(|error| {
-                    invalid_musubi_state("musubi_public_directory", error.to_string())
-                })?;
-                let package = packages.get(&entry.package).ok_or_else(|| {
-                    invalid_musubi_state(
-                        "musubi_public_directory",
-                        "directory entry references a missing package",
-                    )
-                })?;
-                let expected_latest = latest_selectable
-                    .get(&entry.package)
-                    .expect("validated directory package has a latest-version accumulator");
-                if selector != &entry.selector
-                    || entry.selector.namespace != package.claimed_namespace
-                    || entry.selector.name != entry.package.name
-                    || entry.metadata_revision != package.revisions.metadata
-                    || &entry.latest_selectable != expected_latest
-                    || entry.index_revision > self.resolver_index_revision
-                {
-                    return Err(invalid_musubi_state(
-                        "musubi_public_directory",
-                        "directory entry diverges from its package and resolver rows",
-                    ));
-                }
-            }
-            for (package_id, package) in packages.iter() {
-                let selector = MusubiPackageSelectorV1 {
-                    namespace: package.claimed_namespace.clone(),
-                    name: package_id.name.clone(),
-                };
-                if public_directory.get(&selector).is_none() {
-                    return Err(invalid_musubi_state(
-                        "musubi_public_directory",
-                        "package is missing its canonical public-directory entry",
-                    ));
-                }
-            }
-
-            for (alias, record) in aliases.iter() {
-                record
-                    .alias
-                    .validate()
-                    .map_err(|error| invalid_musubi_state("musubi_aliases", error.to_string()))?;
-                record
-                    .target
-                    .validate()
-                    .map_err(|error| invalid_musubi_state("musubi_aliases", error.to_string()))?;
-                if alias != &record.alias
-                    || packages.get(&record.target).is_none()
-                    || record.pricing_revision == 0
-                    || record.paid_xor == 0
-                    || record.registered_at_height == 0
-                    || record.history_revision == 0
-                {
-                    return Err(invalid_musubi_state(
-                        "musubi_aliases",
-                        "alias record is intrinsically invalid or references a missing package",
-                    ));
-                }
-            }
-
-            let mut histories =
-                BTreeMap::<MusubiAliasNameV1, Vec<&MusubiAliasHistoryEntryV1>>::new();
-            for (history_key, entry) in alias_history.iter() {
-                entry.validate().map_err(|error| {
-                    invalid_musubi_state("musubi_alias_history", error.to_string())
-                })?;
-                if history_key != &entry.key() || aliases.get(&entry.alias).is_none() {
-                    return Err(invalid_musubi_state(
-                        "musubi_alias_history",
-                        "alias-history key or alias reference is inconsistent",
-                    ));
-                }
-                if packages.get(&entry.target).is_none()
-                    || entry
-                        .previous_target
-                        .as_ref()
-                        .is_some_and(|target| packages.get(target).is_none())
-                {
-                    return Err(invalid_musubi_state(
-                        "musubi_alias_history",
-                        "alias history references a missing package",
-                    ));
-                }
-                if entry
-                    .governance_action
-                    .is_some_and(|digest| !decision_actions.contains(&digest))
-                {
-                    return Err(invalid_musubi_state(
-                        "musubi_alias_history",
-                        "alias retarget does not reference a retained governance decision",
-                    ));
-                }
-                histories
-                    .entry(entry.alias.clone())
-                    .or_default()
-                    .push(entry);
-            }
-            for (alias, record) in aliases.iter() {
-                let entries = histories.get(alias).ok_or_else(|| {
-                    invalid_musubi_state(
-                        "musubi_alias_history",
-                        "alias is missing its complete history",
-                    )
-                })?;
-                let expected_len = usize::try_from(record.history_revision).map_err(|_| {
-                    invalid_musubi_state(
-                        "musubi_alias_history",
-                        "alias history revision does not fit usize",
-                    )
-                })?;
-                if entries.len() != expected_len {
-                    return Err(invalid_musubi_state(
-                        "musubi_alias_history",
-                        "alias history revisions are not dense from one",
-                    ));
-                }
-                let mut previous_target = None;
-                let mut previous_height = 0_u64;
-                for (index, entry) in entries.iter().enumerate() {
-                    let expected_revision = u64::try_from(index + 1).map_err(|_| {
-                        invalid_musubi_state(
-                            "musubi_alias_history",
-                            "alias history index overflows u64",
-                        )
-                    })?;
-                    if entry.revision != expected_revision
-                        || (index == 0 && entry.finalized_height != record.registered_at_height)
-                        || (index > 0
-                            && (entry.previous_target.as_ref() != previous_target.as_ref()
-                                || previous_target.as_ref() == Some(&entry.target)
-                                || entry.finalized_height < previous_height))
-                    {
-                        return Err(invalid_musubi_state(
-                            "musubi_alias_history",
-                            "alias history has a gap or broken target chain",
-                        ));
-                    }
-                    previous_target = Some(entry.target.clone());
-                    previous_height = entry.finalized_height;
-                }
-                if previous_target.as_ref() != Some(&record.target) {
-                    return Err(invalid_musubi_state(
-                        "musubi_alias_history",
-                        "alias history final target disagrees with the current alias",
-                    ));
-                }
-            }
-            Ok(())
-        }
-    }
-
-    fn validate_musubi_governance_provenance(world: &World) -> Result<(), json::Error> {
-        let decisions = world.musubi_governance_decisions.view();
-        let proposals = world.governance_proposals.view();
-        let packages = world.musubi_packages.view();
-        let package_members = world.musubi_package_members.view();
-        let releases = world.musubi_releases.view();
-        let aliases = world.musubi_aliases.view();
-        let alias_history = world.musubi_alias_history.view();
-        let registry_policy = world.musubi_registry_policy.view();
-        let mut actions_by_digest = BTreeMap::new();
-        let mut policy_actions = Vec::new();
-        let mut owner_recovery_revisions = BTreeSet::new();
-        let mut owner_recovery_history: BTreeMap<MusubiPackageIdV1, Vec<(u64, u64)>> =
-            BTreeMap::new();
-
-        for (decision_id, consumption) in decisions.iter() {
-            consumption.validate().map_err(|error| {
-                invalid_musubi_state("musubi_governance_decisions", error.to_string())
-            })?;
-            let decision = &consumption.decision;
-            let proposal = proposals.get(decision_id).ok_or_else(|| {
-                invalid_musubi_state(
-                    "musubi_governance_decisions",
-                    "consumed Parliament decision has no retained governance proposal",
-                )
-            })?;
-            let action = proposal.as_musubi_registry_governance().ok_or_else(|| {
-                invalid_musubi_state(
-                    "musubi_governance_decisions",
-                    "consumed Parliament decision does not reference a Musubi action",
-                )
-            })?;
-            action.validate().map_err(|error| {
-                invalid_musubi_state("musubi_governance_decisions", error.to_string())
-            })?;
-            if decision.decision_id != *decision_id || proposal.kind.fingerprint() != *decision_id {
-                return Err(invalid_musubi_state(
-                    "musubi_governance_decisions",
-                    "consumed Parliament decision key is not the exact typed proposal fingerprint",
-                ));
-            }
-            if proposal.status != GovernanceProposalStatus::Enacted
-                || proposal.enacted_at_height != Some(decision.enacted_at_height)
-                || action.action_digest() != decision.action_digest
-            {
-                return Err(invalid_musubi_state(
-                    "musubi_governance_decisions",
-                    "consumed Parliament decision disagrees with its enacted proposal",
-                ));
-            }
-            if actions_by_digest
-                .insert(decision.action_digest, (action, consumption))
-                .is_some()
-            {
-                return Err(invalid_musubi_state(
-                    "musubi_governance_decisions",
-                    "the same Parliament action was consumed more than once",
-                ));
-            }
-            if let iroha_data_model::musubi::MusubiParliamentActionV1::SetRegistryPolicy(
-                replacement,
-            ) = action
-            {
-                policy_actions.push((replacement, consumption.consumed_at_height));
-            }
-        }
-
-        policy_actions.sort_by_key(|(replacement, _)| replacement.policy.revision);
-        let mut reconstructed_policy = MusubiRegistryPolicyV1::default();
-        let mut previous_policy_consumed_at = None;
-        let mut pricing_policies = BTreeMap::new();
-        pricing_policies.insert(
-            reconstructed_policy.alias_pricing.revision,
-            reconstructed_policy.alias_pricing,
-        );
-        for (replacement, consumed_at_height) in policy_actions {
-            if previous_policy_consumed_at.is_some_and(|previous| consumed_at_height < previous) {
-                return Err(invalid_musubi_state(
-                    "musubi_registry_policy",
-                    "policy decision consumption heights do not follow policy revision order",
-                ));
-            }
-            previous_policy_consumed_at = Some(consumed_at_height);
-            if replacement.expected_revision != reconstructed_policy.revision {
-                return Err(invalid_musubi_state(
-                    "musubi_registry_policy",
-                    "retained policy decisions do not form one dense revision history",
-                ));
-            }
-            replacement
-                .policy
-                .validate_successor(&reconstructed_policy)
-                .map_err(|error| {
-                    invalid_musubi_state("musubi_registry_policy", error.to_string())
-                })?;
-            if pricing_policies
-                .insert(
-                    replacement.policy.alias_pricing.revision,
-                    replacement.policy.alias_pricing,
-                )
-                .is_some_and(|previous| previous != replacement.policy.alias_pricing)
-            {
-                return Err(invalid_musubi_state(
-                    "musubi_registry_policy",
-                    "a pricing revision was reused for different alias prices",
-                ));
-            }
-            reconstructed_policy = replacement.policy.clone();
-        }
-        if registry_policy.get() != &reconstructed_policy {
-            return Err(invalid_musubi_state(
-                "musubi_registry_policy",
-                "current policy is not the exact result of retained Parliament decisions",
-            ));
-        }
-
-        for (_, alias) in aliases.iter() {
-            let pricing = pricing_policies
-                .get(&alias.pricing_revision)
-                .ok_or_else(|| {
-                    invalid_musubi_state(
-                        "musubi_aliases",
-                        "alias references an unknown historical pricing revision",
-                    )
-                })?;
-            alias
-                .validate(pricing)
-                .map_err(|error| invalid_musubi_state("musubi_aliases", error.to_string()))?;
-        }
-
-        for (action, consumption) in actions_by_digest.values().copied() {
-            let digest = action.action_digest();
-            match action {
-                iroha_data_model::musubi::MusubiParliamentActionV1::RecoverPackageOwners(
-                    recovery,
-                ) => {
-                    let resulting_revision =
-                        recovery.expected_revision.checked_add(1).ok_or_else(|| {
-                            invalid_musubi_state(
-                                "musubi_governance_decisions",
-                                "owner-recovery governance result revision overflows",
-                            )
-                        })?;
-                    if !owner_recovery_revisions
-                        .insert((recovery.package.clone(), resulting_revision))
-                    {
-                        return Err(invalid_musubi_state(
-                            "musubi_governance_decisions",
-                            "more than one owner recovery targets the same package result revision",
-                        ));
-                    }
-                    owner_recovery_history
-                        .entry(recovery.package.clone())
-                        .or_default()
-                        .push((resulting_revision, consumption.consumed_at_height));
-                    let package = packages.get(&recovery.package).ok_or_else(|| {
-                        invalid_musubi_state(
-                            "musubi_governance_decisions",
-                            "owner-recovery action references a missing package",
-                        )
-                    })?;
-                    if package.revisions.governance < resulting_revision {
-                        return Err(invalid_musubi_state(
-                            "musubi_governance_decisions",
-                            "owner-recovery action has no persisted governance revision effect",
-                        ));
-                    }
-                    if package.revisions.governance == resulting_revision {
-                        if package.owners.as_slice() != recovery.owners.as_slice() {
-                            return Err(invalid_musubi_state(
-                                "musubi_governance_decisions",
-                                "current owner-recovery projection does not contain the exact enacted owners",
-                            ));
-                        }
-                        for owner in &recovery.owners {
-                            let key = MusubiPackageMemberKeyV1::new(
-                                recovery.package.clone(),
-                                owner.clone(),
-                            );
-                            let member = package_members.get(&key).ok_or_else(|| {
-                                invalid_musubi_state(
-                                    "musubi_package_members",
-                                    "current recovered owner has no exact member projection",
-                                )
-                            })?;
-                            if member.role != MusubiPackageRoleV1::Owner
-                                || member.governance_revision != resulting_revision
-                                || member.accepted_at_height != consumption.consumed_at_height
-                            {
-                                return Err(invalid_musubi_state(
-                                    "musubi_package_members",
-                                    "current owner-recovery projection disagrees with its decision consumption height",
-                                ));
-                            }
-                        }
-                    }
-                }
-                iroha_data_model::musubi::MusubiParliamentActionV1::RetargetAlias(retarget) => {
-                    let revision = retarget.expected_revision.checked_add(1).ok_or_else(|| {
-                        invalid_musubi_state(
-                            "musubi_alias_history",
-                            "alias-retarget revision overflows",
-                        )
-                    })?;
-                    let key = MusubiAliasHistoryKeyV1::new(retarget.alias.clone(), revision);
-                    let entry = alias_history.get(&key).ok_or_else(|| {
-                        invalid_musubi_state(
-                            "musubi_alias_history",
-                            "alias-retarget action has no exact persisted history entry",
-                        )
-                    })?;
-                    if entry.target != retarget.target
-                        || entry.governance_action != Some(digest)
-                        || entry.finalized_height != consumption.consumed_at_height
-                    {
-                        return Err(invalid_musubi_state(
-                            "musubi_alias_history",
-                            "alias-retarget history does not match the enacted action and decision consumption height",
-                        ));
-                    }
-                }
-                iroha_data_model::musubi::MusubiParliamentActionV1::TakedownArtifact(takedown) => {
-                    let release = releases.get(&takedown.release).ok_or_else(|| {
-                        invalid_musubi_state(
-                            "musubi_releases",
-                            "artifact-takedown action references a missing release",
-                        )
-                    })?;
-                    let expected_revision = takedown
-                        .expected_artifact_governance_revision
-                        .checked_add(1);
-                    let iroha_data_model::musubi::MusubiArtifactGovernanceStateV1::TakenDown(
-                        persisted,
-                    ) = &release.artifact_governance
-                    else {
-                        return Err(invalid_musubi_state(
-                            "musubi_releases",
-                            "artifact-takedown action has no persisted takedown state",
-                        ));
-                    };
-                    if persisted.action_digest != digest
-                        || persisted.reason != takedown.reason
-                        || persisted.applied_at_height != consumption.consumed_at_height
-                        || expected_revision != Some(release.revisions.artifact_governance)
-                    {
-                        return Err(invalid_musubi_state(
-                            "musubi_releases",
-                            "artifact-takedown state does not match the enacted action and decision consumption height",
-                        ));
-                    }
-                }
-                iroha_data_model::musubi::MusubiParliamentActionV1::SetRegistryPolicy(_) => {}
-            }
-        }
-        for (_, mut history) in owner_recovery_history {
-            history.sort_by_key(|(revision, _)| *revision);
-            let mut previous_consumed_at = None;
-            for (_, consumed_at_height) in history {
-                if previous_consumed_at.is_some_and(|previous| consumed_at_height < previous) {
-                    return Err(invalid_musubi_state(
-                        "musubi_governance_decisions",
-                        "owner-recovery decision consumption heights do not follow governance revision order",
-                    ));
-                }
-                previous_consumed_at = Some(consumed_at_height);
-            }
-        }
-        Ok(())
-    }
-
-    fn validate_musubi_live_projections(world: &World) -> Result<(), json::Error> {
-        let world = world.view();
-        for (archive_id, archive) in world.musubi_archives().iter() {
-            let mut active_locations = 0_usize;
-            let mut healthy_providers = BTreeSet::new();
-            let mut maximum_location_revision = 1_u64;
-
-            for (key, location) in world
-                .musubi_archive_locations()
-                .iter()
-                .filter(|(key, _)| key.archive_id == *archive_id)
-            {
-                maximum_location_revision = maximum_location_revision.max(location.revision);
-                if location.state == MusubiArchiveLocationStateV1::Retired {
-                    continue;
-                }
-                if archive
-                    .location_ids
-                    .binary_search(&key.location_id)
-                    .is_err()
-                {
-                    return Err(invalid_musubi_state(
-                        "musubi_archive_locations",
-                        "non-retired location is absent from its archive directory",
-                    ));
-                }
-                let current = crate::smartcontracts::isi::musubi::current_location_providers(
-                    location, &world,
-                );
-                let current_count = current.as_ref().map_or(0, Vec::len);
-                let expected_state = if current_count
-                    >= usize::from(iroha_data_model::musubi::MUSUBI_MIN_HEALTHY_REPLICAS_V1)
-                {
-                    MusubiArchiveLocationStateV1::Healthy
-                } else {
-                    MusubiArchiveLocationStateV1::Degraded
-                };
-                if location.state != expected_state {
-                    return Err(invalid_musubi_state(
-                        "musubi_archive_locations",
-                        "archive-location lifecycle state disagrees with current SoraFS evidence",
-                    ));
-                }
-                if let Some(providers) = current {
-                    active_locations = active_locations.checked_add(1).ok_or_else(|| {
-                        invalid_musubi_state(
-                            "musubi_archive_availability",
-                            "active archive-location count overflows usize",
-                        )
-                    })?;
-                    healthy_providers.extend(providers);
-                }
-            }
-            if archive.location_revision != maximum_location_revision {
-                return Err(invalid_musubi_state(
-                    "musubi_archives",
-                    "archive location revision is not the exact maximum retained location revision",
-                ));
-            }
-
-            let active_locations = u8::try_from(active_locations).map_err(|_| {
-                invalid_musubi_state(
-                    "musubi_archive_availability",
-                    "active archive-location count overflows u8",
-                )
-            })?;
-            let healthy_replicas = u16::try_from(healthy_providers.len()).map_err(|_| {
-                invalid_musubi_state(
-                    "musubi_archive_availability",
-                    "healthy provider count overflows u16",
-                )
-            })?;
-            let expected_availability =
-                if healthy_replicas >= iroha_data_model::musubi::MUSUBI_MIN_HEALTHY_REPLICAS_V1 {
-                    iroha_data_model::musubi::MusubiStorageAvailabilityV1::Selectable
-                } else if active_locations > 0 && healthy_replicas > 0 {
-                    iroha_data_model::musubi::MusubiStorageAvailabilityV1::BelowQuorum
-                } else {
-                    iroha_data_model::musubi::MusubiStorageAvailabilityV1::Unavailable
-                };
-            let projection = world
-                .musubi_archive_availability()
-                .get(archive_id)
-                .ok_or_else(|| {
-                    invalid_musubi_state(
-                        "musubi_archive_availability",
-                        "archive is missing its availability projection",
-                    )
-                })?;
-            if projection.active_locations != active_locations
-                || projection.healthy_replicas != healthy_replicas
-                || projection.availability != expected_availability
-            {
-                return Err(invalid_musubi_state(
-                    "musubi_archive_availability",
-                    "availability projection is not the exact result of current SoraFS evidence",
-                ));
-            }
-        }
-
-        for (_, row) in world.musubi_resolver_index().iter() {
-            if row.index_revision < row.selection.storage.index_revision {
-                return Err(invalid_musubi_state(
-                    "musubi_resolver_index",
-                    "resolver row predates its embedded availability projection",
-                ));
-            }
-        }
-        for (_, entry) in world.musubi_public_directory().iter() {
-            let maximum_row_revision = world
-                .musubi_resolver_index()
-                .iter()
-                .filter(|(release, _)| release.package == entry.package)
-                .map(|(_, row)| row.index_revision)
-                .max()
-                .ok_or_else(|| {
-                    invalid_musubi_state(
-                        "musubi_public_directory",
-                        "directory package has no resolver rows",
-                    )
-                })?;
-            if entry.index_revision < maximum_row_revision {
-                return Err(invalid_musubi_state(
-                    "musubi_public_directory",
-                    "directory entry predates its package resolver rows",
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn parse_world(
-        value: json::Value,
-        ivm_seed: &IvmSeed<'_, World>,
-    ) -> Result<World, json::Error> {
-        let json::Value::Object(mut map) = value else {
-            return Err(json::Error::InvalidField {
-                field: "world".into(),
-                message: "expected object".into(),
-            });
-        };
-
-        let parameters = take_parameters_cell(&mut map, "parameters")?;
-        let peers: Cell<Peers> = take_required(&mut map, "peers")?;
-        let domain_committees = take_required(&mut map, "domain_committees")?;
-        let domain_endorsement_policies = take_required(&mut map, "domain_endorsement_policies")?;
-        let domain_endorsements = take_required(&mut map, "domain_endorsements")?;
-        let domains: Storage<DomainId, Domain> = take_required(&mut map, "domains")?;
-        let accounts: Storage<AccountId, AccountValue> = take_required(&mut map, "accounts")?;
-        let account_aliases = take_optional_default(&mut map, "account_aliases")?;
-        let account_aliases_by_account =
-            take_optional_default(&mut map, "account_aliases_by_account")?;
-        let account_scope_directory = take_optional_default(&mut map, "account_scope_directory")?;
-        let ram_lfe_program_policies = take_ram_lfe_program_policies(&mut map)?;
-        validate_ram_lfe_program_policies(&ram_lfe_program_policies)?;
-        let identifier_policies = take_optional_default(&mut map, "identifier_policies")?;
-        let fee_sponsor_programs = take_optional_default(&mut map, "fee_sponsor_programs")?;
-        let fee_sponsor_program_revisions =
-            take_optional_default(&mut map, "fee_sponsor_program_revisions")?;
-        let fee_sponsor_enrollments = take_optional_default(&mut map, "fee_sponsor_enrollments")?;
-        let fee_sponsor_vaults = take_optional_default(&mut map, "fee_sponsor_vaults")?;
-        let fee_sponsor_budget_counters =
-            take_optional_default(&mut map, "fee_sponsor_budget_counters")?;
-        let identifier_claims = take_optional_default(&mut map, "identifier_claims")?;
-        let account_recovery_policies =
-            take_optional_default(&mut map, "account_recovery_policies")?;
-        let account_recovery_requests =
-            take_optional_default(&mut map, "account_recovery_requests")?;
-        let asset_definitions: Storage<AssetDefinitionId, AssetDefinition> =
-            take_required(&mut map, "asset_definitions")?;
-        let asset_definition_alias_bindings =
-            take_optional_default(&mut map, "asset_definition_alias_bindings")?;
-        let contract_alias_bindings = take_optional_default(&mut map, "contract_alias_bindings")?;
-        let assets: Storage<AssetId, AssetValue> = take_required(&mut map, "assets")?;
-        let account_rekey_records = take_optional_default(&mut map, "account_rekey_records")?;
-        let asset_metadata = take_optional_default(&mut map, "asset_metadata")?;
-        let nfts: Storage<NftId, NftValue> = take_required(&mut map, "nfts")?;
-        let rwas: Storage<RwaId, RwaValue> = take_optional_default(&mut map, "rwas")?;
-        let roles: Storage<RoleId, Role> = take_required(&mut map, "roles")?;
-        let account_permissions: Storage<AccountId, Permissions> =
-            take_required(&mut map, "account_permissions")?;
-        let account_roles: Storage<RoleIdWithOwner, ()> = take_required(&mut map, "account_roles")?;
-        let oracle_feeds = take_optional_default(&mut map, "oracle_feeds")?;
-        let oracle_observations = take_optional_default(&mut map, "oracle_observations")?;
-        let oracle_history = take_optional_default(&mut map, "oracle_history")?;
-        let oracle_provider_stats = take_optional_default(&mut map, "oracle_provider_stats")?;
-        let oracle_disputes = take_optional_default(&mut map, "oracle_disputes")?;
-        let oracle_changes = take_optional_default(&mut map, "oracle_changes")?;
-        let defi_oracle_attestations = take_optional_default(&mut map, "defi_oracle_attestations")?;
-        let twitter_bindings = take_optional_default(&mut map, "twitter_bindings")?;
-        let twitter_bindings_by_uaid = take_optional_default(&mut map, "twitter_bindings_by_uaid")?;
-        let viral_reward_budget = take_required(&mut map, "viral_reward_budget")?;
-        let viral_campaign_budget = take_required(&mut map, "viral_campaign_budget")?;
-        let viral_daily_counters = take_required(&mut map, "viral_daily_counters")?;
-        let viral_binding_claims = take_required(&mut map, "viral_binding_claims")?;
-        let viral_escrows = take_required(&mut map, "viral_escrows")?;
-        let viral_bonus_paid = take_required(&mut map, "viral_bonus_paid")?;
-        let registry_value = map
-            .get("sccp_registry")
-            .ok_or_else(|| json::Error::missing_field("sccp_registry"))?;
-        validate_sccp_registry_cell_json(registry_value).map_err(|message| {
-            json::Error::InvalidField {
-                field: "sccp_registry".to_owned(),
-                message,
-            }
-        })?;
-        let sccp_registry: Cell<iroha_data_model::bridge::SccpRegistryV1> =
-            take_required(&mut map, "sccp_registry")?;
-        let sccp_outbound_pending_usage = take_required(&mut map, "sccp_outbound_pending_usage")?;
-        let sccp_outbound_pending_messages =
-            take_required(&mut map, "sccp_outbound_pending_messages")?;
-        let sccp_outbound_message_locator =
-            take_required(&mut map, "sccp_outbound_message_locator")?;
-        let sccp_outbound_message_index = take_required(&mut map, "sccp_outbound_message_index")?;
-        let sccp_outbound_proofs = take_required(&mut map, "sccp_outbound_proofs")?;
-        let sccp_inbound_messages = take_required(&mut map, "sccp_inbound_messages")?;
-        let sccp_inbound_anchor_high_water: Storage<SccpInboundAnchorHighWaterKeyV1, u64> =
-            take_required(&mut map, "sccp_inbound_anchor_high_water")?;
-        validate_sccp_outbound_pending_messages(&sccp_outbound_pending_messages)?;
-        validate_sccp_outbound_pending_usage(
-            &sccp_outbound_pending_messages,
-            &sccp_outbound_pending_usage,
-        )?;
-        validate_sccp_outbound_indexes(
-            &sccp_outbound_pending_messages,
-            &sccp_outbound_proofs,
-            &sccp_outbound_message_locator,
-            &sccp_outbound_message_index,
-        )?;
-        validate_sccp_outbound_proofs(&sccp_outbound_proofs, &sccp_outbound_message_locator)?;
-        validate_sccp_inbound_messages(&sccp_inbound_messages)?;
-        let sccp_inbound_messages_view = sccp_inbound_messages.view();
-        let sccp_inbound_anchor_high_water_view = sccp_inbound_anchor_high_water.view();
-        validate_sccp_inbound_anchor_high_water_index(
-            &sccp_inbound_messages_view,
-            &sccp_inbound_anchor_high_water_view,
-        )
-        .map_err(|message| json::Error::InvalidField {
-            field: "world.sccp_inbound_anchor_high_water".to_owned(),
-            message,
-        })?;
-        let tx_sequences: Storage<AccountId, u64> =
-            take_optional_default(&mut map, "tx_sequences")?;
-        let triggers_value = map
-            .remove("triggers")
-            .ok_or_else(|| json::Error::missing_field("triggers"))?;
-        let triggers = ivm_seed
-            .cast::<TriggerSet>()
-            .parse_trigger_set(&triggers_value)?;
-        let executor: Cell<Executor> = take_required(&mut map, "executor")?;
-        let executor_data_model: Cell<ExecutorDataModel> =
-            take_required(&mut map, "executor_data_model")?;
-        let external_event_buf: Cell<Vec<EventBox>> =
-            take_required(&mut map, "external_event_buf")?;
-        let verifying_keys = take_optional_default(&mut map, "verifying_keys")?;
-        let verifying_keys_by_circuit =
-            take_optional_default(&mut map, "verifying_keys_by_circuit")?;
-        let consensus_keys = take_optional_default(&mut map, "consensus_keys")?;
-        let consensus_keys_by_pk = take_optional_default(&mut map, "consensus_keys_by_pk")?;
-        let pedersen_params = take_optional_default(&mut map, "pedersen_params")?;
-        let poseidon_params = take_optional_default(&mut map, "poseidon_params")?;
-        let runtime_upgrades = take_optional_default(&mut map, "runtime_upgrades")?;
-        let privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1> =
-            take_required(&mut map, "privacy_consensus_policy")?;
-        let privacy_activations: Storage<
-            crate::privacy_state::PrivacyActivationKeyV1,
-            iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
-        > = take_required(&mut map, "privacy_activations")?;
-        let privacy_pgc_accounts: Storage<
-            crate::privacy_state::PrivacyPgcAccountKeyV1,
-            crate::privacy_state::PrivacyPgcAccountStateV1,
-        > = take_required(&mut map, "privacy_pgc_accounts")?;
-        let privacy_pgc_pool_invariants: Storage<
-            crate::privacy_state::PrivacyPgcPoolInvariantKeyV1,
-            crate::privacy_state::PrivacyPgcPoolInvariantV1,
-        > = take_required(&mut map, "privacy_pgc_pool_invariants")?;
-        let privacy_nullifiers: Storage<
-            crate::privacy_state::PrivacyNullifierKeyV1,
-            crate::privacy_state::PrivacyStateItemRecordV1,
-        > = take_required(&mut map, "privacy_nullifiers")?;
-        let privacy_commitments: Storage<
-            crate::privacy_state::PrivacyCommitmentKeyV1,
-            crate::privacy_state::PrivacyStateItemRecordV1,
-        > = take_required(&mut map, "privacy_commitments")?;
-        let privacy_roots: Storage<
-            crate::privacy_state::PrivacyRootKeyV1,
-            crate::privacy_state::PrivacyRootProvenanceV1,
-        > = take_required(&mut map, "privacy_roots")?;
-        let privacy_root_heads: Storage<
-            crate::privacy_state::PrivacyRootHeadKeyV1,
-            crate::privacy_state::PrivacyRootHeadRecordV1,
-        > = take_required(&mut map, "privacy_root_heads")?;
-        crate::privacy_state::validate_privacy_persisted_state_v1(
-            privacy_consensus_policy.view().get(),
-            &privacy_activations.view(),
-            &privacy_pgc_accounts.view(),
-            &privacy_pgc_pool_invariants.view(),
-            &privacy_nullifiers.view(),
-            &privacy_commitments.view(),
-            &privacy_roots.view(),
-            &privacy_root_heads.view(),
-        )
-        .map_err(|message| json::Error::InvalidField {
-            field: "world.privacy_state".to_owned(),
-            message,
-        })?;
-        crate::privacy_state::validate_privacy_orchard_public_dependencies_v1(
-            &privacy_commitments.view(),
-            &accounts.view(),
-            &asset_definitions.view(),
-        )
-        .map_err(|message| json::Error::InvalidField {
-            field: "world.privacy_state".to_owned(),
-            message,
-        })?;
-        let proofs = take_optional_default(&mut map, "proofs")?;
-        let proof_tags = take_optional_default(&mut map, "proof_tags")?;
-        let proofs_by_tag = take_optional_default(&mut map, "proofs_by_tag")?;
-        let commit_qcs = take_optional_default(&mut map, "commit_qcs")?;
-        let contract_manifests = take_optional_default(&mut map, "contract_manifests")?;
-        let contract_code = take_optional_default(&mut map, "contract_code")?;
-        let contract_code_uploads = take_required(&mut map, "contract_code_uploads")?;
-        let contract_code_upload_chunks = take_required(&mut map, "contract_code_upload_chunks")?;
-        let contract_instances = take_optional_default(&mut map, "contract_instances")?;
-        let contract_subject_bindings =
-            take_optional_default(&mut map, "contract_subject_bindings")?;
-        let smart_contract_state = take_optional_default(&mut map, "smart_contract_state")?;
-        reject_legacy_musubi_state(&smart_contract_state)?;
-        let musubi_namespace_bindings = take_musubi_namespace_bindings(&mut map)?;
-        let musubi_domain_ownership_generations =
-            take_musubi_domain_ownership_generations(&mut map)?;
-        let musubi_packages = take_required(&mut map, "musubi_packages")?;
-        let musubi_package_metadata = take_required(&mut map, "musubi_package_metadata")?;
-        let musubi_package_members = take_required(&mut map, "musubi_package_members")?;
-        let musubi_package_invitations = take_required(&mut map, "musubi_package_invitations")?;
-        let musubi_maintainer_directory = take_required(&mut map, "musubi_maintainer_directory")?;
-        let musubi_releases = take_required(&mut map, "musubi_releases")?;
-        let musubi_archives = take_required(&mut map, "musubi_archives")?;
-        let musubi_provider_bundle_attestations =
-            take_required(&mut map, "musubi_provider_bundle_attestations")?;
-        let musubi_archive_locations = take_required(&mut map, "musubi_archive_locations")?;
-        let musubi_locations_by_pin = take_required(&mut map, "musubi_locations_by_pin")?;
-        let musubi_locations_by_replication_order =
-            take_required(&mut map, "musubi_locations_by_replication_order")?;
-        let musubi_locations_by_provider = take_required(&mut map, "musubi_locations_by_provider")?;
-        validate_musubi_location_reverse_indices(
-            &musubi_archive_locations,
-            &musubi_locations_by_pin,
-            &musubi_locations_by_replication_order,
-            &musubi_locations_by_provider,
-        )?;
-        let musubi_archive_availability = take_required(&mut map, "musubi_archive_availability")?;
-        let musubi_archive_reverse_references =
-            take_required(&mut map, "musubi_archive_reverse_references")?;
-        let musubi_resolver_index = take_required(&mut map, "musubi_resolver_index")?;
-        let musubi_resolver_index_checkpoints = take_musubi_resolver_index_checkpoints(&mut map)?;
-        let musubi_public_directory = take_required(&mut map, "musubi_public_directory")?;
-        let musubi_aliases = take_required(&mut map, "musubi_aliases")?;
-        let musubi_alias_history = take_required(&mut map, "musubi_alias_history")?;
-        let musubi_governance_decisions = take_required(&mut map, "musubi_governance_decisions")?;
-        let musubi_registry_policy = take_musubi_registry_policy(&mut map)?;
-        let musubi_resolver_index_revision = take_musubi_resolver_index_revision(&mut map)?;
-        let musubi_replication_shortfall_releases =
-            take_musubi_replication_shortfall_releases(&mut map)?;
-        let soracloud_service_revisions = take_required(&mut map, "soracloud_service_revisions")?;
-        let soracloud_service_deployments =
-            take_optional_default(&mut map, "soracloud_service_deployments")?;
-        let soracloud_app_infra_states =
-            take_optional_default(&mut map, "soracloud_app_infra_states")?;
-        let soracloud_service_runtime =
-            take_optional_default(&mut map, "soracloud_service_runtime")?;
-        let soracloud_inrou_replica_runtime =
-            take_optional_default(&mut map, "soracloud_inrou_replica_runtime")?;
-        let soracloud_service_audit_events =
-            take_optional_default(&mut map, "soracloud_service_audit_events")?;
-        let soracloud_app_infra_audit_events =
-            take_optional_default(&mut map, "soracloud_app_infra_audit_events")?;
-        let soracloud_service_state_entries =
-            take_optional_default(&mut map, "soracloud_service_state_entries")?;
-        let soracloud_decryption_request_records =
-            take_optional_default(&mut map, "soracloud_decryption_request_records")?;
-        let soracloud_agent_apartments =
-            take_optional_default(&mut map, "soracloud_agent_apartments")?;
-        let soracloud_agent_apartment_audit_events =
-            take_optional_default(&mut map, "soracloud_agent_apartment_audit_events")?;
-        let soracloud_training_jobs = take_optional_default(&mut map, "soracloud_training_jobs")?;
-        let soracloud_training_job_audit_events =
-            take_optional_default(&mut map, "soracloud_training_job_audit_events")?;
-        let soracloud_model_registries =
-            take_optional_default(&mut map, "soracloud_model_registries")?;
-        let soracloud_model_weight_versions =
-            take_optional_default(&mut map, "soracloud_model_weight_versions")?;
-        let soracloud_model_weight_audit_events =
-            take_optional_default(&mut map, "soracloud_model_weight_audit_events")?;
-        let soracloud_model_artifacts =
-            take_optional_default(&mut map, "soracloud_model_artifacts")?;
-        let soracloud_model_artifact_audit_events =
-            take_optional_default(&mut map, "soracloud_model_artifact_audit_events")?;
-        let soracloud_uploaded_model_bundles =
-            take_optional_default(&mut map, "soracloud_uploaded_model_bundles")?;
-        let soracloud_model_host_capabilities =
-            take_optional_default(&mut map, "soracloud_model_host_capabilities")?;
-        let soracloud_inrou_host_capabilities =
-            take_optional_default(&mut map, "soracloud_inrou_host_capabilities")?;
-        let soracloud_hf_sources = take_optional_default(&mut map, "soracloud_hf_sources")?;
-        let soracloud_hf_shared_lease_pools =
-            take_optional_default(&mut map, "soracloud_hf_shared_lease_pools")?;
-        let soracloud_hf_shared_lease_members =
-            take_optional_default(&mut map, "soracloud_hf_shared_lease_members")?;
-        let soracloud_hf_shared_lease_audit_events =
-            take_optional_default(&mut map, "soracloud_hf_shared_lease_audit_events")?;
-        let soracloud_model_host_violation_evidence =
-            take_optional_default(&mut map, "soracloud_model_host_violation_evidence")?;
-        let soracloud_hf_placements = take_optional_default(&mut map, "soracloud_hf_placements")?;
-        let soracloud_inrou_service_placements =
-            take_optional_default(&mut map, "soracloud_inrou_service_placements")?;
-        let soracloud_mailbox_messages =
-            take_optional_default(&mut map, "soracloud_mailbox_messages")?;
-        let soracloud_runtime_receipts =
-            take_optional_default(&mut map, "soracloud_runtime_receipts")?;
-        let soracloud_private_uploaded_model_execution_receipts = take_optional_default(
-            &mut map,
-            "soracloud_private_uploaded_model_execution_receipts",
-        )?;
-        let provider_owners = take_required(&mut map, "provider_owners")?;
-        let provider_ingest_completion_authorities =
-            take_required(&mut map, "provider_ingest_completion_authorities")?;
-        validate_provider_ingest_completion_authorities(
-            &provider_owners,
-            &provider_ingest_completion_authorities,
-        )?;
-        let pin_manifests = take_optional_default(&mut map, "pin_manifests")?;
-        let zk_assets = take_optional_default(&mut map, "zk_assets")?;
-        let elections = take_optional_default(&mut map, "elections")?;
-        let citizens = take_optional_default(&mut map, "citizens")?;
-        let ministry_agenda_proposals =
-            take_optional_default(&mut map, "ministry_agenda_proposals")?;
-        let governance_proposals = take_optional_default(&mut map, "governance_proposals")?;
-        let governance_referenda = take_optional_default(&mut map, "governance_referenda")?;
-        let governance_stage_approvals =
-            take_optional_default(&mut map, "governance_stage_approvals")?;
-        let governance_locks = take_optional_default(&mut map, "governance_locks")?;
-        let governance_slashes = take_optional_default(&mut map, "governance_slashes")?;
-        let governance_last_unlock_sweep_height =
-            take_optional_default(&mut map, "governance_last_unlock_sweep_height")?;
-        let governance_unlock_stats = take_optional_default(&mut map, "governance_unlock_stats")?;
-        let council = take_optional_default(&mut map, "council")?;
-        let parliament_bodies = take_optional_default(&mut map, "parliament_bodies")?;
-        let vrf_epochs = take_optional_default(&mut map, "vrf_epochs")?;
-        let repo_agreements = take_optional_default(&mut map, "repo_agreements")?;
-        let settlement_receipts = take_optional_default(&mut map, "settlement_receipts")?;
-        let kagemusha_replay_keys = take_required(&mut map, "kagemusha_replay_keys")?;
-        let direct_lane_block_application_markers =
-            take_optional_default(&mut map, "direct_lane_block_application_markers")?;
-        let lane_relay_emergency_validators =
-            take_optional_default(&mut map, "lane_relay_emergency_validators")?;
-        let manifest_aliases = take_optional_default(&mut map, "manifest_aliases")?;
-        let replication_orders = take_optional_default(&mut map, "replication_orders")?;
-        let content_bundles = take_optional_default(&mut map, "content_bundles")?;
-        let content_chunks = take_optional_default(&mut map, "content_chunks")?;
-        let asset_escrows = take_optional_default(&mut map, "asset_escrows")?;
-        let vpn_leases = take_optional_default(&mut map, "vpn_leases")?;
-        let merge_hint_roots: Cell<Vec<Hash>> =
-            take_optional_default(&mut map, "merge_hint_roots")?;
-        let merge_global_state_root: Cell<Option<Hash>> =
-            take_optional_default(&mut map, "merge_global_state_root")?;
-        reject_unknown(&map, "world")?;
-
-        let mut world = World {
-            parameters,
-            peers,
-            domains,
-            domains_by_owner: Storage::default(),
-            accounts,
-            uaid_accounts: Storage::default(),
-            account_aliases,
-            account_aliases_by_account,
-            account_scope_directory,
-            account_scope_accounts: Storage::default(),
-            opaque_uaids: Storage::default(),
-            ram_lfe_program_policies,
-            identifier_policies,
-            fee_sponsor_programs,
-            fee_sponsor_program_revisions,
-            fee_sponsor_enrollments,
-            fee_sponsor_vaults,
-            fee_sponsor_budget_counters,
-            identifier_claims,
-            account_rekey_records,
-            account_recovery_policies,
-            account_recovery_requests,
-            asset_definitions,
-            asset_definition_aliases: Storage::default(),
-            asset_definition_alias_bindings,
-            contract_aliases: Storage::default(),
-            contract_alias_bindings,
-            asset_definition_domains: Storage::default(),
-            domain_asset_definitions: Storage::default(),
-            asset_definitions_by_owner: Storage::default(),
-            asset_definition_holders: Storage::default(),
-            asset_definition_assets: Storage::default(),
-            assets_by_account: Storage::default(),
-            assets_by_domain: Storage::default(),
-            asset_definition_nonzero_holders: Storage::default(),
-            assets,
-            asset_metadata,
-            nfts,
-            nfts_by_owner: Storage::default(),
-            nfts_by_domain: Storage::default(),
-            rwas,
-            rwas_by_owner: Storage::default(),
-            rwas_by_status: Storage::default(),
-            rwas_by_frozen: Storage::default(),
-            roles,
-            account_permissions,
-            account_roles,
-            oracle_feeds,
-            oracle_observations,
-            oracle_history,
-            oracle_provider_stats,
-            oracle_disputes,
-            oracle_changes,
-            defi_oracle_attestations,
-            twitter_bindings,
-            twitter_bindings_by_uaid,
-            viral_reward_budget,
-            viral_campaign_budget,
-            viral_daily_counters,
-            viral_binding_claims,
-            viral_escrows,
-            viral_bonus_paid,
-            asset_escrows,
-            asset_escrows_by_seller: Storage::default(),
-            asset_escrows_by_buyer: Storage::default(),
-            asset_escrows_by_status: Storage::default(),
-            vpn_leases,
-            vpn_active_lease_by_account: Storage::default(),
-            vpn_active_lease_by_address_slot: Storage::default(),
-            vpn_settled_leases_by_account: Storage::default(),
-            uaid_dataspaces: Storage::default(),
-            space_directory_manifests: Storage::default(),
-            axt_policies: Storage::default(),
-            axt_replay_ledger: Storage::default(),
-            sccp_registry,
-            sccp_outbound_pending_usage,
-            sccp_outbound_pending_messages,
-            sccp_outbound_message_locator,
-            sccp_outbound_message_index,
-            sccp_outbound_proofs,
-            sccp_inbound_messages,
-            sccp_inbound_anchor_high_water,
-            tx_sequences,
-            triggers,
-            executor,
-            executor_data_model,
-            verifying_keys,
-            verifying_keys_by_circuit,
-            consensus_keys,
-            consensus_keys_by_pk,
-            pedersen_params,
-            poseidon_params,
-            runtime_upgrades,
-            privacy_consensus_policy,
-            privacy_activations,
-            privacy_pgc_accounts,
-            privacy_pgc_pool_invariants,
-            privacy_nullifiers,
-            privacy_commitments,
-            privacy_roots,
-            privacy_root_heads,
-            proofs,
-            proofs_by_status: Storage::default(),
-            proof_tags,
-            proofs_by_tag,
-            commit_qcs,
-            contract_manifests,
-            contract_code,
-            contract_code_uploads,
-            contract_code_upload_chunks,
-            contract_instances,
-            contract_subject_bindings,
-            contract_subject_addresses: Storage::default(),
-            smart_contract_state,
-            musubi_namespace_bindings,
-            musubi_domain_ownership_generations,
-            musubi_packages,
-            musubi_package_metadata,
-            musubi_package_members,
-            musubi_package_invitations,
-            musubi_maintainer_directory,
-            musubi_releases,
-            musubi_archives,
-            musubi_provider_bundle_attestations,
-            musubi_archive_locations,
-            musubi_locations_by_pin,
-            musubi_locations_by_replication_order,
-            musubi_locations_by_provider,
-            musubi_archive_availability,
-            musubi_archive_reverse_references,
-            musubi_resolver_index,
-            musubi_resolver_index_checkpoints,
-            musubi_public_directory,
-            musubi_aliases,
-            musubi_alias_history,
-            musubi_governance_decisions,
-            musubi_registry_policy,
-            musubi_resolver_index_revision,
-            musubi_replication_shortfall_releases,
-            soracloud_service_revisions,
-            soracloud_service_deployments,
-            soracloud_app_infra_states,
-            soracloud_service_runtime,
-            soracloud_inrou_replica_runtime,
-            soracloud_service_audit_events,
-            soracloud_app_infra_audit_events,
-            soracloud_service_state_entries,
-            soracloud_decryption_request_records,
-            soracloud_agent_apartments,
-            soracloud_agent_apartment_audit_events,
-            soracloud_training_jobs,
-            soracloud_training_job_audit_events,
-            soracloud_model_registries,
-            soracloud_model_weight_versions,
-            soracloud_model_weight_audit_events,
-            soracloud_model_artifacts,
-            soracloud_model_artifact_audit_events,
-            soracloud_uploaded_model_bundles,
-            soracloud_model_host_capabilities,
-            soracloud_inrou_host_capabilities,
-            soracloud_hf_sources,
-            soracloud_hf_shared_lease_pools,
-            soracloud_hf_shared_lease_members,
-            soracloud_hf_shared_lease_audit_events,
-            soracloud_model_host_violation_evidence,
-            soracloud_hf_placements,
-            soracloud_inrou_service_placements,
-            soracloud_mailbox_messages,
-            soracloud_runtime_receipts,
-            soracloud_private_uploaded_model_execution_receipts,
-            capacity_declarations: Storage::default(),
-            capacity_fee_ledger: Storage::default(),
-            capacity_disputes: Storage::default(),
-            provider_owners,
-            provider_ingest_completion_authorities,
-            da_pin_intents_by_ticket: Storage::default(),
-            da_pin_intents_by_alias: Storage::default(),
-            da_pin_intents_by_manifest: Storage::default(),
-            da_pin_intents_by_lane_epoch: Storage::default(),
-            sorafs_pricing: Cell::default(),
-            provider_credit_ledger: Storage::default(),
-            pin_manifests,
-            manifest_aliases,
-            replication_orders,
-            content_bundles,
-            content_chunks,
-            soradns_directory_records: Storage::default(),
-            soradns_directory_pending: Storage::default(),
-            soradns_directory_latest: Cell::default(),
-            soradns_directory_history: Storage::default(),
-            soradns_directory_prev_of: Storage::default(),
-            soradns_directory_revocations: Storage::default(),
-            soradns_release_signers: Storage::default(),
-            soradns_rotation_policy: Cell::default(),
-            soradns_last_publish_ms: Cell::default(),
-            soradns_history_len: Cell::default(),
-            repo_agreements,
-            repo_agreements_by_initiator: Storage::default(),
-            repo_agreements_by_counterparty: Storage::default(),
-            repo_agreements_by_custodian: Storage::default(),
-            settlement_receipts,
-            kagemusha_replay_keys,
-            direct_lane_block_application_markers,
-            domain_committees,
-            domain_endorsement_policies,
-            domain_endorsements,
-            domain_endorsements_by_domain: Storage::default(),
-            public_lane_validators: Storage::default(),
-            public_lane_stake_shares: Storage::default(),
-            public_lane_rewards: Storage::default(),
-            public_lane_reward_claims: Storage::default(),
-            lane_relay_emergency_validators,
-            zk_assets,
-            elections,
-            citizens,
-            ministry_agenda_proposals,
-            governance_proposals,
-            governance_referenda,
-            governance_stage_approvals,
-            governance_locks,
-            governance_lock_expiry_index: Storage::default(),
-            validation_fee_proposal_index: Storage::default(),
-            governance_slashes,
-            governance_last_unlock_sweep_height,
-            governance_unlock_stats,
-            council,
-            parliament_bodies,
-            vrf_epochs,
-            merge_hint_roots,
-            merge_global_state_root,
-            consensus_evidence: Storage::default(),
-            external_event_buf,
-        };
-        MusubiPersistedState {
-            namespace_bindings: &world.musubi_namespace_bindings,
-            packages: &world.musubi_packages,
-            package_metadata: &world.musubi_package_metadata,
-            package_members: &world.musubi_package_members,
-            package_invitations: &world.musubi_package_invitations,
-            maintainer_directory: &world.musubi_maintainer_directory,
-            releases: &world.musubi_releases,
-            archives: &world.musubi_archives,
-            provider_bundle_attestations: &world.musubi_provider_bundle_attestations,
-            archive_locations: &world.musubi_archive_locations,
-            archive_availability: &world.musubi_archive_availability,
-            archive_reverse_references: &world.musubi_archive_reverse_references,
-            resolver_index: &world.musubi_resolver_index,
-            resolver_index_checkpoints: &world.musubi_resolver_index_checkpoints,
-            public_directory: &world.musubi_public_directory,
-            aliases: &world.musubi_aliases,
-            alias_history: &world.musubi_alias_history,
-            governance_decisions: &world.musubi_governance_decisions,
-            resolver_index_revision: world.musubi_resolver_index_revision.view().get().get(),
-            replication_shortfall_releases: *world
-                .musubi_replication_shortfall_releases
-                .view()
-                .get(),
-        }
-        .validate()?;
-        validate_musubi_governance_provenance(&world)?;
-        validate_musubi_live_projections(&world)?;
-        world
-            .validate_numeric_asset_invariants()
-            .map_err(|message| json::Error::InvalidField {
-                field: "world.assets".into(),
-                message,
-            })?;
-        world
-            .validate_quantity_ledger_invariants()
-            .map_err(|message| json::Error::InvalidField {
-                field: "world.numeric_ledgers".into(),
-                message,
-            })?;
-        world.rebuild_domain_owner_index();
-        world
-            .rebuild_uaid_account_index()
-            .map_err(|message| json::Error::InvalidField {
-                field: "uaid_accounts".into(),
-                message,
-            })?;
-        world
-            .rebuild_account_alias_index()
-            .map_err(|message| json::Error::InvalidField {
-                field: "account_aliases".into(),
-                message,
-            })?;
-        world
-            .rebuild_account_scope_directory()
-            .map_err(|message| json::Error::InvalidField {
-                field: "account_scope_directory".into(),
-                message,
-            })?;
-        world
-            .rebuild_account_rekey_records()
-            .map_err(|message| json::Error::InvalidField {
-                field: "account_rekey_records".into(),
-                message,
-            })?;
-        world
-            .rebuild_asset_definition_alias_indexes()
-            .map_err(|message| json::Error::InvalidField {
-                field: "asset_definition_alias_bindings".into(),
-                message,
-            })?;
-        world
-            .rebuild_contract_alias_indexes()
-            .map_err(|message| json::Error::InvalidField {
-                field: "contract_alias_bindings".into(),
-                message,
-            })?;
-        world
-            .rebuild_asset_definition_indexes()
-            .map_err(|message| json::Error::InvalidField {
-                field: "asset_definition_domains".into(),
-                message,
-            })?;
-        world.rebuild_governance_read_indexes();
-        world.rebuild_nft_owner_index();
-        world.rebuild_rwa_indexes();
-        world.rebuild_escrow_indexes();
-        world
-            .rebuild_vpn_lease_indexes()
-            .map_err(|message| json::Error::InvalidField {
-                field: "vpn_leases".into(),
-                message,
-            })?;
-        world.rebuild_repo_agreement_indexes();
-        world.rebuild_proof_status_index();
-        world
-            .rebuild_opaque_uaid_index()
-            .map_err(|message| json::Error::InvalidField {
-                field: "opaque_uaids".into(),
-                message,
-            })?;
-        world
-            .validate_identifier_claims()
-            .map_err(|message| json::Error::InvalidField {
-                field: "identifier_claims".into(),
-                message,
-            })?;
-        Ok(world)
-    }
-
-    struct BuildStateInputs {
-        world: World,
-        block_hashes: BlockHashes,
-        transactions: TransactionsStorage,
-        commit_topology: Cell<Vec<PeerId>>,
-        prev_commit_topology: Cell<Vec<PeerId>>,
-        ivm: IVM,
-        nexus: iroha_config::parameters::actual::Nexus,
-        lane_incarnations: BTreeMap<LaneId, Hash>,
-        lane_incarnation_lineage: BTreeMap<LaneId, LaneIncarnationLineage>,
-        lane_incarnation_activation_heights: BTreeMap<LaneId, u64>,
-        autoscale_sample_history: VecDeque<AutoscaleSampleRecord>,
-        chain_id: iroha_data_model::ChainId,
-        snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord>,
-        nexus_runtime_restored_from_snapshot: bool,
-        kura: Arc<Kura>,
-        query_handle: LiveQueryStoreHandle,
-        #[cfg(feature = "telemetry")]
-        telemetry: StateTelemetry,
-    }
-
-    fn build_state(
-        inputs: BuildStateInputs,
-        allow_durable_recovery: bool,
-    ) -> Result<State, MergeLedgerCommitError> {
-        let BuildStateInputs {
-            world,
-            block_hashes,
-            transactions,
-            commit_topology,
-            prev_commit_topology,
-            ivm,
-            nexus,
-            lane_incarnations,
-            lane_incarnation_lineage,
-            lane_incarnation_activation_heights,
-            autoscale_sample_history,
-            chain_id,
-            snapshot_v2_bootstrap_candidate,
-            nexus_runtime_restored_from_snapshot,
-            kura,
-            query_handle,
-            #[cfg(feature = "telemetry")]
-            telemetry,
-        } = inputs;
-        #[cfg(feature = "telemetry")]
-        let telemetry_seed = telemetry.clone();
-        let initial_crypto = iroha_config::parameters::actual::Crypto::default();
-        let streaming_storage_paths = StreamingStoragePaths::default();
-        let da_receipt_cursors = parking_lot::RwLock::new(DaReceiptCursorIndex::default());
-        let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
-        let commit_roster_journal = kura.commit_roster_journal_handle();
-        let canonical_query_index_status = {
-            let indexed_height = u64::try_from(block_hashes.committed_height()).unwrap_or(u64::MAX);
-            (indexed_height > 0).then(|| QueryIndexStatus {
-                indexed_height,
-                indexed_block_hash: block_hashes.view().last().copied(),
-            })
-        };
-        let LoadedStateJournals {
-            query_index: query_index_journal,
-            query_projection_checkpoint: query_projection_checkpoint_journal,
-        } = load_state_journals(&kura, canonical_query_index_status, allow_durable_recovery);
-        let pipeline = default_pipeline();
-        let pipeline_parallelism = if allow_durable_recovery {
-            PipelineParallelism::new(&pipeline)
-        } else {
-            PipelineParallelism::inert(&pipeline)
-        };
-        let stateless_cache_cap = pipeline.stateless_cache_cap;
-        let pipeline_cache_size = pipeline.cache_size;
-        let tiered_backend = Arc::new(parking_lot::Mutex::new(TieredStateBackend::default()));
-        let tiered_snapshot_worker = if allow_durable_recovery {
-            TieredSnapshotWorker::new(
-                Arc::clone(&tiered_backend),
-                #[cfg(feature = "telemetry")]
-                Some(telemetry_seed.clone()),
-            )
-        } else {
-            TieredSnapshotWorker::inert(
-                Arc::clone(&tiered_backend),
-                #[cfg(feature = "telemetry")]
-                None,
-            )
-        };
-        let durable_blocks = kura.exact_durable_blocks_count().map_err(|error| {
-            MergeLedgerCommitError::ExecutionStatePublication(format!(
-                "failed to read the exact durable Kura boundary: {error}"
-            ))
-        })?;
-        let latest_block_header = NonZeroUsize::new(durable_blocks)
-            .and_then(|height| kura.get_block(height))
-            .map(|block| block.header());
-        let mut state = State {
-            world,
-            block_hashes,
-            latest_block_header: parking_lot::RwLock::new(latest_block_header),
-            merge_ledger: MergeLedgerStore::with_default_capacity(),
-            merge_admission: parking_lot::RwLock::new(MergeAdmissionState::default()),
-            replay_merge_carriers: parking_lot::RwLock::new(BTreeMap::new()),
-            transactions,
-            commit_topology,
-            prev_commit_topology,
-            da_commitments: parking_lot::RwLock::new(DaCommitmentStore::default()),
-            da_confidential_compute: parking_lot::RwLock::new(ConfidentialComputeStore::default()),
-            da_receipt_cursors,
-            da_shard_cursors,
-            da_shard_cursor_persistor: DaShardCursorJournalPersistor::new(),
-            commit_roster_journal,
-            commit_roster_journal_persistence_lock: parking_lot::Mutex::new(()),
-            query_index_journal: parking_lot::RwLock::new(query_index_journal),
-            query_index_journal_persistence_lock: parking_lot::Mutex::new(()),
-            query_projection_checkpoint_journal: parking_lot::RwLock::new(
-                query_projection_checkpoint_journal,
-            ),
-            query_projection_checkpoint_journal_persistence_lock: parking_lot::Mutex::new(()),
-            da_pin_intents: parking_lot::RwLock::new(DaPinStore::default()),
-            lane_relays: parking_lot::RwLock::new(LaneRelayStore::default()),
-            settled_nexus_fee_receipts: parking_lot::RwLock::new(BTreeSet::new()),
-            lane_manifests: parking_lot::RwLock::new(Arc::new(LaneManifestRegistry::empty())),
-            lane_privacy_registry: parking_lot::RwLock::new(Arc::new(LanePrivacyRegistry::empty())),
-            lane_compliance: parking_lot::RwLock::new(None),
-            da_indexes_hydrated: parking_lot::RwLock::new(None),
-            ivm,
-            kura,
-            query_handle,
-            oracle: default_oracle(),
-            pipeline,
-            pipeline_parallelism,
-            soracloud_runtime: parking_lot::RwLock::new(None),
-            stateless_validation_cache: parking_lot::Mutex::new(StatelessValidationCache::new(
-                stateless_cache_cap,
-            )),
-            trigger_ivm_cache: parking_lot::Mutex::new(IvmCache::with_capacity(
-                pipeline_cache_size,
-            )),
-            contract_query_ivm_cache: parking_lot::Mutex::new(IvmCache::with_capacity(
-                pipeline_cache_size,
-            )),
-            pipeline_ivm_prepared_cache: parking_lot::RwLock::new(
-                PreparedContractCache::with_capacity(pipeline_cache_size),
-            ),
-            streaming_storage_paths,
-            crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
-            nexus: parking_lot::RwLock::new(nexus),
-            lane_incarnations: parking_lot::RwLock::new(lane_incarnations),
-            lane_incarnation_lineage: parking_lot::RwLock::new(lane_incarnation_lineage),
-            lane_incarnation_activation_heights: parking_lot::RwLock::new(
-                lane_incarnation_activation_heights,
-            ),
-            nexus_runtime_restored_from_snapshot,
-            nexus_storage_budget_last_check_height: AtomicU64::new(0),
-            autoscale_sample_history: parking_lot::RwLock::new(autoscale_sample_history),
-            tiered_backend: Arc::clone(&tiered_backend),
-            tiered_snapshot_worker,
-            fraud_monitoring: default_fraud_monitoring_cfg(),
-            zk: default_zk(),
-            gov: default_governance(),
-            content: default_content_cfg(),
-            settlement: iroha_config::parameters::actual::Settlement::default(),
-            kagemusha_release_catalog: Arc::new(
-                crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty(),
-            ),
-            settlement_engine: SettlementEngine::new_roadmap_default(),
-            chain_id,
-            snapshot_v2_bootstrap_candidate,
-            authenticated_snapshot_v2_bootstrap: None,
-            authenticated_snapshot_bootstrap_payload: None,
-            #[cfg(feature = "telemetry")]
-            telemetry,
-            lane_lifecycle_lock: parking_lot::Mutex::new(()),
-            state_commit_lock: Arc::new(parking_lot::Mutex::new(())),
-            state_write_lock: parking_lot::Mutex::new(()),
-            view_generation: AtomicU64::new(0),
-            view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
-            sccp_registry_cache: parking_lot::Mutex::new(SccpRegistryCache::default()),
-        };
-        state
-            .rebuild_derived_state_indexes()
-            .map_err(MergeLedgerCommitError::ExecutionStatePublication)?;
-        #[cfg(feature = "sm")]
-        if allow_durable_recovery {
-            Sm2PublicKey::set_default_distid(initial_crypto.sm2_distid_default.clone())
-                .expect("sm2_distid_default must be valid");
-        }
-        #[cfg(feature = "telemetry")]
-        {
-            let view = state.world.governance_proposals.view();
-            let records: Vec<_> = view.iter().map(|(id, rec)| (*id, rec.status)).collect();
-            telemetry_seed.seed_governance_proposals(records);
-            let citizens_total =
-                u64::try_from(state.world.citizens.view().iter().count()).unwrap_or(u64::MAX);
-            telemetry_seed.record_citizens_total(citizens_total);
-        }
-        if allow_durable_recovery && !state.kura.provisional_snapshot_bootstrap_pending() {
-            state.recover_merge_ledger_from_kura()?;
-        }
-        Ok(state)
-    }
-
-    fn default_pipeline() -> iroha_config::parameters::actual::Pipeline {
-        iroha_config::parameters::actual::Pipeline {
-            dynamic_prepass: iroha_config::parameters::defaults::pipeline::DYNAMIC_PREPASS,
-            access_set_cache_enabled:
-                iroha_config::parameters::defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
-            parallel_overlay: iroha_config::parameters::defaults::pipeline::PARALLEL_OVERLAY,
-            workers: iroha_config::parameters::defaults::pipeline::WORKERS,
-            stateless_cache_cap: iroha_config::parameters::defaults::pipeline::STATELESS_CACHE_CAP,
-            parallel_apply: iroha_config::parameters::defaults::pipeline::PARALLEL_APPLY,
-            ready_queue_heap: iroha_config::parameters::defaults::pipeline::READY_QUEUE_HEAP,
-            gpu_key_bucket: iroha_config::parameters::defaults::pipeline::GPU_KEY_BUCKET,
-            debug_trace_scheduler_inputs:
-                iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_SCHEDULER_INPUTS,
-            debug_trace_tx_eval: iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_TX_EVAL,
-            signature_batch_max: iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX,
-            signature_batch_max_ed25519:
-                iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_ED25519,
-            signature_batch_max_secp256k1:
-                iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_SECP256K1,
-            signature_batch_max_pqc:
-                iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_PQC,
-            signature_batch_max_bls:
-                iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_BLS,
-            cache_size: iroha_config::parameters::defaults::pipeline::CACHE_SIZE,
-            ivm_cache_max_decoded_ops:
-                iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS,
-            ivm_cache_max_bytes: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_BYTES,
-            ivm_prover_threads: iroha_config::parameters::defaults::pipeline::IVM_PROVER_THREADS,
-            overlay_max_instructions:
-                iroha_config::parameters::defaults::pipeline::OVERLAY_MAX_INSTRUCTIONS,
-            overlay_max_bytes: iroha_config::parameters::defaults::pipeline::OVERLAY_MAX_BYTES,
-            overlay_chunk_instructions:
-                iroha_config::parameters::defaults::pipeline::OVERLAY_CHUNK_INSTRUCTIONS,
-            gas: iroha_config::parameters::actual::Gas {
-                tech_account_id: iroha_config::parameters::defaults::pipeline::GAS_TECH_ACCOUNT_ID
-                    .to_string(),
-                accepted_assets: Vec::new(),
-                units_per_gas: Vec::new(),
-            },
-            ivm_max_cycles_upper_bound:
-                iroha_config::parameters::defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
-            ivm_max_decoded_instructions:
-                iroha_config::parameters::defaults::pipeline::IVM_MAX_DECODED_INSTRUCTIONS,
-            ivm_max_decoded_bytes:
-                iroha_config::parameters::defaults::pipeline::IVM_MAX_DECODED_BYTES,
-            quarantine_max_txs_per_block:
-                iroha_config::parameters::defaults::pipeline::QUARANTINE_MAX_TXS_PER_BLOCK,
-            quarantine_tx_max_cycles:
-                iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
-            query_default_cursor_mode: iroha_config::parameters::actual::QueryCursorMode::Ephemeral,
-            query_max_fetch_size:
-                iroha_config::parameters::defaults::pipeline::QUERY_MAX_FETCH_SIZE,
-            query_stored_min_gas_units:
-                iroha_config::parameters::defaults::pipeline::QUERY_STORED_MIN_GAS_UNITS,
-            amx_per_dataspace_budget_ms:
-                iroha_config::parameters::defaults::pipeline::AMX_PER_DATASPACE_BUDGET_MS,
-            amx_group_budget_ms: iroha_config::parameters::defaults::pipeline::AMX_GROUP_BUDGET_MS,
-            amx_per_instruction_ns:
-                iroha_config::parameters::defaults::pipeline::AMX_PER_INSTRUCTION_NS,
-            amx_per_memory_access_ns:
-                iroha_config::parameters::defaults::pipeline::AMX_PER_MEMORY_ACCESS_NS,
-            amx_per_syscall_ns: iroha_config::parameters::defaults::pipeline::AMX_PER_SYSCALL_NS,
-        }
-    }
-
-    pub(super) fn default_zk() -> iroha_config::parameters::actual::Zk {
-        iroha_config::parameters::actual::Zk {
-            halo2: iroha_config::parameters::actual::Halo2::default(),
-            fastpq: iroha_config::parameters::actual::Fastpq {
-                execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Cpu,
-                poseidon_mode: iroha_config::parameters::actual::FastpqPoseidonMode::Cpu,
-                proof_sidecar_queue_cap:
-                    iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
-                proof_sidecar_max_bytes:
-                    iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
-                proof_sidecar_max_retries:
-                    iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
-                device_class: None,
-                chip_family: None,
-                gpu_kind: None,
-                metal_queue_fanout: None,
-                metal_queue_column_threshold: None,
-                metal_max_in_flight: None,
-                metal_threadgroup_width: None,
-                metal_trace: iroha_config::parameters::defaults::zk::fastpq::METAL_TRACE,
-                metal_debug_enum: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_ENUM,
-                metal_debug_fused:
-                    iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
-            },
-            stark: iroha_config::parameters::actual::Stark::default(),
-            sccp: iroha_config::parameters::actual::Sccp::default(),
-            ballot_history_cap: iroha_config::parameters::defaults::zk::vote::BALLOT_HISTORY_CAP,
-            preverify_max_bytes: iroha_config::parameters::defaults::zk::preverify::MAX_BYTES,
-            preverify_budget_bytes: iroha_config::parameters::defaults::zk::preverify::BUDGET_BYTES,
-            proof_history_cap: iroha_config::parameters::defaults::zk::proof::RECORD_HISTORY_CAP,
-            proof_retention_grace_blocks:
-                iroha_config::parameters::defaults::zk::proof::RETENTION_GRACE_BLOCKS,
-            proof_prune_batch: iroha_config::parameters::defaults::zk::proof::PRUNE_BATCH_SIZE,
-            bridge_proof_max_range_len:
-                iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_RANGE_LEN,
-            bridge_proof_max_past_age_blocks:
-                iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
-            bridge_proof_max_future_drift_blocks:
-                iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
-            poseidon_params_id:
-                iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
-            pedersen_params_id:
-                iroha_config::parameters::defaults::confidential::PEDERSEN_PARAMS_ID,
-            kaigi_roster_join_vk: None,
-            kaigi_roster_leave_vk: None,
-            kaigi_usage_vk: None,
-            max_proof_size_bytes:
-                iroha_config::parameters::defaults::confidential::MAX_PROOF_SIZE_BYTES,
-            max_nullifiers_per_tx:
-                iroha_config::parameters::defaults::confidential::MAX_NULLIFIERS_PER_TX,
-            max_commitments_per_tx:
-                iroha_config::parameters::defaults::confidential::MAX_COMMITMENTS_PER_TX,
-            max_confidential_ops_per_block:
-                iroha_config::parameters::defaults::confidential::MAX_CONFIDENTIAL_OPS_PER_BLOCK,
-            verify_timeout: iroha_config::parameters::defaults::confidential::VERIFY_TIMEOUT,
-            max_anchor_age_blocks:
-                iroha_config::parameters::defaults::confidential::MAX_ANCHOR_AGE_BLOCKS,
-            max_proof_bytes_block:
-                iroha_config::parameters::defaults::confidential::MAX_PROOF_BYTES_BLOCK,
-            max_verify_calls_per_tx:
-                iroha_config::parameters::defaults::confidential::MAX_VERIFY_CALLS_PER_TX,
-            max_verify_calls_per_block:
-                iroha_config::parameters::defaults::confidential::MAX_VERIFY_CALLS_PER_BLOCK,
-            max_public_inputs: iroha_config::parameters::defaults::confidential::MAX_PUBLIC_INPUTS,
-            reorg_depth_bound: iroha_config::parameters::defaults::confidential::REORG_DEPTH_BOUND,
-            policy_transition_delay_blocks:
-                iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
-            policy_transition_window_blocks:
-                iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
-            tree_roots_history_len:
-                iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
-            tree_frontier_checkpoint_interval:
-                iroha_config::parameters::defaults::confidential::TREE_FRONTIER_CHECKPOINT_INTERVAL,
-            registry_max_vk_entries:
-                iroha_config::parameters::defaults::confidential::REGISTRY_MAX_VK_ENTRIES,
-            registry_max_params_entries:
-                iroha_config::parameters::defaults::confidential::REGISTRY_MAX_PARAMS_ENTRIES,
-            registry_max_delta_per_block:
-                iroha_config::parameters::defaults::confidential::REGISTRY_MAX_DELTA_PER_BLOCK,
-            gas: iroha_config::parameters::actual::ConfidentialGas {
-                proof_base: iroha_config::parameters::defaults::confidential::gas::PROOF_BASE,
-                per_public_input:
-                    iroha_config::parameters::defaults::confidential::gas::PER_PUBLIC_INPUT,
-                per_proof_byte:
-                    iroha_config::parameters::defaults::confidential::gas::PER_PROOF_BYTE,
-                per_nullifier: iroha_config::parameters::defaults::confidential::gas::PER_NULLIFIER,
-                per_commitment:
-                    iroha_config::parameters::defaults::confidential::gas::PER_COMMITMENT,
-            },
-        }
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn default_governance() -> iroha_config::parameters::actual::Governance {
-        iroha_config::parameters::actual::Governance {
-            vk_ballot: None,
-            vk_tally: None,
-            voting_asset_id: iroha_config::parameters::defaults::governance::voting_asset_id()
-                .parse()
-                .expect("valid default voting asset id"),
-            citizenship_asset_id:
-                iroha_config::parameters::defaults::governance::citizenship_asset_id()
-                    .parse()
-                    .expect("valid default citizenship asset id"),
-            citizenship_bond_amount:
-                iroha_config::parameters::defaults::governance::citizenship_bond_amount(),
-            citizenship_escrow_account:
-                iroha_config::parameters::defaults::governance::citizenship_escrow_account_id(),
-            min_bond_amount: 150_u64.into(),
-            bond_escrow_account:
-                iroha_config::parameters::defaults::governance::bond_escrow_account_id(),
-            slash_receiver_account:
-                iroha_config::parameters::defaults::governance::slash_receiver_account_id(),
-            slash_double_vote_bps:
-                iroha_config::parameters::defaults::governance::slash_policy::DOUBLE_VOTE_BPS,
-            slash_invalid_proof_bps:
-                iroha_config::parameters::defaults::governance::slash_policy::MISCONDUCT_BPS,
-            slash_ineligible_proof_bps:
-                iroha_config::parameters::defaults::governance::slash_policy::INELIGIBLE_PROOF_BPS,
-            alias_teu_minimum: iroha_config::parameters::defaults::governance::alias_teu_minimum(),
-            alias_frontier_telemetry:
-                iroha_config::parameters::defaults::governance::alias_frontier_telemetry(),
-            debug_trace_pipeline:
-                iroha_config::parameters::defaults::governance::DEBUG_TRACE_PIPELINE,
-            jdg_signature_schemes:
-                iroha_config::parameters::defaults::governance::jdg_signature_schemes()
-                    .into_iter()
-                    .map(|scheme| {
-                        scheme
-                            .parse::<iroha_data_model::jurisdiction::JdgSignatureScheme>()
-                            .expect("valid default JDG signature scheme")
-                    })
-                    .collect(),
-            runtime_upgrade_provenance:
-                iroha_config::parameters::actual::RuntimeUpgradeProvenancePolicy::default(),
-            citizen_service: iroha_config::parameters::actual::CitizenServiceDiscipline::default(),
-            viral_incentives: iroha_config::parameters::actual::ViralIncentives::default(),
-            sorafs_pin_policy:
-                iroha_config::parameters::actual::SorafsPinPolicyConstraints::default(),
-            sorafs_pin_fee_asset_id:
-                iroha_config::parameters::defaults::governance::sorafs_pin_fee::asset_id()
-                    .parse()
-                    .expect("default SoraFS pin fee asset id"),
-            sorafs_pin_fee_treasury_account:
-                iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account_id(
-                ),
-            sorafs_pricing:
-                iroha_data_model::sorafs::pricing::PricingScheduleRecord::launch_default(),
-            sorafs_penalty: iroha_config::parameters::actual::SorafsPenaltyPolicy::default(),
-            sorafs_telemetry: iroha_config::parameters::actual::SorafsTelemetryPolicy::default(),
-            sorafs_provider_owners: std::collections::BTreeMap::new(),
-            conviction_step_blocks: 100,
-            max_conviction: 6,
-            min_enactment_delay: 20,
-            window_span: 100,
-            plain_voting_enabled: false,
-            approval_threshold_q_num: 1,
-            approval_threshold_q_den: 2,
-            min_turnout: 0,
-            parliament_committee_size:
-                iroha_config::parameters::defaults::governance::PARLIAMENT_COMMITTEE_SIZE,
-            parliament_term_blocks:
-                iroha_config::parameters::defaults::governance::PARLIAMENT_TERM_BLOCKS,
-            parliament_min_stake:
-                iroha_config::parameters::defaults::governance::parliament_min_stake(),
-            parliament_eligibility_asset_id:
-                iroha_config::parameters::defaults::governance::parliament_eligibility_asset_id()
-                    .parse()
-                    .expect("valid default governance asset id"),
-            parliament_alternate_size:
-                iroha_config::parameters::defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
-            parliament_quorum_bps:
-                iroha_config::parameters::defaults::governance::PARLIAMENT_QUORUM_BPS,
-            rules_committee_size:
-                iroha_config::parameters::defaults::governance::PARLIAMENT_RULES_COMMITTEE_SIZE,
-            agenda_council_size:
-                iroha_config::parameters::defaults::governance::PARLIAMENT_AGENDA_COUNCIL_SIZE,
-            interest_panel_size:
-                iroha_config::parameters::defaults::governance::PARLIAMENT_INTEREST_PANEL_SIZE,
-            review_panel_size:
-                iroha_config::parameters::defaults::governance::PARLIAMENT_REVIEW_PANEL_SIZE,
-            policy_jury_size:
-                iroha_config::parameters::defaults::governance::PARLIAMENT_POLICY_JURY_SIZE,
-            oversight_committee_size:
-                iroha_config::parameters::defaults::governance::PARLIAMENT_OVERSIGHT_COMMITTEE_SIZE,
-            fma_committee_size:
-                iroha_config::parameters::defaults::governance::PARLIAMENT_FMA_COMMITTEE_SIZE,
-            pipeline_study_sla_blocks:
-                iroha_config::parameters::defaults::governance::PIPELINE_STUDY_SLA_BLOCKS,
-            pipeline_review_sla_blocks:
-                iroha_config::parameters::defaults::governance::PIPELINE_REVIEW_SLA_BLOCKS,
-            pipeline_decision_sla_blocks:
-                iroha_config::parameters::defaults::governance::PIPELINE_DECISION_SLA_BLOCKS,
-            pipeline_enactment_sla_blocks:
-                iroha_config::parameters::defaults::governance::PIPELINE_ENACTMENT_SLA_BLOCKS,
-            pipeline_rules_sla_blocks:
-                iroha_config::parameters::defaults::governance::PIPELINE_RULES_SLA_BLOCKS,
-            pipeline_agenda_sla_blocks:
-                iroha_config::parameters::defaults::governance::PIPELINE_AGENDA_SLA_BLOCKS,
-        }
-    }
-
-    fn reject_unknown(map: &json::native::Map, context: &str) -> Result<(), json::Error> {
-        let Some(field) = map.keys().next() else {
-            return Ok(());
-        };
-        Err(json::Error::InvalidField {
-            field: format!("{context}.{field}"),
-            message: "unknown field is not permitted in a signed first-release snapshot".to_owned(),
-        })
-    }
-
-    #[cfg(test)]
-    mod decode_tests {
-        use iroha_crypto::SignatureOf;
-        use iroha_data_model::musubi::{
-            MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiAliasHistoryActionV1,
-            MusubiArchiveCommitmentV1, MusubiArchiveLocationIdV1, MusubiArtifactGovernanceStateV1,
-            MusubiArtifactTakedownV1, MusubiContentDigestV1, MusubiGovernanceDecisionV1,
-            MusubiMaintainerPermissionsV1, MusubiNamespaceBindingDigestV1,
-            MusubiPackageRevisionsV1, MusubiPackageScopeV1, MusubiParliamentActionV1,
-            MusubiProviderBundleAttestationDigestV1, MusubiProviderBundleAttestationSetDigestV1,
-            MusubiProviderBundleVerificationApprovalV1,
-            MusubiProviderBundleVerificationAttestationV1,
-            MusubiProviderBundleVerificationBindingV1, MusubiProviderBundleVerificationPayloadV1,
-            MusubiReasonV1, MusubiRecoverPackageOwnersV1, MusubiRegistryAdmissionModeV1,
-            MusubiReleaseManifestV1, MusubiReleaseMetadataV1, MusubiReleaseRevisionsV1,
-            MusubiReleaseSelectionStateV1, MusubiReleaseYankV1, MusubiRetargetAliasV1,
-            MusubiSeedIngressReceiptApprovalV1, MusubiSeedIngressReceiptBindingV1,
-            MusubiSeedIngressReceiptPayloadV1, MusubiSeedIngressReceiptV1,
-            MusubiSetRegistryPolicyActionV1, MusubiStorageAvailabilityV1,
-            MusubiTakedownArtifactActionV1, MusubiVerificationLockDigestV1,
-        };
-        use iroha_data_model::sorafs::pin_registry::{
-            ChunkerProfileHandle, ManifestRootCid, ProviderIngestCompletionSignerPolicyV1,
-            ProviderIngestFinalizedAnchorV1,
-        };
-
-        use super::*;
-
-        fn musubi_account(seed: u8) -> AccountId {
-            let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-                .expect("derive deterministic Musubi snapshot account");
-            AccountId::new(key_pair.public_key().clone())
-        }
-
-        fn musubi_package(name: &str) -> MusubiPackageIdV1 {
-            MusubiPackageIdV1::new(
-                DataSpaceId::new(7),
-                MusubiPackageScopeV1::DataspaceRoot,
-                name.parse().expect("Musubi package name"),
-            )
-        }
-
-        #[test]
-        fn legacy_musubi_generic_state_rejects_entire_reserved_namespace() {
-            for path in [
-                "musubi",
-                "musubi_package_catalog",
-                "musubi_registry",
-                "musubi_short_aliases",
-                "musubi/releases",
-                "musubi.v0.aliases",
-                "musubi:registry",
-            ] {
-                let mut state = Storage::<StatePath, Vec<u8>>::default();
-                state.insert(path.parse().expect("valid legacy state path"), vec![1]);
-
-                let error = reject_legacy_musubi_state(&state)
-                    .expect_err("every reserved legacy Musubi state path must block loading");
-                assert!(
-                    error.to_string().contains(path),
-                    "rejection must identify the exact legacy path: {error}"
-                );
-            }
-
-            let mut unrelated = Storage::<StatePath, Vec<u8>>::default();
-            unrelated.insert(
-                "musubian_contract"
-                    .parse()
-                    .expect("valid unrelated state path"),
-                vec![1],
-            );
-            reject_legacy_musubi_state(&unrelated)
-                .expect("a non-reserved prefix must not be mistaken for Musubi state");
-        }
-
-        fn retain_musubi_consumption_as(
-            world: &mut World,
-            decision_id: [u8; 32],
-            action: MusubiParliamentActionV1,
-            enacted_at_height: u64,
-            execute_after_height: u64,
-            consumed_at_height: u64,
-        ) -> iroha_data_model::musubi::MusubiGovernanceActionDigestV1 {
-            let action_digest = action.action_digest();
-            world.governance_proposals.insert(
-                decision_id,
-                GovernanceProposalRecord {
-                    proposer: musubi_account(60),
-                    kind: ProposalKind::MusubiRegistryGovernance(action),
-                    created_height: 1,
-                    status: GovernanceProposalStatus::Enacted,
-                    pipeline: GovernancePipeline::default(),
-                    parliament_snapshot: None,
-                    finalization_evidence: None,
-                    enacted_at_height: Some(enacted_at_height),
-                },
-            );
-            let consumption = MusubiGovernanceDecisionConsumptionV1 {
-                decision: MusubiGovernanceDecisionV1 {
-                    decision_id,
-                    action_digest,
-                    enacted_at_height,
-                    execute_after_height,
-                },
-                minimum_enactment_delay: execute_after_height
-                    .checked_sub(enacted_at_height)
-                    .expect("execution boundary follows enactment height"),
-                consumed_at_height,
-            };
-            consumption.validate().expect("valid decision consumption");
-            world
-                .musubi_governance_decisions
-                .insert(decision_id, consumption);
-            action_digest
-        }
-
-        fn retain_musubi_consumption(
-            world: &mut World,
-            action: MusubiParliamentActionV1,
-            enacted_at_height: u64,
-            execute_after_height: u64,
-            consumed_at_height: u64,
-        ) -> iroha_data_model::musubi::MusubiGovernanceActionDigestV1 {
-            let decision_id = ProposalKind::MusubiRegistryGovernance(action.clone()).fingerprint();
-            retain_musubi_consumption_as(
-                world,
-                decision_id,
-                action,
-                enacted_at_height,
-                execute_after_height,
-                consumed_at_height,
-            )
-        }
-
-        fn musubi_policy_successor(
-            current: &MusubiRegistryPolicyV1,
-            mode: MusubiRegistryAdmissionModeV1,
-        ) -> MusubiRegistryPolicyV1 {
-            let mut successor = current.clone();
-            successor.revision = current.revision.checked_add(1).expect("policy revision");
-            successor.mode = mode;
-            successor.allowlisted_dataspaces.clear();
-            successor
-                .validate_successor(current)
-                .expect("canonical policy successor");
-            successor
-        }
-
-        fn seed_current_musubi_package(
-            world: &mut World,
-            package: &MusubiPackageIdV1,
-            owner: &AccountId,
-            governance_revision: u64,
-            accepted_at_height: u64,
-        ) -> MusubiPackageMemberV1 {
-            let record = MusubiPackageRecordV1 {
-                package: package.clone(),
-                claimed_namespace: "sora".parse().expect("namespace"),
-                claimed_namespace_binding: MusubiNamespaceBindingDigestV1::new([1; 32]),
-                owners: vec![owner.clone()],
-                member_accounts: vec![owner.clone()],
-                claimed_at_height: 1,
-                revisions: MusubiPackageRevisionsV1 {
-                    governance: governance_revision,
-                    metadata: 1,
-                    archive_locations: 1,
-                },
-            };
-            record.validate().expect("valid package fixture");
-            world.musubi_packages.insert(package.clone(), record);
-
-            let member = MusubiPackageMemberV1 {
-                package: package.clone(),
-                account: owner.clone(),
-                role: MusubiPackageRoleV1::Owner,
-                accepted_at_height,
-                governance_revision,
-            };
-            member.validate().expect("valid member fixture");
-            world
-                .musubi_package_members
-                .insert(member.key(), member.clone());
-            member
-        }
-
-        fn musubi_release_record(
-            release: MusubiReleaseIdV1,
-            artifact_governance: MusubiArtifactGovernanceStateV1,
-            artifact_governance_revision: u64,
-        ) -> MusubiReleaseRecordV1 {
-            let manifest = MusubiReleaseManifestV1 {
-                release: release.clone(),
-                edition: iroha_data_model::musubi::MusubiKotodamaEditionV1::V1,
-                abi: MusubiAbiBindingV1::new([0xA1; 32]).expect("nonzero ABI hash"),
-                dependencies: Vec::new(),
-                exports: Vec::new(),
-                interface_digest: MusubiContentDigestV1::new([0xA2; 32]),
-                metadata: MusubiReleaseMetadataV1::default(),
-                archive_id: ArchiveId::new([0xA3; 32]),
-                verification_lock_digest: MusubiVerificationLockDigestV1::new([0xA4; 32]),
-            };
-            let publisher = musubi_account(61);
-            let record = MusubiReleaseRecordV1 {
-                release_digest: manifest.release_digest(),
-                yank: MusubiReleaseYankV1 {
-                    release,
-                    yanked: false,
-                    reason: "initial publication".parse().expect("bounded reason"),
-                    changed_by: publisher.clone(),
-                    changed_at_height: 1,
-                    revision: 1,
-                },
-                artifact_governance,
-                revisions: MusubiReleaseRevisionsV1 {
-                    yank: 1,
-                    artifact_governance: artifact_governance_revision,
-                },
-                manifest,
-                published_by: publisher,
-                published_at_height: 1,
-            };
-            record.validate().expect("valid release fixture");
-            record
-        }
-
-        fn validate_musubi_persisted_snapshot(world: &World) -> Result<(), json::Error> {
-            MusubiPersistedState {
-                namespace_bindings: &world.musubi_namespace_bindings,
-                packages: &world.musubi_packages,
-                package_metadata: &world.musubi_package_metadata,
-                package_members: &world.musubi_package_members,
-                package_invitations: &world.musubi_package_invitations,
-                maintainer_directory: &world.musubi_maintainer_directory,
-                releases: &world.musubi_releases,
-                archives: &world.musubi_archives,
-                provider_bundle_attestations: &world.musubi_provider_bundle_attestations,
-                archive_locations: &world.musubi_archive_locations,
-                archive_availability: &world.musubi_archive_availability,
-                archive_reverse_references: &world.musubi_archive_reverse_references,
-                resolver_index: &world.musubi_resolver_index,
-                resolver_index_checkpoints: &world.musubi_resolver_index_checkpoints,
-                public_directory: &world.musubi_public_directory,
-                aliases: &world.musubi_aliases,
-                alias_history: &world.musubi_alias_history,
-                governance_decisions: &world.musubi_governance_decisions,
-                resolver_index_revision: world.musubi_resolver_index_revision.view().get().get(),
-                replication_shortfall_releases: *world
-                    .musubi_replication_shortfall_releases
-                    .view()
-                    .get(),
-            }
-            .validate()
-        }
-
-        fn validate_musubi_publication_snapshot(world: &World) -> Result<(), json::Error> {
-            validate_musubi_location_reverse_indices(
-                &world.musubi_archive_locations,
-                &world.musubi_locations_by_pin,
-                &world.musubi_locations_by_replication_order,
-                &world.musubi_locations_by_provider,
-            )?;
-            validate_musubi_persisted_snapshot(world)?;
-            validate_musubi_live_projections(world)
-        }
-
-        #[allow(clippy::too_many_lines)]
-        fn seeded_musubi_publication_snapshot()
-        -> (World, MusubiReleaseIdV1, ArchiveId, MusubiPackageSelectorV1) {
-            let mut world = World::default();
-            let package = musubi_package("atomic-publication");
-            let namespace: MusubiNamespaceV1 = "sora".parse().expect("namespace");
-            let binding = MusubiNamespaceBindingV1 {
-                namespace: namespace.clone(),
-                home_dataspace: package.home_dataspace,
-                scope: package.scope.clone(),
-                generation: 1,
-            };
-            let publisher_keypair = KeyPair::try_from_seed(vec![61; 32], Algorithm::Ed25519)
-                .expect("derive deterministic publisher key");
-            let publisher = AccountId::new(publisher_keypair.public_key().clone());
-            let package_record = MusubiPackageRecordV1 {
-                package: package.clone(),
-                claimed_namespace: namespace.clone(),
-                claimed_namespace_binding: binding.digest(),
-                owners: vec![publisher.clone()],
-                member_accounts: vec![publisher.clone()],
-                claimed_at_height: 1,
-                revisions: MusubiPackageRevisionsV1 {
-                    governance: 1,
-                    metadata: 1,
-                    archive_locations: 1,
-                },
-            };
-            package_record.validate().expect("valid package record");
-            let member = MusubiPackageMemberV1 {
-                package: package.clone(),
-                account: publisher.clone(),
-                role: MusubiPackageRoleV1::Owner,
-                accepted_at_height: 1,
-                governance_revision: 1,
-            };
-            member.validate().expect("valid package owner");
-            let metadata = MusubiPackageMetadataRecordV1 {
-                package: package.clone(),
-                metadata: MusubiReleaseMetadataV1::default(),
-                revision: 1,
-                changed_by: publisher.clone(),
-                changed_at_height: 1,
-            };
-            metadata.validate().expect("valid package metadata");
-
-            let commitment = MusubiArchiveCommitmentV1 {
-                root_cid: ManifestRootCid::from_blake3_digest([0x11; 32])
-                    .expect("archive root CID"),
-                chunker: ChunkerProfileHandle {
-                    profile_id: 1,
-                    namespace: "sorafs".to_owned(),
-                    name: "sf1".to_owned(),
-                    semver: "1.0.0".to_owned(),
-                    multihash_code: 0x1f,
-                },
-                chunk_plan_digest: MusubiContentDigestV1::new([0x12; 32]),
-                por_root: MusubiContentDigestV1::new([0x13; 32]),
-                content_length: 1,
-                car_digest: MusubiContentDigestV1::new([0x14; 32]),
-                car_size: 1,
-                bundle_digest: MusubiContentDigestV1::new([0x15; 32]),
-                source_tree_digest: MusubiContentDigestV1::new([0x16; 32]),
-                descriptor_digest: MusubiContentDigestV1::new([0x17; 32]),
-                file_count: 1,
-                chunk_count: 1,
-            };
-            let archive_id = commitment.archive_id();
-            let release =
-                MusubiReleaseIdV1::new(package.clone(), "1.0.0".parse().expect("release version"));
-            let manifest = MusubiReleaseManifestV1 {
-                release: release.clone(),
-                edition: iroha_data_model::musubi::MusubiKotodamaEditionV1::V1,
-                abi: MusubiAbiBindingV1::new([0x18; 32]).expect("ABI binding"),
-                dependencies: Vec::new(),
-                exports: Vec::new(),
-                interface_digest: MusubiContentDigestV1::new([0x19; 32]),
-                metadata: MusubiReleaseMetadataV1::default(),
-                archive_id,
-                verification_lock_digest: MusubiVerificationLockDigestV1::new([0x1A; 32]),
-            };
-            manifest.validate().expect("valid release manifest");
-
-            let broker_keypair = KeyPair::try_from_seed(vec![62; 32], Algorithm::Ed25519)
-                .expect("derive deterministic ingress broker key");
-            let receipt_payload = MusubiSeedIngressReceiptPayloadV1 {
-                version: MUSUBI_REGISTRY_VERSION_V1,
-                binding: MusubiSeedIngressReceiptBindingV1 {
-                    chain_id: iroha_data_model::ChainId::from("musubi-atomicity-test"),
-                    genesis_block_hash: [0x1B; 32],
-                    publisher: publisher.clone(),
-                    ingress_broker: AccountId::new(broker_keypair.public_key().clone()),
-                    seed_provider: ProviderId::new([0x1C; 32]),
-                    semantic_release_manifest_digest: manifest.semantic_digest(),
-                    archive_id,
-                    car_body_digest: commitment.car_digest,
-                    car_body_length: commitment.car_size,
-                    nonce: [0x1D; 32],
-                },
-                issued_at_ms: 1,
-                expires_at_ms: 2,
-            };
-            let receipt = MusubiSeedIngressReceiptV1 {
-                approvals: vec![MusubiSeedIngressReceiptApprovalV1 {
-                    public_key: broker_keypair.public_key().clone(),
-                    signature: SignatureOf::try_from_hash(
-                        broker_keypair.private_key(),
-                        receipt_payload.signing_hash(),
-                    )
-                    .expect("sign ingress receipt"),
-                }],
-                payload: receipt_payload,
-            };
-            let archive = MusubiArchiveRecordV1 {
-                archive_id,
-                commitment: commitment.clone(),
-                staging_receipt: receipt,
-                registered_by: publisher.clone(),
-                registered_at_height: 1,
-                location_revision: 1,
-                location_ids: Vec::new(),
-            };
-            archive.validate().expect("valid archive record");
-            let availability = MusubiArchiveAvailabilityV1 {
-                archive_id,
-                availability: MusubiStorageAvailabilityV1::Unavailable,
-                healthy_replicas: 0,
-                active_locations: 0,
-                finalized_height: 1,
-                finalized_block_hash: [0x1E; 32],
-                index_revision: 1,
-            };
-            availability.validate().expect("valid archive availability");
-
-            let yank = MusubiReleaseYankV1 {
-                release: release.clone(),
-                yanked: false,
-                reason: "initial publication".parse().expect("bounded reason"),
-                changed_by: publisher.clone(),
-                changed_at_height: 2,
-                revision: 1,
-            };
-            let release_record = MusubiReleaseRecordV1 {
-                release_digest: manifest.release_digest(),
-                manifest: manifest.clone(),
-                published_by: publisher,
-                published_at_height: 2,
-                yank: yank.clone(),
-                artifact_governance: MusubiArtifactGovernanceStateV1::Available,
-                revisions: MusubiReleaseRevisionsV1 {
-                    yank: 1,
-                    artifact_governance: 1,
-                },
-            };
-            release_record.validate().expect("valid release record");
-            let resolver_row = MusubiResolverReleaseRowV1 {
-                release: release.clone(),
-                release_digest: release_record.release_digest,
-                archive_id,
-                source_digest: commitment.source_tree_digest,
-                interface_digest: manifest.interface_digest,
-                abi: manifest.abi,
-                dependencies: Vec::new(),
-                selection: MusubiReleaseSelectionStateV1 {
-                    yank,
-                    storage: availability,
-                    governance: MusubiArtifactGovernanceStateV1::Available,
-                },
-                index_revision: 2,
-            };
-            resolver_row.validate().expect("valid resolver row");
-            let selector = MusubiPackageSelectorV1 {
-                namespace,
-                name: package.name.clone(),
-            };
-            let directory = MusubiOrderedPackageEntryV1 {
-                selector: selector.clone(),
-                package: package.clone(),
-                latest_selectable: None,
-                metadata_revision: 1,
-                index_revision: 2,
-            };
-            directory.validate().expect("valid public directory entry");
-
-            world
-                .musubi_namespace_bindings
-                .insert(binding.namespace.clone(), binding);
-            world
-                .musubi_package_members
-                .insert(member.key(), member.clone());
-            world.musubi_maintainer_directory.insert(
-                MusubiMaintainerDirectoryKeyV1::accepted(package.clone(), member.account.clone()),
-                MusubiMaintainerDirectoryEntryV1::Accepted(member),
-            );
-            world
-                .musubi_package_metadata
-                .insert(package.clone(), metadata);
-            world.musubi_packages.insert(package, package_record);
-            world.musubi_archives.insert(archive_id, archive);
-            world
-                .musubi_archive_availability
-                .insert(archive_id, availability);
-            world.musubi_archive_reverse_references.insert(
-                archive_id,
-                MusubiArchiveReverseReferencesV1 {
-                    archive_id,
-                    releases: vec![release.clone()],
-                },
-            );
-            world
-                .musubi_releases
-                .insert(release.clone(), release_record);
-            world
-                .musubi_resolver_index
-                .insert(release.clone(), resolver_row);
-            world
-                .musubi_public_directory
-                .insert(selector.clone(), directory);
-            world.musubi_resolver_index_revision =
-                Cell::new(MusubiResolverIndexRevisionV1::new(2).expect("resolver revision"));
-            world.musubi_replication_shortfall_releases = Cell::new(1);
-
-            (world, release, archive_id, selector)
-        }
-
-        #[allow(clippy::too_many_lines)]
-        fn seed_provider_attested_location(
-            world: &mut World,
-            release: &MusubiReleaseIdV1,
-            archive_id: ArchiveId,
-        ) -> MusubiProviderBundleAttestationKeyV1 {
-            let archive = world
-                .musubi_archives
-                .view()
-                .get(&archive_id)
-                .cloned()
-                .expect("seeded archive");
-            let verification_lock_digest = world
-                .musubi_releases
-                .view()
-                .get(release)
-                .map(|record| record.manifest.verification_lock_digest)
-                .expect("seeded release");
-            let provider_keypair = KeyPair::try_from_seed(vec![70; 32], Algorithm::Ed25519)
-                .expect("derive deterministic provider key");
-            let provider_owner = AccountId::new(provider_keypair.public_key().clone());
-            let provider_id = ProviderId::new([0x31; 32]);
-            let replication_order = ReplicationOrderId::new([0x32; 32]);
-            let location_id = MusubiArchiveLocationIdV1::new([0x33; 32]);
-            let completion_authority = ProviderIngestCompletionAuthorityV1::new(
-                provider_owner.clone(),
-                ProviderIngestCompletionSignerPolicyV1 {
-                    policy_id: [0x34; 32],
-                    revision: 1,
-                    predecessor_digest: None,
-                    policy_digest: [0x35; 32],
-                },
-            );
-            let binding = MusubiProviderBundleVerificationBindingV1 {
-                chain_id: archive.staging_receipt.payload.binding.chain_id.clone(),
-                genesis_block_hash: archive.staging_receipt.payload.binding.genesis_block_hash,
-                provider_id,
-                completed_by: provider_owner,
-                completion_authority,
-                replication_order,
-                assignment_revision: 1,
-                completion_epoch: 1,
-                finalized_anchor: ProviderIngestFinalizedAnchorV1 {
-                    height: 2,
-                    block_hash: [0x36; 32],
-                },
-                archive_id,
-                bundle_digest: archive.commitment.bundle_digest,
-                descriptor_digest: archive.commitment.descriptor_digest,
-                semantic_release_manifest_digest: archive
-                    .staging_receipt
-                    .payload
-                    .binding
-                    .semantic_release_manifest_digest,
-                verification_lock_digest,
-                source_tree_digest: archive.commitment.source_tree_digest,
-            };
-            let payload = MusubiProviderBundleVerificationPayloadV1 {
-                version: MUSUBI_REGISTRY_VERSION_V1,
-                binding: binding.clone(),
-            };
-            let attestation = MusubiProviderBundleVerificationAttestationV1 {
-                approvals: vec![MusubiProviderBundleVerificationApprovalV1 {
-                    public_key: provider_keypair.public_key().clone(),
-                    signature: SignatureOf::try_from_hash(
-                        provider_keypair.private_key(),
-                        payload.signing_hash(),
-                    )
-                    .expect("sign provider bundle attestation"),
-                }],
-                payload,
-            };
-            attestation
-                .verify(&binding)
-                .expect("provider bundle attestation fixture verifies");
-            let attestation_key = attestation.key();
-            let attestation_reference = attestation.reference();
-            let attestation_record = MusubiProviderBundleAttestationRecordV1 {
-                key: attestation_key,
-                attestation_digest: attestation.digest(),
-                attestation,
-                registered_by: archive.registered_by.clone(),
-                registered_at_height: 2,
-            };
-            attestation_record
-                .validate()
-                .expect("valid provider attestation record");
-            let provider_attestation_set_digest = musubi_provider_bundle_attestation_set_digest_v1(
-                archive_id,
-                replication_order,
-                &[attestation_reference],
-            )
-            .expect("valid provider attestation set");
-            let location = MusubiArchiveLocationV1 {
-                location_id,
-                archive_id,
-                pin_manifest: ManifestDigest::new([0x37; 32]),
-                replication_order,
-                providers: vec![provider_id],
-                provider_attestation_set_digest,
-                renew_after_epoch: 1,
-                expires_at_epoch: 2,
-                finalized_height: 2,
-                revision: 2,
-                state: MusubiArchiveLocationStateV1::Degraded,
-            };
-            location.validate().expect("valid archive location fixture");
-
-            let mut updated_archive = archive;
-            updated_archive.location_revision = 2;
-            updated_archive.location_ids = vec![location_id];
-            updated_archive
-                .validate()
-                .expect("archive contains the exact current location directory");
-            world.musubi_archives.insert(archive_id, updated_archive);
-            world
-                .musubi_provider_bundle_attestations
-                .insert(attestation_key, attestation_record);
-            world
-                .musubi_archive_locations
-                .insert(location.key(), location);
-
-            attestation_key
-        }
-
-        #[test]
-        fn musubi_publication_snapshot_validates_replication_shortfall_aggregate() {
-            let (baseline, _, _, _) = seeded_musubi_publication_snapshot();
-            validate_musubi_publication_snapshot(&baseline)
-                .expect("one release on an unavailable archive has shortfall count one");
-
-            let (mut mismatched, _, _, _) = seeded_musubi_publication_snapshot();
-            mismatched.musubi_replication_shortfall_releases = Cell::new(0);
-            let error = validate_musubi_publication_snapshot(&mismatched)
-                .expect_err("a stale persisted shortfall aggregate must fail closed");
-            assert!(
-                error
-                    .to_string()
-                    .contains("musubi_replication_shortfall_releases"),
-                "unexpected shortfall mismatch diagnostic: {error}"
-            );
-        }
-
-        #[test]
-        fn musubi_persisted_state_rejects_missing_provider_attestation_record() {
-            let (mut world, release, archive_id, _) = seeded_musubi_publication_snapshot();
-            let attestation_key = seed_provider_attested_location(&mut world, &release, archive_id);
-            validate_musubi_persisted_snapshot(&world)
-                .expect("an archive location with its exact attestation record is valid");
-
-            {
-                let mut mutation = world.musubi_provider_bundle_attestations.block();
-                mutation.remove(attestation_key);
-                mutation.commit();
-            }
-            let error = validate_musubi_persisted_snapshot(&world)
-                .expect_err("a location must not outlive its exact provider attestation record");
-            assert!(
-                error
-                    .to_string()
-                    .contains("missing exact provider attestation"),
-                "unexpected missing-attestation diagnostic: {error}"
-            );
-        }
-
-        #[test]
-        fn musubi_persisted_state_rejects_corrupt_provider_attestation_record() {
-            let (mut world, release, archive_id, _) = seeded_musubi_publication_snapshot();
-            let attestation_key = seed_provider_attested_location(&mut world, &release, archive_id);
-            let mut corrupt_record = world
-                .musubi_provider_bundle_attestations
-                .view()
-                .get(&attestation_key)
-                .cloned()
-                .expect("seeded provider attestation record");
-            corrupt_record.attestation_digest =
-                MusubiProviderBundleAttestationDigestV1::new([0xFF; 32]);
-            world
-                .musubi_provider_bundle_attestations
-                .insert(attestation_key, corrupt_record);
-
-            let error = validate_musubi_persisted_snapshot(&world)
-                .expect_err("a corrupt provider attestation record must fail closed");
-            assert!(
-                error
-                    .to_string()
-                    .contains("musubi_provider_bundle_attestations"),
-                "unexpected corrupt-attestation diagnostic: {error}"
-            );
-        }
-
-        #[test]
-        fn musubi_persisted_state_rejects_corrupt_provider_attestation_set_digest() {
-            let (mut world, release, archive_id, _) = seeded_musubi_publication_snapshot();
-            seed_provider_attested_location(&mut world, &release, archive_id);
-            let (location_key, mut location) = world
-                .musubi_archive_locations
-                .view()
-                .iter()
-                .next()
-                .map(|(key, location)| (*key, location.clone()))
-                .expect("seeded archive location");
-            location.provider_attestation_set_digest =
-                MusubiProviderBundleAttestationSetDigestV1::new([0xFE; 32]);
-            world
-                .musubi_archive_locations
-                .insert(location_key, location);
-
-            let error = validate_musubi_persisted_snapshot(&world)
-                .expect_err("a corrupt provider-attestation aggregate must fail closed");
-            assert!(
-                error
-                    .to_string()
-                    .contains("provider-attestation set digest is not exact"),
-                "unexpected corrupt-attestation-set diagnostic: {error}"
-            );
-        }
-
-        #[test]
-        #[allow(clippy::too_many_lines)]
-        fn musubi_publication_snapshot_rejects_every_one_sided_projection_cut() {
-            let (baseline, _, _, _) = seeded_musubi_publication_snapshot();
-            validate_musubi_publication_snapshot(&baseline)
-                .expect("complete home and universal publication projections are valid");
-
-            let (mut universal_only, release, archive_id, _) = seeded_musubi_publication_snapshot();
-            {
-                let mut mutation = universal_only.musubi_releases.block();
-                mutation.remove(release.clone());
-                mutation.commit();
-            }
-            universal_only.musubi_archive_reverse_references.insert(
-                archive_id,
-                MusubiArchiveReverseReferencesV1 {
-                    archive_id,
-                    releases: Vec::new(),
-                },
-            );
-            universal_only.musubi_replication_shortfall_releases = Cell::new(0);
-            let error = validate_musubi_publication_snapshot(&universal_only)
-                .expect_err("a universal resolver row cannot survive without its home release");
-            assert!(
-                error
-                    .to_string()
-                    .contains("resolver row references a missing release"),
-                "unexpected universal-only diagnostic: {error}"
-            );
-
-            let (mut home_only, release, archive_id, selector) =
-                seeded_musubi_publication_snapshot();
-            home_only.musubi_archive_reverse_references.insert(
-                archive_id,
-                MusubiArchiveReverseReferencesV1 {
-                    archive_id,
-                    releases: Vec::new(),
-                },
-            );
-            {
-                let mut mutation = home_only.musubi_resolver_index.block();
-                mutation.remove(release.clone());
-                mutation.commit();
-            }
-            {
-                let mut mutation = home_only.musubi_public_directory.block();
-                mutation.remove(selector.clone());
-                mutation.commit();
-            }
-            let error = validate_musubi_publication_snapshot(&home_only)
-                .expect_err("a home release cannot survive without universal projections");
-            assert!(
-                error
-                    .to_string()
-                    .contains("archive reverse references are not the exact release set"),
-                "unexpected home-only diagnostic: {error}"
-            );
-
-            let (missing_resolver, release, _, selector) = seeded_musubi_publication_snapshot();
-            {
-                let mut mutation = missing_resolver.musubi_resolver_index.block();
-                mutation.remove(release);
-                mutation.commit();
-            }
-            {
-                let mut mutation = missing_resolver.musubi_public_directory.block();
-                mutation.remove(selector);
-                mutation.commit();
-            }
-            let error = validate_musubi_publication_snapshot(&missing_resolver)
-                .expect_err("a reverse reference cannot survive without its resolver row");
-            assert!(
-                error
-                    .to_string()
-                    .contains("release is missing its exact resolver row"),
-                "unexpected missing-resolver diagnostic: {error}"
-            );
-
-            let (missing_directory, _, _, selector) = seeded_musubi_publication_snapshot();
-            {
-                let mut mutation = missing_directory.musubi_public_directory.block();
-                mutation.remove(selector);
-                mutation.commit();
-            }
-            let error = validate_musubi_publication_snapshot(&missing_directory)
-                .expect_err("a resolver row cannot survive without its directory projection");
-            assert!(
-                error
-                    .to_string()
-                    .contains("package is missing its canonical public-directory entry"),
-                "unexpected missing-directory diagnostic: {error}"
-            );
-
-            let (mut replayed, release, archive_id, selector) =
-                seeded_musubi_publication_snapshot();
-            let replayed_release = replayed
-                .musubi_releases
-                .view()
-                .get(&release)
-                .cloned()
-                .expect("seeded release");
-            let replayed_references = replayed
-                .musubi_archive_reverse_references
-                .view()
-                .get(&archive_id)
-                .cloned()
-                .expect("seeded reverse references");
-            let replayed_resolver = replayed
-                .musubi_resolver_index
-                .view()
-                .get(&release)
-                .cloned()
-                .expect("seeded resolver row");
-            let replayed_directory = replayed
-                .musubi_public_directory
-                .view()
-                .get(&selector)
-                .cloned()
-                .expect("seeded public directory");
-            assert_eq!(
-                replayed
-                    .musubi_releases
-                    .insert(release.clone(), replayed_release.clone()),
-                Some(replayed_release)
-            );
-            assert_eq!(
-                replayed
-                    .musubi_archive_reverse_references
-                    .insert(archive_id, replayed_references.clone()),
-                Some(replayed_references)
-            );
-            assert_eq!(
-                replayed
-                    .musubi_resolver_index
-                    .insert(release, replayed_resolver.clone()),
-                Some(replayed_resolver)
-            );
-            assert_eq!(
-                replayed
-                    .musubi_public_directory
-                    .insert(selector, replayed_directory.clone()),
-                Some(replayed_directory)
-            );
-            validate_musubi_publication_snapshot(&replayed)
-                .expect("an exact projection replay preserves the complete snapshot");
-        }
-
-        #[test]
-        fn take_parameters_cell_accepts_canonical_mv_envelope() {
-            let expected = Parameters::default();
-            let blocks = norito::json::to_value(&expected).expect("serialize parameters");
-            let mut canonical_map = json::native::Map::new();
-            canonical_map.insert("revert".to_owned(), json::Value::Null);
-            canonical_map.insert("blocks".to_owned(), blocks);
-            let canonical = json::Value::Object(canonical_map);
-
-            let mut map = json::native::Map::new();
-            map.insert("parameters".to_owned(), canonical);
-
-            let parsed = take_parameters_cell(&mut map, "parameters")
-                .expect("canonical parameters MV envelope must be accepted");
-            assert_eq!(parsed.view().get(), &expected);
-        }
-
-        #[test]
-        fn take_parameters_cell_rejects_legacy_blocks_envelope() {
-            let expected = Parameters::default();
-            let blocks = norito::json::to_value(&expected).expect("serialize parameters");
-            let mut legacy_map = json::native::Map::new();
-            legacy_map.insert("blocks".to_owned(), blocks);
-
-            let mut map = json::native::Map::new();
-            map.insert("parameters".to_owned(), json::Value::Object(legacy_map));
-
-            let error = take_parameters_cell(&mut map, "parameters")
-                .err()
-                .expect("legacy blocks-only parameters envelope must be rejected");
-            assert!(
-                error.to_string().contains("parameters"),
-                "unexpected diagnostic: {error}"
-            );
-        }
-
-        #[test]
-        fn musubi_provider_attestation_snapshot_store_roundtrips_and_is_required() {
-            assert!(
-                World::default()
-                    .musubi_provider_bundle_attestations
-                    .view()
-                    .is_empty(),
-                "a new first-release world starts with an empty attestation registry"
-            );
-            let (mut world, release, archive_id, _) = seeded_musubi_publication_snapshot();
-            let attestation_key = seed_provider_attested_location(&mut world, &release, archive_id);
-            let expected = world
-                .musubi_provider_bundle_attestations
-                .view()
-                .get(&attestation_key)
-                .cloned()
-                .expect("seeded provider attestation record");
-
-            let mut map = json::native::Map::new();
-            map.insert(
-                "musubi_provider_bundle_attestations".to_owned(),
-                json::to_value(&world.musubi_provider_bundle_attestations)
-                    .expect("serialize provider attestation snapshot store"),
-            );
-            let parsed: Storage<
-                MusubiProviderBundleAttestationKeyV1,
-                MusubiProviderBundleAttestationRecordV1,
-            > = take_required(&mut map, "musubi_provider_bundle_attestations")
-                .expect("decode provider attestation snapshot store");
-            assert_eq!(parsed.view().get(&attestation_key), Some(&expected));
-            assert!(map.is_empty());
-
-            let error = take_required::<
-                Storage<
-                    MusubiProviderBundleAttestationKeyV1,
-                    MusubiProviderBundleAttestationRecordV1,
-                >,
-            >(
-                &mut json::native::Map::new(),
-                "musubi_provider_bundle_attestations",
-            )
-            .err()
-            .expect("missing provider attestation snapshot store must fail");
-            assert!(
-                error
-                    .to_string()
-                    .contains("musubi_provider_bundle_attestations"),
-                "unexpected missing-field error: {error}"
-            );
-        }
-
-        #[test]
-        fn musubi_maintainer_directory_snapshot_store_roundtrips_and_is_required() {
-            let package = MusubiPackageIdV1::new(
-                DataSpaceId::new(7),
-                iroha_data_model::musubi::MusubiPackageScopeV1::DataspaceRoot,
-                "snapshot-package".parse().expect("package name"),
-            );
-            let owner = musubi_account(41);
-            let invited = musubi_account(42);
-            let accepted = MusubiPackageMemberV1 {
-                package: package.clone(),
-                account: owner.clone(),
-                role: iroha_data_model::musubi::MusubiPackageRoleV1::Owner,
-                accepted_at_height: 5,
-                governance_revision: 1,
-            };
-            let invitation = MusubiMaintainerInvitationV1 {
-                invite_id: MusubiInviteIdV1::new([0x2A; 32]),
-                package,
-                invited_by: owner,
-                invited_account: invited,
-                role: iroha_data_model::musubi::MusubiPackageRoleV1::Maintainer(
-                    iroha_data_model::musubi::MusubiMaintainerPermissionsV1 {
-                        publish: true,
-                        yank: false,
-                        metadata: true,
-                        archive_locations: false,
-                    },
-                ),
-                expected_governance_revision: 1,
-                expires_at_height: 50,
-                state: iroha_data_model::musubi::MusubiInvitationStateV1::Pending,
-            };
-            let accepted_entry = MusubiMaintainerDirectoryEntryV1::Accepted(accepted);
-            let invitation_entry = MusubiMaintainerDirectoryEntryV1::PendingInvitation(invitation);
-            let mut expected = Storage::default();
-            expected.insert(accepted_entry.key(), accepted_entry.clone());
-            expected.insert(invitation_entry.key(), invitation_entry.clone());
-
-            let mut map = json::native::Map::new();
-            map.insert(
-                "musubi_maintainer_directory".to_owned(),
-                json::to_value(&expected).expect("serialize maintainer directory snapshot store"),
-            );
-            let parsed: Storage<MusubiMaintainerDirectoryKeyV1, MusubiMaintainerDirectoryEntryV1> =
-                take_required(&mut map, "musubi_maintainer_directory")
-                    .expect("decode maintainer directory snapshot store");
-            assert_eq!(
-                parsed.view().get(&accepted_entry.key()),
-                Some(&accepted_entry)
-            );
-            assert_eq!(
-                parsed.view().get(&invitation_entry.key()),
-                Some(&invitation_entry)
-            );
-            assert!(map.is_empty());
-
-            let error = take_required::<
-                Storage<MusubiMaintainerDirectoryKeyV1, MusubiMaintainerDirectoryEntryV1>,
-            >(&mut json::native::Map::new(), "musubi_maintainer_directory")
-            .err()
-            .expect("missing maintainer directory snapshot store must fail");
-            assert!(
-                error.to_string().contains("musubi_maintainer_directory"),
-                "unexpected missing-field error: {error}"
-            );
-        }
-
-        #[test]
-        fn take_musubi_namespace_bindings_rejects_missing_malformed_and_key_mismatch() {
-            let namespace: MusubiNamespaceV1 = "universal".parse().expect("namespace");
-            let binding = MusubiNamespaceBindingV1 {
-                namespace: namespace.clone(),
-                home_dataspace: DataSpaceId::UNIVERSAL,
-                scope: MusubiPackageScopeV1::DataspaceRoot,
-                generation: 1,
-            };
-            let mut bindings = Storage::default();
-            bindings.insert(namespace.clone(), binding.clone());
-            let mut map = json::native::Map::new();
-            map.insert(
-                "musubi_namespace_bindings".to_owned(),
-                json::to_value(&bindings).expect("serialize bindings"),
-            );
-            let parsed =
-                take_musubi_namespace_bindings(&mut map).expect("canonical namespace binding map");
-            assert_eq!(parsed.view().get(&namespace), Some(&binding));
-
-            let error = take_musubi_namespace_bindings(&mut json::native::Map::new())
-                .err()
-                .expect("missing namespace binding map must fail");
-            assert!(
-                error.to_string().contains("musubi_namespace_bindings"),
-                "unexpected missing-field error: {error}"
-            );
-
-            let mut malformed = Storage::default();
-            malformed.insert(
-                namespace.clone(),
-                MusubiNamespaceBindingV1 {
-                    generation: 0,
-                    ..binding.clone()
-                },
-            );
-            let mut map = json::native::Map::new();
-            map.insert(
-                "musubi_namespace_bindings".to_owned(),
-                json::to_value(&malformed).expect("serialize malformed binding"),
-            );
-            let error = take_musubi_namespace_bindings(&mut map)
-                .err()
-                .expect("malformed namespace binding must fail");
-            assert!(
-                error.to_string().contains("musubi_namespace_bindings"),
-                "unexpected malformed-binding error: {error}"
-            );
-
-            let mismatched_namespace: MusubiNamespaceV1 =
-                "other.universal".parse().expect("mismatched namespace");
-            let mut mismatched = Storage::default();
-            mismatched.insert(mismatched_namespace, binding);
-            let mut map = json::native::Map::new();
-            map.insert(
-                "musubi_namespace_bindings".to_owned(),
-                json::to_value(&mismatched).expect("serialize mismatched binding"),
-            );
-            let error = take_musubi_namespace_bindings(&mut map)
-                .err()
-                .expect("namespace key/value mismatch must fail");
-            assert!(
-                error
-                    .to_string()
-                    .contains("does not match embedded namespace"),
-                "unexpected key-mismatch error: {error}"
-            );
-        }
-
-        #[test]
-        fn take_musubi_domain_generations_requires_canonical_persisted_values() {
-            let domain = DomainId::try_new("packages", "universal").expect("domain id");
-
-            let error = take_musubi_domain_ownership_generations(&mut json::native::Map::new())
-                .err()
-                .expect("missing generation map must fail");
-            assert!(
-                error
-                    .to_string()
-                    .contains("musubi_domain_ownership_generations"),
-                "unexpected missing-field error: {error}"
-            );
-
-            let empty: Storage<DomainId, u64> = Storage::default();
-            let mut map = json::native::Map::new();
-            map.insert(
-                "musubi_domain_ownership_generations".to_owned(),
-                json::to_value(&empty).expect("serialize empty generation map"),
-            );
-            assert!(
-                take_musubi_domain_ownership_generations(&mut map)
-                    .expect("empty required map represents all generation-one domains")
-                    .view()
-                    .is_empty()
-            );
-
-            for generation in [0, 1] {
-                let mut generations = Storage::default();
-                generations.insert(domain.clone(), generation);
-                let mut map = json::native::Map::new();
-                map.insert(
-                    "musubi_domain_ownership_generations".to_owned(),
-                    json::to_value(&generations).expect("serialize invalid generation map"),
-                );
-                let error = take_musubi_domain_ownership_generations(&mut map)
-                    .err()
-                    .unwrap_or_else(|| panic!("persisted generation {generation} must fail"));
-                assert!(
-                    error.to_string().contains("noncanonical generation"),
-                    "unexpected generation {generation} error: {error}"
-                );
-            }
-
-            let mut generations = Storage::default();
-            generations.insert(domain.clone(), 4);
-            let mut map = json::native::Map::new();
-            map.insert(
-                "musubi_domain_ownership_generations".to_owned(),
-                json::to_value(&generations).expect("serialize canonical generation map"),
-            );
-            let parsed = take_musubi_domain_ownership_generations(&mut map)
-                .expect("persisted generation four is canonical");
-            assert_eq!(parsed.view().get(&domain), Some(&4));
-        }
-
-        #[test]
-        fn take_musubi_policy_revision_and_shortfall_fail_closed() {
-            let policy = MusubiRegistryPolicyV1::default();
-            let mut map = json::native::Map::new();
-            map.insert(
-                "musubi_registry_policy".to_owned(),
-                json::to_value(&Cell::new(policy.clone())).expect("serialize policy"),
-            );
-            assert_eq!(
-                take_musubi_registry_policy(&mut map)
-                    .expect("canonical policy")
-                    .view()
-                    .get(),
-                &policy
-            );
-
-            let mut invalid_policy = policy;
-            invalid_policy.revision = 0;
-            let mut map = json::native::Map::new();
-            map.insert(
-                "musubi_registry_policy".to_owned(),
-                json::to_value(&Cell::new(invalid_policy)).expect("serialize invalid policy"),
-            );
-            let error = take_musubi_registry_policy(&mut map)
-                .err()
-                .expect("invalid policy must fail");
-            assert!(
-                error.to_string().contains("musubi_registry_policy"),
-                "unexpected policy error: {error}"
-            );
-            assert!(
-                take_musubi_registry_policy(&mut json::native::Map::new()).is_err(),
-                "missing policy must fail"
-            );
-
-            let mut map = json::native::Map::new();
-            map.insert(
-                "musubi_resolver_index_revision".to_owned(),
-                json::to_value(&Cell::new(MusubiResolverIndexRevisionV1::default()))
-                    .expect("serialize resolver revision"),
-            );
-            assert_eq!(
-                take_musubi_resolver_index_revision(&mut map)
-                    .expect("canonical resolver revision")
-                    .view()
-                    .get()
-                    .get(),
-                1
-            );
-
-            let mut map = json::native::Map::new();
-            map.insert(
-                "musubi_resolver_index_revision".to_owned(),
-                json::to_value(&Cell::new(MusubiResolverIndexRevisionV1(0)))
-                    .expect("serialize zero resolver revision"),
-            );
-            let error = take_musubi_resolver_index_revision(&mut map)
-                .err()
-                .expect("zero resolver revision must fail");
-            assert!(
-                error.to_string().contains("musubi_resolver_index_revision"),
-                "unexpected resolver revision error: {error}"
-            );
-            assert!(
-                take_musubi_resolver_index_revision(&mut json::native::Map::new()).is_err(),
-                "missing resolver revision must fail"
-            );
-
-            let mut map = json::native::Map::new();
-            map.insert(
-                "musubi_replication_shortfall_releases".to_owned(),
-                json::to_value(&Cell::new(7_u64)).expect("serialize shortfall count"),
-            );
-            assert_eq!(
-                *take_musubi_replication_shortfall_releases(&mut map)
-                    .expect("canonical shortfall count")
-                    .view()
-                    .get(),
-                7
-            );
-            let error = take_musubi_replication_shortfall_releases(&mut json::native::Map::new())
-                .err()
-                .expect("missing shortfall count must fail cleanly");
-            assert!(
-                error
-                    .to_string()
-                    .contains("musubi_replication_shortfall_releases"),
-                "unexpected missing-shortfall error: {error}"
-            );
-        }
-
-        #[test]
-        fn musubi_resolver_checkpoint_keys_use_canonical_nonzero_decimal() {
-            use mv::json::JsonKeyCodec;
-
-            let revision = MusubiResolverIndexRevisionV1::new(42).expect("revision forty-two");
-            let mut encoded = String::new();
-            revision.encode_json_key(&mut encoded);
-            assert_eq!(encoded, "\"42\"");
-            assert_eq!(
-                MusubiResolverIndexRevisionV1::decode_json_key("42")
-                    .expect("canonical revision key"),
-                revision
-            );
-            for invalid in ["0", "00", "01", "+1", " 1", "1 "] {
-                assert!(
-                    MusubiResolverIndexRevisionV1::decode_json_key(invalid).is_err(),
-                    "noncanonical revision key must fail: {invalid:?}"
-                );
-            }
-        }
-
-        #[test]
-        fn musubi_resolver_checkpoints_are_required_and_canonically_anchored() {
-            let revision = MusubiResolverIndexRevisionV1::new(1).expect("revision one");
-            let checkpoint = MusubiRegistrySnapshotV1 {
-                finalized_height: 1,
-                finalized_block_hash: [0xA1; 32],
-                index_revision: 1,
-            };
-            let mut checkpoints = Storage::default();
-            checkpoints.insert(revision, checkpoint.clone());
-
-            let mut map = json::native::Map::new();
-            map.insert(
-                "musubi_resolver_index_checkpoints".to_owned(),
-                json::to_value(&checkpoints).expect("serialize resolver checkpoints"),
-            );
-            let decoded = take_musubi_resolver_index_checkpoints(&mut map)
-                .expect("checkpoint store is required and decodable");
-            validate_musubi_resolver_checkpoint_structure(&decoded, 1)
-                .expect("canonical sparse checkpoint structure");
-            assert!(
-                take_musubi_resolver_index_checkpoints(&mut json::native::Map::new()).is_err(),
-                "the clean schema must reject snapshots without checkpoint history"
-            );
-
-            let mut mismatched = Storage::default();
-            mismatched.insert(
-                MusubiResolverIndexRevisionV1::new(2).expect("revision two"),
-                checkpoint,
-            );
-            assert!(
-                validate_musubi_resolver_checkpoint_structure(&mismatched, 2).is_err(),
-                "checkpoint keys must match embedded revisions"
-            );
-
-            let mut world = World::default();
-            world.musubi_resolver_index_checkpoints = decoded;
-            let canonical_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                [0xA1; Hash::LENGTH],
-            ));
-            validate_musubi_resolver_checkpoint_anchors(
-                &world,
-                std::slice::from_ref(&canonical_hash),
-            )
-            .expect("checkpoint binds its canonical finalized block");
-
-            let fabricated_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                [0xB2; Hash::LENGTH],
-            ));
-            assert!(
-                validate_musubi_resolver_checkpoint_anchors(
-                    &world,
-                    std::slice::from_ref(&fabricated_hash)
-                )
-                .is_err(),
-                "a fabricated checkpoint tuple must fail restoration"
-            );
-        }
-
-        #[test]
-        fn musubi_governance_requires_exact_fingerprint_and_execution_boundary() {
-            let genesis = MusubiRegistryPolicyV1::default();
-            let successor =
-                musubi_policy_successor(&genesis, MusubiRegistryAdmissionModeV1::Closed);
-            let action =
-                MusubiParliamentActionV1::SetRegistryPolicy(MusubiSetRegistryPolicyActionV1 {
-                    policy: successor.clone(),
-                    expected_revision: genesis.revision,
-                });
-            let decision_id = ProposalKind::MusubiRegistryGovernance(action.clone()).fingerprint();
-
-            let mut world = World::default();
-            world.musubi_registry_policy = Cell::new(successor.clone());
-            retain_musubi_consumption(&mut world, action.clone(), 10, 20, 20);
-            validate_musubi_governance_provenance(&world)
-                .expect("execution exactly at the boundary must pass");
-
-            let mut consumption = world
-                .musubi_governance_decisions
-                .view()
-                .get(&decision_id)
-                .copied()
-                .expect("retained consumption");
-            consumption.consumed_at_height = 19;
-            world
-                .musubi_governance_decisions
-                .insert(decision_id, consumption);
-            let error = validate_musubi_governance_provenance(&world)
-                .expect_err("pre-boundary consumption must fail");
-            assert!(error.to_string().contains("consumed before"), "{error}");
-
-            let wrong_id = if decision_id == [0xA5; 32] {
-                [0x5A; 32]
-            } else {
-                [0xA5; 32]
-            };
-            let mut mismatched = World::default();
-            mismatched.musubi_registry_policy = Cell::new(successor);
-            retain_musubi_consumption_as(&mut mismatched, wrong_id, action, 10, 20, 20);
-            let error = validate_musubi_governance_provenance(&mismatched)
-                .expect_err("proposal fingerprint mismatch must fail");
-            assert!(error.to_string().contains("fingerprint"), "{error}");
-        }
-
-        #[test]
-        fn musubi_owner_recovery_current_projection_is_exact() {
-            let mut world = World::default();
-            let package = musubi_package("current-recovery");
-            let owner = musubi_account(71);
-            let member = seed_current_musubi_package(&mut world, &package, &owner, 2, 20);
-            let action =
-                MusubiParliamentActionV1::RecoverPackageOwners(MusubiRecoverPackageOwnersV1 {
-                    package: package.clone(),
-                    owners: vec![owner.clone()],
-                    expected_revision: 1,
-                });
-            retain_musubi_consumption(&mut world, action, 10, 20, 20);
-            validate_musubi_governance_provenance(&world)
-                .expect("exact current recovery projection");
-
-            let canonical_package = world
-                .musubi_packages
-                .view()
-                .get(&package)
-                .cloned()
-                .expect("package");
-            let mut wrong_package = canonical_package.clone();
-            let unrelated = musubi_account(72);
-            wrong_package.owners = vec![unrelated.clone()];
-            wrong_package.member_accounts = vec![unrelated];
-            wrong_package
-                .validate()
-                .expect("structurally valid package");
-            world.musubi_packages.insert(package.clone(), wrong_package);
-            assert!(
-                validate_musubi_governance_provenance(&world)
-                    .expect_err("wrong owner set")
-                    .to_string()
-                    .contains("owner-recovery projection")
-            );
-            world
-                .musubi_packages
-                .insert(package.clone(), canonical_package);
-
-            let key = member.key();
-            {
-                let mut members = world.musubi_package_members.block();
-                members.remove(key.clone());
-                members.commit();
-            }
-            assert!(
-                validate_musubi_governance_provenance(&world)
-                    .expect_err("missing recovered owner member")
-                    .to_string()
-                    .contains("exact member projection")
-            );
-            world
-                .musubi_package_members
-                .insert(key.clone(), member.clone());
-
-            let mut wrong_member = member.clone();
-            wrong_member.role = MusubiPackageRoleV1::Maintainer(MusubiMaintainerPermissionsV1 {
-                publish: true,
-                yank: false,
-                metadata: false,
-                archive_locations: false,
-            });
-            world
-                .musubi_package_members
-                .insert(key.clone(), wrong_member);
-            assert!(
-                validate_musubi_governance_provenance(&world)
-                    .expect_err("wrong recovered owner role")
-                    .to_string()
-                    .contains("owner-recovery projection")
-            );
-
-            let mut wrong_member = member.clone();
-            wrong_member.governance_revision = 1;
-            world
-                .musubi_package_members
-                .insert(key.clone(), wrong_member);
-            assert!(
-                validate_musubi_governance_provenance(&world)
-                    .expect_err("wrong recovered owner revision")
-                    .to_string()
-                    .contains("owner-recovery projection")
-            );
-
-            let mut wrong_member = member;
-            wrong_member.accepted_at_height = 21;
-            world.musubi_package_members.insert(key, wrong_member);
-            assert!(
-                validate_musubi_governance_provenance(&world)
-                    .expect_err("wrong recovered owner acceptance height")
-                    .to_string()
-                    .contains("consumption height")
-            );
-        }
-
-        #[test]
-        fn musubi_owner_recovery_rejects_duplicate_result_revision_but_accepts_later_state() {
-            let mut world = World::default();
-            let package = musubi_package("recovery-history");
-            let current_owner = musubi_account(80);
-            seed_current_musubi_package(&mut world, &package, &current_owner, 3, 30);
-
-            let first =
-                MusubiParliamentActionV1::RecoverPackageOwners(MusubiRecoverPackageOwnersV1 {
-                    package: package.clone(),
-                    owners: vec![musubi_account(81)],
-                    expected_revision: 1,
-                });
-            retain_musubi_consumption(&mut world, first, 10, 20, 20);
-            validate_musubi_governance_provenance(&world)
-                .expect("later current revision need not reproduce historical owners");
-
-            let duplicate =
-                MusubiParliamentActionV1::RecoverPackageOwners(MusubiRecoverPackageOwnersV1 {
-                    package,
-                    owners: vec![musubi_account(82)],
-                    expected_revision: 1,
-                });
-            retain_musubi_consumption(&mut world, duplicate, 11, 21, 21);
-            let error = validate_musubi_governance_provenance(&world)
-                .expect_err("two recoveries cannot claim the same result revision");
-            assert!(error.to_string().contains("result revision"), "{error}");
-        }
-
-        #[test]
-        fn musubi_policy_consumption_heights_are_nondecreasing() {
-            let genesis = MusubiRegistryPolicyV1::default();
-            let second = musubi_policy_successor(&genesis, MusubiRegistryAdmissionModeV1::Closed);
-            let third = musubi_policy_successor(&second, MusubiRegistryAdmissionModeV1::Open);
-            let first_action =
-                MusubiParliamentActionV1::SetRegistryPolicy(MusubiSetRegistryPolicyActionV1 {
-                    policy: second.clone(),
-                    expected_revision: genesis.revision,
-                });
-            let first_id =
-                ProposalKind::MusubiRegistryGovernance(first_action.clone()).fingerprint();
-            let second_action =
-                MusubiParliamentActionV1::SetRegistryPolicy(MusubiSetRegistryPolicyActionV1 {
-                    policy: third.clone(),
-                    expected_revision: second.revision,
-                });
-
-            let mut world = World::default();
-            world.musubi_registry_policy = Cell::new(third);
-            retain_musubi_consumption(&mut world, first_action, 10, 20, 21);
-            retain_musubi_consumption(&mut world, second_action, 11, 21, 21);
-            validate_musubi_governance_provenance(&world)
-                .expect("equal same-block consumption heights are nondecreasing");
-
-            let mut first = world
-                .musubi_governance_decisions
-                .view()
-                .get(&first_id)
-                .copied()
-                .expect("first policy consumption");
-            first.consumed_at_height = 22;
-            first.validate().expect("still individually valid");
-            world.musubi_governance_decisions.insert(first_id, first);
-            let error = validate_musubi_governance_provenance(&world)
-                .expect_err("policy revision history cannot move backward in height");
-            assert!(error.to_string().contains("consumption heights"), "{error}");
-        }
-
-        #[test]
-        fn musubi_owner_recovery_consumption_heights_are_nondecreasing() {
-            let mut world = World::default();
-            let package = musubi_package("recovery-height-history");
-            let current_owner = musubi_account(90);
-            seed_current_musubi_package(&mut world, &package, &current_owner, 3, 21);
-
-            let first =
-                MusubiParliamentActionV1::RecoverPackageOwners(MusubiRecoverPackageOwnersV1 {
-                    package: package.clone(),
-                    owners: vec![musubi_account(91)],
-                    expected_revision: 1,
-                });
-            retain_musubi_consumption(&mut world, first, 10, 20, 22);
-            let second =
-                MusubiParliamentActionV1::RecoverPackageOwners(MusubiRecoverPackageOwnersV1 {
-                    package,
-                    owners: vec![current_owner],
-                    expected_revision: 2,
-                });
-            retain_musubi_consumption(&mut world, second, 11, 21, 21);
-
-            let error = validate_musubi_governance_provenance(&world)
-                .expect_err("owner-recovery history cannot move backward in execution height");
-            assert!(error.to_string().contains("consumption heights"), "{error}");
-        }
-
-        #[test]
-        fn alias_retarget_history_binds_exact_decision_consumption_height() {
-            const CONSUMED_AT: u64 = 30;
-            let mut world = World::default();
-            let alias: MusubiAliasNameV1 = "stable".parse().expect("alias");
-            let previous_target = musubi_package("previous");
-            let target = musubi_package("replacement");
-            let action = MusubiParliamentActionV1::RetargetAlias(MusubiRetargetAliasV1 {
-                alias: alias.clone(),
-                target: target.clone(),
-                expected_revision: 1,
-            });
-            let action_digest = retain_musubi_consumption(&mut world, action, 10, 20, CONSUMED_AT);
-            let mut history = MusubiAliasHistoryEntryV1 {
-                alias,
-                revision: 2,
-                action: MusubiAliasHistoryActionV1::ParliamentRetarget,
-                previous_target: Some(previous_target),
-                target,
-                governance_action: Some(action_digest),
-                finalized_height: CONSUMED_AT,
-            };
-            history.validate().expect("valid alias history fixture");
-            let key = history.key();
-            world
-                .musubi_alias_history
-                .insert(key.clone(), history.clone());
-            validate_musubi_governance_provenance(&world)
-                .expect("exact consumption-height binding must pass");
-
-            history.finalized_height = CONSUMED_AT + 1;
-            history
-                .validate()
-                .expect("height mismatch remains structurally valid");
-            world.musubi_alias_history.insert(key, history);
-            let error = validate_musubi_governance_provenance(&world)
-                .expect_err("a different finalized height must fail closed");
-            assert!(
-                error.to_string().contains("decision consumption height"),
-                "unexpected alias-height diagnostic: {error}"
-            );
-        }
-
-        #[test]
-        fn artifact_takedown_binds_exact_decision_consumption_height() {
-            const CONSUMED_AT: u64 = 30;
-            let mut world = World::default();
-            let release = MusubiReleaseIdV1::new(
-                musubi_package("withdrawn"),
-                "1.2.3".parse().expect("release version"),
-            );
-            let reason: MusubiReasonV1 = "security response".parse().expect("bounded reason");
-            let action =
-                MusubiParliamentActionV1::TakedownArtifact(MusubiTakedownArtifactActionV1 {
-                    release: release.clone(),
-                    reason: reason.clone(),
-                    expected_artifact_governance_revision: 1,
-                });
-            let action_digest = retain_musubi_consumption(&mut world, action, 10, 20, CONSUMED_AT);
-            let record = musubi_release_record(
-                release.clone(),
-                MusubiArtifactGovernanceStateV1::TakenDown(MusubiArtifactTakedownV1 {
-                    action_digest,
-                    reason,
-                    applied_at_height: CONSUMED_AT,
-                }),
-                2,
-            );
-            world
-                .musubi_releases
-                .insert(release.clone(), record.clone());
-            validate_musubi_governance_provenance(&world)
-                .expect("exact consumption-height binding must pass");
-
-            let mut mismatched = record;
-            let MusubiArtifactGovernanceStateV1::TakenDown(takedown) =
-                &mut mismatched.artifact_governance
-            else {
-                unreachable!("takedown fixture")
-            };
-            takedown.applied_at_height = CONSUMED_AT + 1;
-            mismatched
-                .validate()
-                .expect("height mismatch remains structurally valid");
-            world.musubi_releases.insert(release, mismatched);
-            let error = validate_musubi_governance_provenance(&world)
-                .expect_err("a different takedown height must fail closed");
-            assert!(
-                error.to_string().contains("decision consumption height"),
-                "unexpected takedown-height diagnostic: {error}"
-            );
-        }
-
-        #[test]
-        fn musubi_governance_provenance_reconstructs_policy_and_requires_proposals() {
-            let mut world = World::default();
-            validate_musubi_governance_provenance(&world)
-                .expect("genesis Musubi policy has an empty decision history");
-
-            let mut unexplained_policy = MusubiRegistryPolicyV1::default();
-            unexplained_policy.revision += 1;
-            unexplained_policy.mode =
-                iroha_data_model::musubi::MusubiRegistryAdmissionModeV1::Closed;
-            world.musubi_registry_policy = Cell::new(unexplained_policy);
-            let error = validate_musubi_governance_provenance(&world)
-                .expect_err("policy state without retained decisions must fail closed");
-            assert!(
-                error.to_string().contains("exact result"),
-                "unexpected unexplained-policy diagnostic: {error}"
-            );
-
-            let mut world = World::default();
-            let mut successor = MusubiRegistryPolicyV1::default();
-            successor.revision += 1;
-            successor.mode = iroha_data_model::musubi::MusubiRegistryAdmissionModeV1::Closed;
-            let action = iroha_data_model::musubi::MusubiParliamentActionV1::SetRegistryPolicy(
-                iroha_data_model::musubi::MusubiSetRegistryPolicyActionV1 {
-                    policy: successor,
-                    expected_revision: 1,
-                },
-            );
-            let decision_id = [0x31; 32];
-            world.musubi_governance_decisions.insert(
-                decision_id,
-                MusubiGovernanceDecisionConsumptionV1 {
-                    decision: MusubiGovernanceDecisionV1 {
-                        decision_id,
-                        action_digest: action.action_digest(),
-                        enacted_at_height: 10,
-                        execute_after_height: 20,
-                    },
-                    minimum_enactment_delay: 10,
-                    consumed_at_height: 20,
-                },
-            );
-            let error = validate_musubi_governance_provenance(&world)
-                .expect_err("consumed decision without its proposal must fail closed");
-            assert!(
-                error
-                    .to_string()
-                    .contains("no retained governance proposal"),
-                "unexpected missing-proposal diagnostic: {error}"
-            );
-        }
-    }
+    include!("state/deserialize_core.rs");
+    include!("state/deserialize_world.rs");
 }
 
-fn default_oracle() -> iroha_config::parameters::actual::Oracle {
-    iroha_config::parameters::actual::Oracle {
-        history_depth: iroha_config::parameters::defaults::oracle::history_depth(),
-        economics: iroha_config::parameters::actual::OracleEconomics {
-            reward_asset: iroha_config::parameters::defaults::oracle::reward_asset(),
-            reward_pool: iroha_config::parameters::defaults::oracle::reward_pool(),
-            reward_amount: iroha_config::parameters::defaults::oracle::reward_amount(),
-            slash_asset: iroha_config::parameters::defaults::oracle::slash_asset(),
-            slash_receiver: iroha_config::parameters::defaults::oracle::slash_receiver(),
-            slash_outlier_amount: iroha_config::parameters::defaults::oracle::slash_outlier_amount(
-            ),
-            slash_error_amount: iroha_config::parameters::defaults::oracle::slash_error_amount(),
-            slash_no_show_amount: iroha_config::parameters::defaults::oracle::slash_no_show_amount(
-            ),
-            dispute_bond_asset: iroha_config::parameters::defaults::oracle::dispute_bond_asset(),
-            dispute_bond_amount: iroha_config::parameters::defaults::oracle::dispute_bond_amount(),
-            dispute_reward_amount:
-                iroha_config::parameters::defaults::oracle::dispute_reward_amount(),
-            frivolous_slash_amount:
-                iroha_config::parameters::defaults::oracle::frivolous_slash_amount(),
-        },
-        governance: iroha_config::parameters::actual::OracleGovernance {
-            intake_sla_blocks: iroha_config::parameters::defaults::oracle::intake_sla_blocks(),
-            rules_sla_blocks: iroha_config::parameters::defaults::oracle::rules_sla_blocks(),
-            cop_sla_blocks: iroha_config::parameters::defaults::oracle::cop_sla_blocks(),
-            technical_sla_blocks: iroha_config::parameters::defaults::oracle::technical_sla_blocks(
-            ),
-            policy_jury_sla_blocks:
-                iroha_config::parameters::defaults::oracle::policy_jury_sla_blocks(),
-            enact_sla_blocks: iroha_config::parameters::defaults::oracle::enact_sla_blocks(),
-            intake_min_votes: iroha_config::parameters::defaults::oracle::intake_min_votes(),
-            rules_min_votes: iroha_config::parameters::defaults::oracle::rules_min_votes(),
-            cop_min_votes: iroha_config::parameters::actual::OracleChangeThresholds {
-                low: iroha_config::parameters::defaults::oracle::cop_low_votes(),
-                medium: iroha_config::parameters::defaults::oracle::cop_medium_votes(),
-                high: iroha_config::parameters::defaults::oracle::cop_high_votes(),
-            },
-            technical_min_votes: iroha_config::parameters::defaults::oracle::technical_min_votes(),
-            policy_jury_min_votes: iroha_config::parameters::actual::OracleChangeThresholds {
-                low: iroha_config::parameters::defaults::oracle::policy_jury_low_votes(),
-                medium: iroha_config::parameters::defaults::oracle::policy_jury_medium_votes(),
-                high: iroha_config::parameters::defaults::oracle::policy_jury_high_votes(),
-            },
-        },
-        twitter_binding: iroha_config::parameters::actual::OracleTwitterBinding {
-            feed_id: iroha_config::parameters::defaults::oracle::twitter_binding_feed_id(),
-            pepper_id: iroha_config::parameters::defaults::oracle::twitter_binding_pepper_id(),
-            max_ttl_ms: iroha_config::parameters::defaults::oracle::twitter_binding_max_ttl_ms(),
-            min_ttl_ms: iroha_config::parameters::defaults::oracle::twitter_binding_min_ttl_ms(),
-            min_update_spacing_ms:
-                iroha_config::parameters::defaults::oracle::twitter_binding_min_update_spacing_ms(),
-        },
-    }
-}
+include!("state/default_oracle.rs");
 
 fn default_content_cfg() -> iroha_config::parameters::actual::Content {
     iroha_config::parameters::actual::Content {

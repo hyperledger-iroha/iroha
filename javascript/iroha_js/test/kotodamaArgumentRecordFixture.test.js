@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { ToriiClient } from "../src/toriiClient.js";
+import { blake2b256 } from "../src/blake2b.js";
 
 const fixture = JSON.parse(
   readFileSync(
@@ -19,6 +20,9 @@ test("contract call preserves the shared Rust argument-record fixture at the Tor
 
   let submittedBody;
   const boundary = fixture.torii_boundary;
+  const transactionPayload = Buffer.from([1]);
+  const signingMessage = Buffer.from(blake2b256(transactionPayload));
+  signingMessage[signingMessage.length - 1] |= 1;
   const fetchImpl = async (_url, init) => {
     submittedBody = JSON.parse(init.body);
     return new Response(
@@ -30,9 +34,8 @@ test("contract call preserves the shared Rust argument-record fixture at the Tor
         abi_hash_hex: "22".repeat(32),
         creation_time_ms: 1,
         entrypoint: boundary.entrypoint,
-        transaction_scaffold_b64: "AQ==",
-        signed_transaction_b64: "AQ==",
-        signing_message_b64: Buffer.alloc(32, 1).toString("base64"),
+        transaction_payload_b64: transactionPayload.toString("base64"),
+        signing_message_b64: signingMessage.toString("base64"),
         operation_receipt: {
           operation_kind: "contract_call",
           status: "pending_signature",

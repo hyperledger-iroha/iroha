@@ -864,10 +864,12 @@ mod tests {
                 .canonical_proposal_wire_hash()
                 .expect("canonical proposal wire"),
         };
-        let execution_commitment = ExecutionCommitment::without_topups(
+        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"penalties fixture parent state"),
             Hash::new(b"penalties fixture post state"),
             Hash::new(b"penalties fixture ordinary writes"),
+            u64::try_from(block.encode_wire().expect("penalties block wire").len())
+                .expect("penalties block wire length fits u64"),
             block
                 .executed_block_wire_hash()
                 .expect("canonical executed block wire"),

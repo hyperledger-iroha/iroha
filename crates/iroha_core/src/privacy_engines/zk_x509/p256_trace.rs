@@ -14,43 +14,50 @@
 //! for each arithmetic operation.  This avoids forward IDs and interleaved
 //! allocator state without introducing aliases or legacy layouts.
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use p256::{
     FieldBytes, FieldElement, ProjectivePoint, Scalar,
     elliptic_curve::{PrimeField as _, sec1::ToEncodedPoint as _},
 };
 use thiserror::Error;
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
     p256_air::{
         P256_BASE_MODULUS_BE_V1, P256_SCALAR_MODULUS_BE_V1, ZkX509P256AirErrorV1,
-        ZkX509P256ArithmeticKindV1, ZkX509P256ArithmeticOperationV1, ZkX509P256ArithmeticTraceV1,
-        ZkX509P256ModulusV1, build_zk_x509_p256_arithmetic_trace_v1,
+        ZkX509P256ArithmeticOperationV1, ZkX509P256ArithmeticTraceV1,
+        build_zk_x509_p256_arithmetic_trace_v1,
     },
-    p256_ecdsa_air::{
-        P256EcdsaAssignedV1, P256EcdsaCircuitV1, P256EcdsaInputSourceV1, P256EcdsaRoleV1,
-        P256EcdsaWitnessV1, constrain_p256_ecdsa_from_source_v1, constrain_p256_ecdsa_v1,
-    },
-    p256_group_air::{P256BaseFieldCircuitV1, P256ProjectiveValueV1, P256WindowCircuitV1},
+    p256_ecdsa_air::{P256EcdsaWitnessV1, constrain_p256_ecdsa_v1},
     p256_reduction_air::{
         P256LowSTraceV1, P256ReductionTraceV1, build_p256_low_s_trace_v1,
         build_p256_reduction_trace_v1,
     },
+    p256_value_bus::{P256InitialValueBindingV1, P256LinkedOperationV1},
+    p256_window_air::{P256WindowPointV1, P256WindowTraceV1, build_p256_window_trace_v1},
+};
+use super::{
+    p256_air::{ZkX509P256ArithmeticKindV1, ZkX509P256ModulusV1},
+    p256_ecdsa_air::{
+        P256EcdsaAssignedV1, P256EcdsaCircuitV1, P256EcdsaInputSourceV1, P256EcdsaRoleV1,
+        constrain_p256_ecdsa_from_source_v1,
+    },
+    p256_group_air::{P256BaseFieldCircuitV1, P256ProjectiveValueV1, P256WindowCircuitV1},
     p256_value_bus::{
-        P256BooleanBridgeBindingV1, P256EqualityBindingV1, P256InitialValueBindingV1,
-        P256InitialValueKindV1, P256InitialValueTopologyV1, P256LinkedOperationTopologyV1,
-        P256LinkedOperationV1, P256ValueIdV1,
+        P256BooleanBridgeBindingV1, P256EqualityBindingV1, P256InitialValueKindV1,
+        P256InitialValueTopologyV1, P256LinkedOperationTopologyV1, P256ValueIdV1,
     },
-    p256_window_air::{
-        P256WindowPointV1, P256WindowScalarV1, P256WindowTraceV1, build_p256_window_trace_v1,
-    },
+    p256_window_air::P256WindowScalarV1,
 };
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const ZERO_BE_V1: [u8; 32] = [0; 32];
 const ONE_BE_V1: [u8; 32] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
 ];
 
 /// Canonical value-bus binding for one selected point.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct P256BoundWindowTraceV1 {
     /// Verifier-positioned U1/U2 selector trace.
@@ -64,6 +71,7 @@ pub(crate) struct P256BoundWindowTraceV1 {
 }
 
 /// Origin of a word reduced modulo the scalar-field order.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256ReductionSourceV1 {
     /// Exact 32-byte SHA-256 digest; bound by the SHA/byte-I/O lanes.
@@ -81,6 +89,7 @@ pub(crate) enum P256ReductionSourceV1 {
 }
 
 /// One exact reduction and its value-bus endpoints.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct P256BoundReductionTraceV1 {
     /// Digest word or assigned base coordinate.
@@ -92,6 +101,7 @@ pub(crate) struct P256BoundReductionTraceV1 {
 }
 
 /// One wallet-only low-s comparison bound to a scalar ID.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct P256BoundLowSTraceV1 {
     /// Scalar constrained by the comparison.
@@ -179,6 +189,7 @@ pub(crate) struct P256EcdsaTopologyV1 {
 }
 
 /// Final one-signature witness material before aggregate column streaming.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct P256EcdsaTraceMaterialV1 {
     /// Signature role fixed by the surrounding relation.
@@ -201,6 +212,7 @@ pub(crate) struct P256EcdsaTraceMaterialV1 {
     pub(crate) assigned: P256ResolvedEcdsaAssignedV1,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256EcdsaTraceMaterialV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -211,6 +223,7 @@ impl core::fmt::Debug for P256EcdsaTraceMaterialV1 {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256EcdsaTraceMaterialV1 {
     /// Recursively overwrite every witness-derived scalar, coordinate, and
     /// committed field row while leaving only public topology metadata.
@@ -370,12 +383,15 @@ impl P256EcdsaTraceMaterialV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum P256TraceCompilerErrorV1 {
     /// A base/scalar input or constant is noncanonical.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 trace compiler received a noncanonical value")]
     NonCanonical,
     /// A requested inverse is undefined.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 trace compiler cannot invert zero")]
     ZeroInverse,
     /// An asserted relation is false.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 trace compiler equality is false")]
     Equality,
     /// Scalar bits were assigned to the wrong U1/U2 window position.
@@ -388,6 +404,7 @@ pub(crate) enum P256TraceCompilerErrorV1 {
     #[error("zk-X509 P-256 trace compiler binding topology is invalid")]
     BindingTopology,
     /// A reduction or low-s witness is invalid.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 trace compiler reduction is invalid")]
     Reduction,
     /// Value IDs or operation indices exceed the first-release envelope.
@@ -406,6 +423,7 @@ enum SymbolicOriginV1 {
     },
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SymbolicValueRecordV1 {
     modulus: ZkX509P256ModulusV1,
@@ -419,6 +437,7 @@ struct P256BaseValueV1(usize);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct P256ScalarValueV1(usize);
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct P256ScalarBitV1 {
     source: P256ScalarValueV1,
@@ -434,6 +453,7 @@ struct P256TopologyScalarBitV1 {
     global_be: u16,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RecordedOperationV1 {
     a: usize,
@@ -442,6 +462,7 @@ struct RecordedOperationV1 {
     operation: ZkX509P256ArithmeticOperationV1,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SymbolicWindowV1 {
     trace: P256WindowTraceV1,
@@ -450,12 +471,14 @@ struct SymbolicWindowV1 {
     scalar_source: usize,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SymbolicReductionSourceV1 {
     Digest { word_be: [u8; 32] },
     BaseCoordinate { handle: usize, word_be: [u8; 32] },
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SymbolicReductionV1 {
     source: SymbolicReductionSourceV1,
@@ -463,12 +486,14 @@ struct SymbolicReductionV1 {
     trace: P256ReductionTraceV1,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SymbolicLowSV1 {
     scalar: usize,
     trace: P256LowSTraceV1,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Default)]
 struct P256TraceCompilerV1 {
     values: Vec<SymbolicValueRecordV1>,
@@ -1000,6 +1025,7 @@ impl P256WindowCircuitV1 for P256TopologyCompilerV1 {
 impl P256EcdsaCircuitV1 for P256TopologyCompilerV1 {
     type Scalar = P256ScalarValueV1;
 
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn base_input_v1(&mut self, _value_be: [u8; 32]) -> Result<Self::Value, Self::Error> {
         self.push_initial_v1(
             ZkX509P256ModulusV1::BaseField,
@@ -1008,6 +1034,7 @@ impl P256EcdsaCircuitV1 for P256TopologyCompilerV1 {
         .map(P256BaseValueV1)
     }
 
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn scalar_input_v1(&mut self, _value_be: [u8; 32]) -> Result<Self::Scalar, Self::Error> {
         self.push_initial_v1(
             ZkX509P256ModulusV1::ScalarField,
@@ -1058,6 +1085,7 @@ impl P256EcdsaCircuitV1 for P256TopologyCompilerV1 {
         P256TopologyCompilerV1::assert_equal_v1(self, left.0, right.0)
     }
 
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn reduce_digest_v1(&mut self, _digest_be: [u8; 32]) -> Result<Self::Scalar, Self::Error> {
         let output = self.push_initial_v1(
             ZkX509P256ModulusV1::ScalarField,
@@ -1169,6 +1197,7 @@ impl P256EcdsaInputSourceV1<P256TopologyCompilerV1> for P256TopologyInputSourceV
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256TraceCompilerV1 {
     fn record(&self, handle: usize) -> Result<SymbolicValueRecordV1, P256TraceCompilerErrorV1> {
         self.values
@@ -1768,6 +1797,7 @@ impl P256TraceCompilerV1 {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256BaseFieldCircuitV1 for P256TraceCompilerV1 {
     type Value = P256BaseValueV1;
     type Error = P256TraceCompilerErrorV1;
@@ -1858,6 +1888,7 @@ impl P256BaseFieldCircuitV1 for P256TraceCompilerV1 {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256WindowCircuitV1 for P256TraceCompilerV1 {
     type Bit = P256ScalarBitV1;
 
@@ -1957,6 +1988,7 @@ impl P256WindowCircuitV1 for P256TraceCompilerV1 {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256EcdsaCircuitV1 for P256TraceCompilerV1 {
     type Scalar = P256ScalarValueV1;
 
@@ -2115,6 +2147,7 @@ pub(crate) fn compile_p256_ecdsa_topology_v1(
 }
 
 /// Compile one complete role-separated ECDSA witness into native AIR material.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn compile_p256_ecdsa_trace_material_v1(
     role: P256EcdsaRoleV1,
     witness: P256EcdsaWitnessV1,

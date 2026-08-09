@@ -19,7 +19,7 @@ use iroha_core::privacy_engines::{
     },
     jindo::JindoPrivacyActionWitnessV1,
     orchard::{OrchardChangeProverInputV1, OrchardSpendProverInputV1},
-    p256::SecretScalarV1,
+    p256::{DeviceSigningKeyV1, SecretScalarV1},
     pq_masp::{PqMaspInputWitnessV1, PqMaspNotePlaintextV1, PqMaspOutputWitnessV1},
     vega::{VegaPrivacyActionPublicInputV1, VegaPrivacyActionWitnessMaterialV1},
     verange::VeRangeBitLengthV1,
@@ -1175,7 +1175,7 @@ fn decode_vega_request_v1(
         "vega-device-signing-key",
         false,
     )?);
-    let device_signing_key = p256::ecdsa::SigningKey::from_bytes((&*device_key).into())
+    let device_signing_key = DeviceSigningKeyV1::from_bytes((&*device_key).into())
         .map_err(|_| PrivacyWalletBundleErrorV1::at("vega-device-signing-key"))?;
     device_key.zeroize();
     Ok(PrivacyNativeActionRequestV1::Vega(

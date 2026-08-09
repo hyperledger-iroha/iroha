@@ -1695,10 +1695,11 @@ mod tests {
     }
 
     fn descriptor_execution_commitment() -> ExecutionCommitment {
-        ExecutionCommitment::without_topups(
+        ExecutionCommitment::without_topups_or_merge_carrier(
             CryptoHash::new(b"descriptor-parent-state"),
             CryptoHash::new(b"descriptor-post-state"),
             CryptoHash::new(b"descriptor-writes"),
+            1,
             CryptoHash::new(b"descriptor-executed-wire"),
         )
     }

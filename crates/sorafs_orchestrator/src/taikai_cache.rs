@@ -1,11 +1,11 @@
 //! Taikai cache hierarchy primitives used by the SoraNet distribution plane.
 //!
-//! This module seeds roadmap item **SNNet-14 – Taikai cache hierarchy &
-//! QoS enforcement** with a deterministic three-tier cache, QoS token buckets,
-//! and shard placement helpers. The implementation focuses on predictable
-//! behaviour and unit coverage so follow-up work (CAA gossip, pull/push
-//! orchestration, exit hedging, observability) can build on top of a solid
-//! foundation.
+//! This module implements roadmap item **SNNet-14 – Taikai cache hierarchy &
+//! QoS enforcement**: a deterministic three-tier cache, QoS token buckets,
+//! shard placement, signed cache-admission gossip, bounded pull orchestration,
+//! exit hedging, and cache/queue telemetry. These transport-local structures
+//! influence retrieval policy only; they never replace committed ledger or
+//! governed manifest authority.
 
 use std::{
     collections::{HashMap, VecDeque},

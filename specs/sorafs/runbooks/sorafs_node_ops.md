@@ -82,10 +82,12 @@ proof digest, sample count, and (optionally) verdict outcome. Pass
 `--manifest-id=<hex>` when you want the CLI to double-check that the stored
 manifest matches the challenge digest, and `--json-out=<path>` to archive the
 resulting summary alongside the original artefacts for audit evidence. Keep the
-`--verdict` flag handy when rehearsing end-to-end repairs—missing verdicts still
-exercise challenge + proof ingestion, but providing one proves that the verdict
-logic, failure reasons, and telemetry counters line up before you call the HTTP
-API.
+`--verdict` flag handy when rehearsing verdict validation—missing verdicts still
+exercise challenge + proof ingestion, while a successful verdict proves that
+the verdict logic and telemetry counters line up before you call the HTTP API.
+The helper intentionally rejects a failed verdict before finalization because
+it has no native repair-transaction handoff. Exercise failed-verdict repair only
+through Torii's authenticated production lifecycle.
 
 Once Torii is live you can retrieve the same artefacts via HTTP:
 

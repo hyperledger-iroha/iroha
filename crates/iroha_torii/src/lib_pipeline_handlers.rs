@@ -1,0 +1,1655 @@
+// Transaction batch and pipeline status/recovery handlers.
+
+fn transaction_batch_submission_response(accepted_count: usize) -> Response {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::ACCEPTED;
+    response.headers_mut().insert(
+        HeaderName::from_static("preference-applied"),
+        HeaderValue::from_static(PREFER_RETURN_MINIMAL),
+    );
+    if let Ok(header) = HeaderValue::from_str(&accepted_count.to_string()) {
+        response.headers_mut().insert(
+            HeaderName::from_static("x-iroha-transactions-accepted"),
+            header,
+        );
+    }
+    response
+}
+
+async fn allow_transaction_batch_rate_limit(
+    limiter: &limits::RateLimiter,
+    api_token: Option<&str>,
+    transactions: &[DecodedVersionedSignedTransaction],
+) -> bool {
+    if let Some(token) = api_token {
+        return limiter.allow_repeated(token, transactions.len()).await;
+    }
+
+    let mut index = 0;
+    while index < transactions.len() {
+        let authority = transactions[index].authority();
+        let start = index;
+        index += 1;
+        while index < transactions.len() && transactions[index].authority() == authority {
+            index += 1;
+        }
+        let key = authority.to_string();
+        if !limiter.allow_repeated(&key, index - start).await {
+            return false;
+        }
+    }
+    true
+}
+
+async fn handler_post_transactions_batch(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    crate::utils::extractors::NoritoBytes(body): crate::utils::extractors::NoritoBytes,
+) -> Result<Response, Error> {
+    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
+    validate_transaction_batch_body_size(&body, app.transaction_batch_max_bytes)?;
+    let compute_permit =
+        try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)?;
+    let (transactions, compute_permit) = run_transaction_ingress_compute_job(
+        compute_permit,
+        "transaction_batch_decode_worker_failed",
+        {
+            let queue = app.queue.clone();
+            let state = app.state.clone();
+            let max_transactions = app.transaction_batch_max_transactions;
+            move || {
+                decode_transaction_batch_request(
+                    body,
+                    max_transactions,
+                    queue.as_ref(),
+                    state.as_ref(),
+                )
+            }
+        },
+    )
+    .await?;
+
+    if !allow_transaction_batch_rate_limit(&app.tx_rate_limiter, token_hdr, &transactions).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+
+    let accepted_count = {
+        let app = app.clone();
+        let (accepted_count, _compute_permit) = run_transaction_ingress_compute_job(
+            compute_permit,
+            "transaction_batch_admission_worker_failed",
+            move || {
+                let mut accepted = Vec::with_capacity(transactions.len());
+                let mut stateless_cache_warm = Vec::new();
+                let prechecks = precheck_transaction_batch_ed25519(
+                    &transactions,
+                    app.state.pipeline.signature_batch_max_ed25519,
+                );
+                #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+                let mut local_route_cache = Vec::new();
+                for (transaction, precheck) in transactions.into_iter().zip(prechecks) {
+                    let accepted_tx =
+                        routing::accept_decoded_signed_transaction_for_ingress_with_precheck(
+                            app.chain_id.clone(),
+                            app.state.clone(),
+                            transaction,
+                            &app.telemetry,
+                            precheck.single_ed25519_prechecked,
+                            precheck.precheck_rejection,
+                        )?;
+                    if precheck.single_ed25519_prechecked {
+                        stateless_cache_warm.push(accepted_tx.clone());
+                    }
+                    let routing_plan = app
+                        .queue
+                        .route_plan_with_state(&accepted_tx, app.state.as_ref())
+                        .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?;
+                    let routing_decision = routing_plan.coordinator_route();
+                    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+                    if !should_execute_route_locally_cached(
+                        app.as_ref(),
+                        routing_decision,
+                        &mut local_route_cache,
+                    ) {
+                        return Err(Error::AppServiceUnavailable {
+                            code: "transaction_batch_route_not_local",
+                            message: "batched transaction submission currently accepts only transactions routed to the receiving Torii node".to_owned(),
+                        });
+                    }
+                    accepted.push((accepted_tx, routing_plan));
+                }
+                let accepted_count = accepted.len();
+                routing::push_accepted_transactions_for_ingress_with_routing_plans(
+                    app.queue.clone(),
+                    app.state.clone(),
+                    accepted,
+                )?;
+                app.state.warm_stateless_validation_cache_for_torii_prechecked_batch(
+                    &stateless_cache_warm,
+                );
+                Ok::<usize, Error>(accepted_count)
+            },
+        )
+        .await
+        ?;
+        accepted_count
+    };
+
+    Ok(transaction_batch_submission_response(accepted_count))
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_proof_record_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(id): AxPath<String>,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    let enforce =
+        !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
+    let start = std::time::Instant::now();
+    check_proof_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "/v1/proofs/{id}",
+        1,
+        enforce,
+    )
+    .await?;
+    let routes = torii_all_dataspace_routes(app.as_ref());
+    let (rec, diagnostics, routed_by) =
+        match resolve_torii_proof_record_for_routes(&app, routes, id).await {
+            Ok(result) => result,
+            Err(response) => return Ok(response),
+        };
+    let etag_value = format!("\"{}:{}\"", rec.id.backend, hex::encode(rec.id.proof_hash));
+    let cache_control_value = format!(
+        "public, max-age={}",
+        app.proof_limits.cache_max_age.as_secs().max(1)
+    );
+    if let Some(if_none_match) = headers
+        .get(axum::http::header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+    {
+        let token = if_none_match
+            .trim()
+            .trim_start_matches("W/")
+            .trim_matches('"');
+        if token.eq_ignore_ascii_case(etag_value.trim_matches('"')) {
+            app.telemetry.with_metrics(|tel| {
+                tel.inc_torii_proof_cache_hit("/v1/proofs/{id}");
+                tel.observe_torii_proof_request(
+                    "/v1/proofs/{id}",
+                    "not_modified",
+                    0,
+                    start.elapsed(),
+                )
+            });
+            let mut resp = axum::response::Response::builder()
+                .status(axum::http::StatusCode::NOT_MODIFIED)
+                .body(axum::body::Body::empty())
+                .map_err(|err| {
+                    Error::Query(iroha_data_model::ValidationFail::InternalError(
+                        err.to_string(),
+                    ))
+                })?;
+            if let Ok(cache_header) = axum::http::HeaderValue::from_str(&cache_control_value) {
+                resp.headers_mut()
+                    .insert(axum::http::header::CACHE_CONTROL, cache_header);
+            }
+            if let Ok(etag) = axum::http::HeaderValue::from_str(&etag_value) {
+                resp.headers_mut().insert(axum::http::header::ETAG, etag);
+            }
+            insert_routed_by_header(&mut resp, routed_by);
+            return Ok(with_torii_fanout_headers(resp, diagnostics));
+        }
+    }
+
+    let bytes = norito::to_bytes(&rec).map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            err.to_string(),
+        ))
+    })?;
+    let body_len = bytes.len() as u64;
+    enforce_proof_egress(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "/v1/proofs/{id}",
+        body_len,
+        enforce,
+    )
+    .await?;
+    let mut resp = axum::response::Response::new(axum::body::Body::from(bytes));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static(utils::NORITO_MIME_TYPE),
+    );
+    if let Ok(cache_header) = axum::http::HeaderValue::from_str(&cache_control_value) {
+        resp.headers_mut()
+            .insert(axum::http::header::CACHE_CONTROL, cache_header);
+    }
+    if let Ok(etag) = axum::http::HeaderValue::from_str(&etag_value) {
+        resp.headers_mut().insert(axum::http::header::ETAG, etag);
+    }
+    insert_routed_by_header(&mut resp, routed_by);
+    app.telemetry.with_metrics(|tel| {
+        tel.observe_torii_proof_request("/v1/proofs/{id}", "ok", body_len, start.elapsed())
+    });
+    Ok(with_torii_fanout_headers(resp, diagnostics))
+}
+
+async fn handler_proof_retention_status(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    let enforce =
+        !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
+    check_proof_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        iroha_torii_shared::uri::PROOF_RETENTION_STATUS,
+        1,
+        enforce,
+    )
+    .await?;
+    Ok(crate::utils::respond_with_format(
+        routing::handle_proof_retention_status(app.state.clone()),
+        format,
+    ))
+}
+
+/// Debug endpoint exposing the current AXT proof cache state per dataspace.
+#[cfg(feature = "telemetry")]
+async fn handler_axt_proof_cache_status(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "debug/axt/cache").await?;
+    let snapshot = app.state.metrics().axt_debug_status();
+    Ok(crate::utils::JsonBody(snapshot))
+}
+
+/// Fallback when telemetry is disabled.
+#[cfg(not(feature = "telemetry"))]
+async fn handler_axt_proof_cache_status(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<impl IntoResponse, Error> {
+    let _ = (headers, remote);
+    Ok(telemetry_unavailable_response(
+        iroha_torii_shared::uri::AXT_PROOF_CACHE_STATUS,
+        &app.telemetry,
+    ))
+}
+
+async fn handler_pipeline_recovery(
+    State(app): State<SharedAppState>,
+    AxPath(height): AxPath<u64>,
+) -> Result<impl IntoResponse, Error> {
+    app.kura.read_pipeline_metadata(height).map_or_else(
+        || {
+            Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            )))
+        },
+        |sidecar| match norito::json::to_json_pretty(&sidecar.to_json_value()) {
+            Ok(serialized) => {
+                let body = axum::body::Body::from(serialized);
+                Ok::<_, Error>(
+                    axum::http::Response::builder()
+                        .status(axum::http::StatusCode::OK)
+                        .header(axum::http::header::CONTENT_TYPE, "application/json")
+                        .body(body)
+                        .unwrap(),
+                )
+            }
+            Err(err) => Err(Error::SerializationFailure {
+                context: "pipeline_recovery_sidecar",
+                source: Box::new(err),
+            }),
+        },
+    )
+}
+
+async fn handler_pipeline_preflight(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+) -> Result<Response, Error> {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(format) => format,
+        Err(resp) => return Ok(resp),
+    };
+    check_access_with_rate_limiter(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/pipeline/preflight",
+        &app.rate_limiter,
+    )
+    .await?;
+    Ok(crate::utils::respond_with_format(
+        routing::build_pipeline_preflight_response(app.state.as_ref(), app.queue.as_ref()),
+        format,
+    ))
+}
+
+async fn handler_pipeline_recovery_fastpq_proofs(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(height): AxPath<u64>,
+    crate::NoritoStringQuery(query): crate::NoritoStringQuery<PipelineFastpqRecoveryQuery>,
+) -> Result<Response, Error> {
+    // The route's sealed middleware has already verified its canonical,
+    // replay-resistant operator signature before extractors or this handler can
+    // run. Charge the authenticated request before touching Kura or acquiring
+    // compute capacity.
+    check_access_with_rate_limiter(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/pipeline/recovery/fastpq-proofs",
+        &app.rate_limiter,
+    )
+    .await?;
+
+    let page = PipelineFastpqRecoveryPage::parse(&query)?;
+    let admission = acquire_query_admission(&app, true).await?;
+    let kura = Arc::clone(&app.kura);
+    let (result, _admission) = tokio::task::spawn_blocking(move || {
+        // Keep both general-query and heavy-work permits in the physical worker.
+        // Cancelling the HTTP future therefore cannot release capacity while
+        // Kura reads, transcript reconstruction, or encoding still run.
+        let result = build_pipeline_recovery_fastpq_response(&kura, height, page);
+        (result, admission)
+    })
+    .await
+    .map_err(|error| Error::AppServiceUnavailable {
+        code: "pipeline_recovery_fastpq_worker_failed",
+        message: error.to_string(),
+    })?;
+    let serialized = result?;
+    Ok(axum::http::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(serialized))
+        .expect("static FASTPQ recovery response is valid"))
+}
+
+const PIPELINE_FASTPQ_RECOVERY_DEFAULT_LIMIT: usize = 16;
+const PIPELINE_FASTPQ_RECOVERY_MAX_LIMIT: usize = 64;
+const PIPELINE_FASTPQ_RECOVERY_MAX_PROOF_BYTES: usize = 4 * 1024 * 1024;
+const PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES: usize = 8 * 1024 * 1024;
+const PIPELINE_FASTPQ_RECOVERY_MAX_ARTIFACT_BYTES: usize = 16 * 1024 * 1024;
+const PIPELINE_FASTPQ_RECOVERY_MAX_RESPONSE_BYTES: usize = 24 * 1024 * 1024;
+
+#[derive(JsonDeserialize, crate::json_macros::JsonSerialize, Clone, Debug, Default)]
+struct PipelineFastpqRecoveryQuery {
+    #[norito(default)]
+    offset: Option<u64>,
+    #[norito(default)]
+    limit: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PipelineFastpqRecoveryPage {
+    offset: usize,
+    limit: usize,
+}
+
+impl PipelineFastpqRecoveryPage {
+    fn parse(query: &PipelineFastpqRecoveryQuery) -> Result<Self, Error> {
+        let offset = usize::try_from(query.offset.unwrap_or_default())
+            .map_err(|_| conversion_error("FASTPQ recovery offset exceeds this host".to_owned()))?;
+        let raw_limit = query
+            .limit
+            .unwrap_or(PIPELINE_FASTPQ_RECOVERY_DEFAULT_LIMIT as u64);
+        if raw_limit == 0 || raw_limit > PIPELINE_FASTPQ_RECOVERY_MAX_LIMIT as u64 {
+            return Err(conversion_error(format!(
+                "FASTPQ recovery limit must be between 1 and {PIPELINE_FASTPQ_RECOVERY_MAX_LIMIT}"
+            )));
+        }
+        let limit = usize::try_from(raw_limit)
+            .map_err(|_| conversion_error("FASTPQ recovery limit exceeds this host".to_owned()))?;
+        Ok(Self { offset, limit })
+    }
+}
+
+fn fastpq_recovery_capacity_error(message: impl Into<String>) -> Error {
+    Error::AppServiceUnavailable {
+        code: "pipeline_recovery_fastpq_artifact_too_large",
+        message: message.into(),
+    }
+}
+
+fn charge_fastpq_recovery_artifact_bytes(used: &mut usize, amount: usize) -> Result<(), Error> {
+    let next = used.checked_add(amount).ok_or_else(|| {
+        fastpq_recovery_capacity_error("FASTPQ recovery artifact size overflowed")
+    })?;
+    if next > PIPELINE_FASTPQ_RECOVERY_MAX_ARTIFACT_BYTES {
+        return Err(fastpq_recovery_capacity_error(format!(
+            "selected FASTPQ recovery artifacts exceed the {} byte response-source budget",
+            PIPELINE_FASTPQ_RECOVERY_MAX_ARTIFACT_BYTES
+        )));
+    }
+    *used = next;
+    Ok(())
+}
+
+fn build_pipeline_recovery_fastpq_response(
+    kura: &Kura,
+    height: u64,
+    page: PipelineFastpqRecoveryPage,
+) -> Result<String, Error> {
+    let Some(sidecar) = kura.read_pipeline_metadata(height) else {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        )));
+    };
+    let total = sidecar.fastpq_proofs.len();
+    let start = page.offset.min(total);
+    let end = start.saturating_add(page.limit).min(total);
+    let mut artifact_bytes = 0;
+    let proofs = sidecar.fastpq_proofs[start..end]
+        .iter()
+        .map(|snapshot| {
+            fastpq_proof_snapshot_recovery_json(kura, height, snapshot, &mut artifact_bytes)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut root = norito::json::Map::new();
+    root.insert(
+        "height".to_owned(),
+        norito::json::to_value(&sidecar.height).expect("serialize pipeline height"),
+    );
+    root.insert(
+        "block_hash".to_owned(),
+        norito::json::to_value(&sidecar.block_hash.to_string())
+            .expect("serialize pipeline block hash"),
+    );
+    root.insert(
+        "total_proofs".to_owned(),
+        norito::json::to_value(&u64::try_from(total).unwrap_or(u64::MAX))
+            .expect("serialize FASTPQ proof total"),
+    );
+    root.insert(
+        "offset".to_owned(),
+        norito::json::to_value(&u64::try_from(page.offset).unwrap_or(u64::MAX))
+            .expect("serialize FASTPQ proof offset"),
+    );
+    root.insert(
+        "limit".to_owned(),
+        norito::json::to_value(&u64::try_from(page.limit).unwrap_or(u64::MAX))
+            .expect("serialize FASTPQ proof limit"),
+    );
+    root.insert(
+        "next_offset".to_owned(),
+        norito::json::to_value(&(end < total).then(|| u64::try_from(end).unwrap_or(u64::MAX)))
+            .expect("serialize FASTPQ proof continuation"),
+    );
+    root.insert("proofs".to_owned(), norito::json::Value::Array(proofs));
+    let serialized =
+        norito::json::to_json_pretty(&norito::json::Value::Object(root)).map_err(|source| {
+            Error::SerializationFailure {
+                context: "pipeline_recovery_fastpq_proofs",
+                source: Box::new(source),
+            }
+        })?;
+    if serialized.len() > PIPELINE_FASTPQ_RECOVERY_MAX_RESPONSE_BYTES {
+        return Err(fastpq_recovery_capacity_error(format!(
+            "encoded FASTPQ recovery page exceeds the {} byte response budget",
+            PIPELINE_FASTPQ_RECOVERY_MAX_RESPONSE_BYTES
+        )));
+    }
+    Ok(serialized)
+}
+
+fn fastpq_proof_snapshot_recovery_json(
+    kura: &Kura,
+    height: u64,
+    snapshot: &iroha_core::kura::FastpqProofSnapshot,
+    artifact_bytes: &mut usize,
+) -> Result<norito::json::Value, Error> {
+    if snapshot.proof.len() > PIPELINE_FASTPQ_RECOVERY_MAX_PROOF_BYTES {
+        return Err(fastpq_recovery_capacity_error(format!(
+            "FASTPQ proof exceeds the {} byte per-proof budget",
+            PIPELINE_FASTPQ_RECOVERY_MAX_PROOF_BYTES
+        )));
+    }
+    charge_fastpq_recovery_artifact_bytes(artifact_bytes, snapshot.proof.len())?;
+
+    // Build the object field-by-field. `FastpqProofSnapshot::to_json_value`
+    // eagerly encodes its batch, which would duplicate expensive work before
+    // this endpoint can enforce its source-byte budget.
+    let mut object = norito::json::Map::new();
+    object.insert(
+        "entry_hash".to_owned(),
+        norito::json::to_value(&snapshot.entry_hash.to_string())
+            .expect("serialize FASTPQ entry hash"),
+    );
+    object.insert(
+        "batch_index".to_owned(),
+        norito::json::to_value(&snapshot.batch_index).expect("serialize FASTPQ batch index"),
+    );
+    object.insert(
+        "parameter".to_owned(),
+        norito::json::to_value(&snapshot.parameter).expect("serialize FASTPQ parameter"),
+    );
+    object.insert(
+        "transition_count".to_owned(),
+        norito::json::to_value(&snapshot.transition_count)
+            .expect("serialize FASTPQ transition count"),
+    );
+    object.insert(
+        "trace_commitment".to_owned(),
+        norito::json::to_value(&snapshot.trace_commitment.to_string())
+            .expect("serialize FASTPQ trace commitment"),
+    );
+    object.insert(
+        "proof_digest".to_owned(),
+        norito::json::to_value(&snapshot.proof_digest.to_string())
+            .expect("serialize FASTPQ proof digest"),
+    );
+    object.insert(
+        "proof".to_owned(),
+        norito::json::to_value(&base64::engine::general_purpose::STANDARD.encode(&snapshot.proof))
+            .expect("serialize FASTPQ proof"),
+    );
+
+    match fastpq_committed_batch_base64(kura, height, snapshot, artifact_bytes)? {
+        Some((batch, reconstructed)) => {
+            object.insert(
+                "batch".to_string(),
+                norito::json::to_value(&batch).expect("serialize FASTPQ batch"),
+            );
+            object.insert(
+                "batch_compact".to_string(),
+                norito::json::to_value(&false).expect("serialize FASTPQ batch compact flag"),
+            );
+            object.insert(
+                "batch_reconstructed_from_block".to_string(),
+                norito::json::to_value(&reconstructed)
+                    .expect("serialize FASTPQ batch reconstruction flag"),
+            );
+        }
+        None => {
+            object.insert(
+                "batch_compact".to_string(),
+                norito::json::to_value(&snapshot.batch.transitions.is_empty())
+                    .expect("serialize FASTPQ batch compact flag"),
+            );
+            if snapshot.transition_count > 0 && snapshot.batch.transitions.is_empty() {
+                object.insert(
+                    "batch_reconstruction_error".to_string(),
+                    norito::json::to_value(
+                        "committed block transcripts were not available for this FASTPQ proof",
+                    )
+                    .expect("serialize FASTPQ batch reconstruction error"),
+                );
+            }
+        }
+    }
+
+    Ok(norito::json::Value::Object(object))
+}
+
+fn fastpq_committed_batch_base64(
+    kura: &Kura,
+    height: u64,
+    snapshot: &iroha_core::kura::FastpqProofSnapshot,
+    artifact_bytes: &mut usize,
+) -> Result<Option<(String, bool)>, Error> {
+    if snapshot.transition_count == 0 {
+        return Ok(None);
+    }
+    if !snapshot.batch.transitions.is_empty() {
+        return encode_fastpq_recovery_batch(&snapshot.batch, false, artifact_bytes).map(Some);
+    }
+
+    let Some(height) = usize::try_from(height).ok().and_then(NonZeroUsize::new) else {
+        iroha_logger::warn!(
+            height,
+            "cannot reconstruct FASTPQ batch for invalid block height"
+        );
+        return Ok(None);
+    };
+    let Some(block) = kura.get_block(height) else {
+        iroha_logger::warn!(
+            height = height.get(),
+            entry_hash = %snapshot.entry_hash,
+            "cannot reconstruct FASTPQ batch because committed block is unavailable"
+        );
+        return Ok(None);
+    };
+    let Some(transcripts) = block.fastpq_transcripts().get(&snapshot.entry_hash) else {
+        iroha_logger::warn!(
+            height = height.get(),
+            entry_hash = %snapshot.entry_hash,
+            "cannot reconstruct FASTPQ batch because committed block has no matching transcript"
+        );
+        return Ok(None);
+    };
+    match iroha_core::fastpq::batch_from_transcript_bundle(
+        snapshot.parameter.clone(),
+        snapshot.batch.public_inputs,
+        snapshot.entry_hash,
+        transcripts,
+    ) {
+        Ok(batch) => encode_fastpq_recovery_batch(&batch, true, artifact_bytes).map(Some),
+        Err(err) => {
+            iroha_logger::warn!(
+                height = height.get(),
+                entry_hash = %snapshot.entry_hash,
+                ?err,
+                "failed to reconstruct FASTPQ batch from committed transcripts"
+            );
+            Ok(None)
+        }
+    }
+}
+
+fn encode_fastpq_recovery_batch(
+    batch: &fastpq_prover::TransitionBatch,
+    reconstructed: bool,
+    artifact_bytes: &mut usize,
+) -> Result<(String, bool), Error> {
+    let bytes = norito::to_bytes(batch).map_err(|source| Error::SerializationFailure {
+        context: "pipeline_recovery_fastpq_batch",
+        source: Box::new(source),
+    })?;
+    if bytes.len() > PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES {
+        return Err(fastpq_recovery_capacity_error(format!(
+            "FASTPQ batch exceeds the {} byte per-batch budget",
+            PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES
+        )));
+    }
+    charge_fastpq_recovery_artifact_bytes(artifact_bytes, bytes.len())?;
+    Ok((
+        base64::engine::general_purpose::STANDARD.encode(bytes),
+        reconstructed,
+    ))
+}
+
+#[derive(JsonDeserialize, crate::json_macros::JsonSerialize, Clone, Debug)]
+struct PipelineStatusQuery {
+    #[norito(default)]
+    hash: Option<String>,
+    #[norito(default)]
+    scope: Option<String>,
+}
+
+#[derive(JsonDeserialize, crate::json_macros::JsonSerialize, Clone, Debug)]
+struct TriggerCompletionQuery {
+    #[norito(default)]
+    id: Option<String>,
+    #[norito(default)]
+    entrypoint_hash: Option<String>,
+    #[norito(default)]
+    outcome: Option<String>,
+    #[norito(default)]
+    from_height: Option<u64>,
+    #[norito(default)]
+    to_height: Option<u64>,
+    #[norito(default)]
+    limit: Option<u64>,
+    #[norito(default)]
+    scan_limit_blocks: Option<u64>,
+    #[norito(default)]
+    include_reconstructed: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TriggerCompletionOutcomeFilter {
+    All,
+    Success,
+    Failure,
+}
+
+impl TriggerCompletionOutcomeFilter {
+    fn parse(raw: Option<&str>) -> Result<Self, Error> {
+        let normalized = raw
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("all")
+            .to_ascii_lowercase();
+        match normalized.as_str() {
+            "all" | "*" => Ok(Self::All),
+            "success" | "ok" => Ok(Self::Success),
+            "failure" | "failed" | "error" => Ok(Self::Failure),
+            _ => Err(conversion_error(format!(
+                "invalid outcome query parameter \"{normalized}\" (expected all|success|failure)"
+            ))),
+        }
+    }
+
+    fn matches(self, outcome: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Success => matches!(outcome, "Success"),
+            Self::Failure => matches!(outcome, "Failure"),
+        }
+    }
+}
+
+const TRIGGER_COMPLETION_DEFAULT_LIMIT: u64 = 100;
+const TRIGGER_COMPLETION_MAX_LIMIT: u64 = 1_000;
+const TRIGGER_COMPLETION_DEFAULT_SCAN_BLOCKS: u64 = 1_000;
+const TRIGGER_COMPLETION_MAX_SCAN_BLOCKS: u64 = 10_000;
+
+fn trigger_completion_outcome(outcome: &TriggerCompletedOutcome) -> (&'static str, Option<String>) {
+    match outcome {
+        TriggerCompletedOutcome::Success => ("Success", None),
+        TriggerCompletedOutcome::Failure(message) => ("Failure", Some(message.clone())),
+    }
+}
+
+fn trigger_completion_summary_from_event(
+    event: &TriggerCompletedEvent,
+) -> TriggerCompletionSummary {
+    let (outcome, message) = trigger_completion_outcome(event.outcome());
+    TriggerCompletionSummary {
+        trigger_id: event.trigger_id().to_string(),
+        trigger_execution_hash: event.trigger_execution_hash().to_string(),
+        step_index: *event.step_index(),
+        outcome: outcome.to_owned(),
+        message,
+    }
+}
+
+fn trigger_completion_record_from_event(
+    block: &iroha_data_model::block::SignedBlock,
+    block_height: u64,
+    event: &TriggerCompletedEvent,
+    source: &str,
+) -> TriggerCompletionRecord {
+    let entrypoint_index = block
+        .entrypoint_hashes()
+        .position(|hash| hash == *event.trigger_execution_hash())
+        .and_then(|index| u64::try_from(index).ok());
+    TriggerCompletionRecord {
+        block_height,
+        entrypoint_index,
+        completion: trigger_completion_summary_from_event(event),
+        source: source.to_owned(),
+    }
+}
+
+fn trigger_completion_record_from_parts(
+    block_height: u64,
+    entrypoint_index: usize,
+    trigger_id: String,
+    trigger_execution_hash: String,
+    step_index: u32,
+    outcome: &str,
+    message: Option<String>,
+    source: &str,
+) -> TriggerCompletionRecord {
+    TriggerCompletionRecord {
+        block_height,
+        entrypoint_index: u64::try_from(entrypoint_index).ok(),
+        completion: TriggerCompletionSummary {
+            trigger_id,
+            trigger_execution_hash,
+            step_index,
+            outcome: outcome.to_owned(),
+            message,
+        },
+        source: source.to_owned(),
+    }
+}
+
+fn reconstruct_trigger_completion_records(
+    block: &iroha_data_model::block::SignedBlock,
+    block_height: u64,
+) -> Vec<TriggerCompletionRecord> {
+    let mut records = Vec::new();
+    for (entrypoint_index, entrypoint, result) in block.entrypoint_results() {
+        let execution_hash = entrypoint.hash().to_string();
+        if let TransactionEntrypoint::Time(time_entrypoint) = &entrypoint {
+            match &result.0 {
+                Ok(_) => records.push(trigger_completion_record_from_parts(
+                    block_height,
+                    entrypoint_index,
+                    time_entrypoint.id.to_string(),
+                    execution_hash.clone(),
+                    0,
+                    "Success",
+                    None,
+                    "reconstructed_result",
+                )),
+                Err(reason) => records.push(trigger_completion_record_from_parts(
+                    block_height,
+                    entrypoint_index,
+                    time_entrypoint.id.to_string(),
+                    execution_hash.clone(),
+                    0,
+                    "Failure",
+                    Some(reason.to_string()),
+                    "reconstructed_result",
+                )),
+            }
+        }
+
+        let Ok(sequence) = &result.0 else {
+            continue;
+        };
+        let first_data_step = if matches!(entrypoint, TransactionEntrypoint::Time(_)) {
+            1_u32
+        } else {
+            0_u32
+        };
+        for (offset, step) in sequence.iter().enumerate() {
+            let step_index =
+                first_data_step.saturating_add(u32::try_from(offset).unwrap_or(u32::MAX));
+            records.push(trigger_completion_record_from_parts(
+                block_height,
+                entrypoint_index,
+                step.id.to_string(),
+                execution_hash.clone(),
+                step_index,
+                "Success",
+                None,
+                "reconstructed_result",
+            ));
+        }
+    }
+    records
+}
+
+fn trigger_completion_record_matches(
+    record: &TriggerCompletionRecord,
+    trigger_id: Option<&str>,
+    entrypoint_hash: Option<&str>,
+    outcome: TriggerCompletionOutcomeFilter,
+) -> bool {
+    if let Some(trigger_id) = trigger_id
+        && record.completion.trigger_id != trigger_id
+    {
+        return false;
+    }
+    if let Some(entrypoint_hash) = entrypoint_hash
+        && record.completion.trigger_execution_hash != entrypoint_hash
+    {
+        return false;
+    }
+    outcome.matches(&record.completion.outcome)
+}
+
+fn trigger_completion_records_for_block(
+    block: &iroha_data_model::block::SignedBlock,
+    block_height: u64,
+    include_reconstructed: bool,
+    entrypoint_hash: Option<&str>,
+) -> Vec<TriggerCompletionRecord> {
+    let persisted = block
+        .trigger_completions()
+        .unwrap_or_default()
+        .iter()
+        .map(|event| {
+            trigger_completion_record_from_event(block, block_height, event, "block_result")
+        })
+        .collect::<Vec<_>>();
+    if !include_reconstructed {
+        return persisted;
+    }
+    if persisted.is_empty() {
+        return reconstruct_trigger_completion_records(block, block_height);
+    }
+    if let Some(entrypoint_hash) = entrypoint_hash
+        && !persisted
+            .iter()
+            .any(|record| record.completion.trigger_execution_hash == entrypoint_hash)
+    {
+        return reconstruct_trigger_completion_records(block, block_height);
+    }
+    persisted
+}
+
+fn trigger_completion_from_height(query: &TriggerCompletionQuery, requested_to: u64) -> u64 {
+    query.from_height.map_or_else(
+        || {
+            let scan_limit = query
+                .scan_limit_blocks
+                .unwrap_or(TRIGGER_COMPLETION_DEFAULT_SCAN_BLOCKS)
+                .clamp(1, TRIGGER_COMPLETION_MAX_SCAN_BLOCKS);
+            requested_to
+                .saturating_sub(scan_limit.saturating_sub(1))
+                .max(1)
+        },
+        |from_height| from_height.max(1),
+    )
+}
+
+fn trigger_completion_query_response(
+    app: &SharedAppState,
+    query: &TriggerCompletionQuery,
+) -> Result<TriggerCompletionListResponse, Error> {
+    let latest_height = u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
+    let limit = query
+        .limit
+        .unwrap_or(TRIGGER_COMPLETION_DEFAULT_LIMIT)
+        .clamp(1, TRIGGER_COMPLETION_MAX_LIMIT);
+    let include_reconstructed = query.include_reconstructed.unwrap_or(true);
+    let outcome = TriggerCompletionOutcomeFilter::parse(query.outcome.as_deref())?;
+    let requested_to = query.to_height.unwrap_or(latest_height).min(latest_height);
+
+    if latest_height == 0 || requested_to == 0 {
+        return Ok(TriggerCompletionListResponse {
+            latest_height,
+            from_height: 0,
+            to_height: requested_to,
+            scanned_blocks: 0,
+            limit,
+            completions: Vec::new(),
+        });
+    }
+
+    let from_height = trigger_completion_from_height(query, requested_to);
+    if from_height > requested_to {
+        return Ok(TriggerCompletionListResponse {
+            latest_height,
+            from_height,
+            to_height: requested_to,
+            scanned_blocks: 0,
+            limit,
+            completions: Vec::new(),
+        });
+    }
+
+    let mut completions = Vec::new();
+    let mut scanned_blocks = 0_u64;
+    for height in (from_height..=requested_to).rev() {
+        scanned_blocks = scanned_blocks.saturating_add(1);
+        let Some(height_usize) = usize::try_from(height).ok().and_then(NonZeroUsize::new) else {
+            continue;
+        };
+        let Some(block) = app.kura.get_block(height_usize) else {
+            continue;
+        };
+        for record in trigger_completion_records_for_block(
+            block.as_ref(),
+            height,
+            include_reconstructed,
+            query.entrypoint_hash.as_deref(),
+        ) {
+            if !trigger_completion_record_matches(
+                &record,
+                query.id.as_deref(),
+                query.entrypoint_hash.as_deref(),
+                outcome,
+            ) {
+                continue;
+            }
+            completions.push(record);
+            if u64::try_from(completions.len()).unwrap_or(u64::MAX) >= limit {
+                return Ok(TriggerCompletionListResponse {
+                    latest_height,
+                    from_height,
+                    to_height: requested_to,
+                    scanned_blocks,
+                    limit,
+                    completions,
+                });
+            }
+        }
+    }
+
+    Ok(TriggerCompletionListResponse {
+        latest_height,
+        from_height,
+        to_height: requested_to,
+        scanned_blocks,
+        limit,
+        completions,
+    })
+}
+
+fn trigger_completion_summaries_for_entrypoint_hash(
+    app: &SharedAppState,
+    block_height: u64,
+    entrypoint_hash: &str,
+) -> Vec<TriggerCompletionSummary> {
+    let query = TriggerCompletionQuery {
+        id: None,
+        entrypoint_hash: Some(entrypoint_hash.to_owned()),
+        outcome: None,
+        from_height: Some(block_height),
+        to_height: Some(block_height),
+        limit: Some(TRIGGER_COMPLETION_MAX_LIMIT),
+        scan_limit_blocks: Some(1),
+        include_reconstructed: Some(true),
+    };
+    trigger_completion_query_response(app, &query)
+        .map(|response| {
+            response
+                .completions
+                .into_iter()
+                .map(|record| record.completion)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PipelineStatusReadScope {
+    Local,
+    Global,
+}
+
+impl PipelineStatusReadScope {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Global => "global",
+        }
+    }
+}
+
+fn parse_pipeline_status_scope(raw: Option<&str>) -> Result<PipelineStatusReadScope, Error> {
+    let normalized = raw
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("global")
+        .to_ascii_lowercase();
+    match normalized.as_str() {
+        "local" => Ok(PipelineStatusReadScope::Local),
+        "global" | "auto" => Ok(PipelineStatusReadScope::Global),
+        _ => Err(conversion_error(format!(
+            "invalid scope query parameter \"{normalized}\" (expected local|global|auto)"
+        ))),
+    }
+}
+
+fn parse_signed_transaction_hash(raw: &str) -> Result<HashOf<SignedTransaction>, Error> {
+    raw.trim()
+        .parse::<HashOf<SignedTransaction>>()
+        .map_err(|_| conversion_error("invalid signed transaction hash".to_owned()))
+}
+
+fn pipeline_status_response(
+    app: &SharedAppState,
+    hash: &HashOf<SignedTransaction>,
+    entry: &PipelineStatusEntry,
+    scope: PipelineStatusReadScope,
+    resolved_from: &'static str,
+) -> PipelineTransactionStatusResponse {
+    let mut response = PipelineTransactionStatusResponse::new(
+        hash.to_string(),
+        PipelineTransactionStatus {
+            kind: entry.kind.as_str().to_owned(),
+            block_height: entry.block_height.map(NonZeroU64::get),
+            rejection_reason: entry.rejection.clone(),
+        },
+        scope.as_str().to_owned(),
+        resolved_from.to_owned(),
+    );
+    if let Some(block_height) = entry.block_height.map(NonZeroU64::get) {
+        response.trigger_completions =
+            trigger_completion_summaries_for_entrypoint_hash(app, block_height, &hash.to_string());
+        if let Some(height) = usize::try_from(block_height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+            && let Some(block) = app.kura.get_block(height)
+        {
+            let entrypoint_hash =
+                HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::from(hash.clone()));
+            response.batch_transfer_outcomes =
+                block.batch_transfer_outcomes_for(&entrypoint_hash).to_vec();
+        }
+    }
+    response
+}
+
+fn pipeline_status_projection_error(message: impl std::fmt::Display) -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+            "committed transaction status projection is inconsistent: {message}"
+        )),
+    ))
+}
+
+fn certified_merge_pipeline_transactions(
+    carrier_hash: HashOf<BlockHeader>,
+    reference: &iroha_data_model::block::CertifiedMergeLedgerReference,
+    entry: &iroha_data_model::merge::MergeLedgerEntry,
+) -> Result<
+    Vec<(
+        HashOf<SignedTransaction>,
+        iroha_data_model::query::CommittedTransaction,
+    )>,
+    Error,
+> {
+    let transactions = iroha_core::smartcontracts::isi::tx::certified_merge_committed_transactions(
+        carrier_hash,
+        reference,
+        entry,
+    )
+    .map_err(pipeline_status_projection_error)?;
+    let batch = entry.execution_batch.as_ref().ok_or_else(|| {
+        pipeline_status_projection_error(
+            "execution carrier references an entry without an execution batch",
+        )
+    })?;
+    let membership_hashes = iroha_core::state::merge_execution_committed_transaction_hashes(batch);
+    if transactions.len() != membership_hashes.len() {
+        return Err(pipeline_status_projection_error(format!(
+            "authenticated transcript has {} transactions but State membership has {} hashes",
+            transactions.len(),
+            membership_hashes.len()
+        )));
+    }
+    Ok(membership_hashes
+        .into_iter()
+        .rev()
+        .zip(transactions)
+        .collect())
+}
+
+fn pipeline_status_from_state(
+    app: &AppState,
+    hash: &HashOf<SignedTransaction>,
+) -> Result<Option<PipelineStatusEntry>, Error> {
+    let Some(height) = app.state.committed_transaction_height(hash) else {
+        return Ok(None);
+    };
+    let height_u64 = u64::try_from(height.get())
+        .map_err(|_| pipeline_status_projection_error("committed height exceeds u64"))?;
+    let height_nz = NonZeroU64::new(height_u64)
+        .ok_or_else(|| pipeline_status_projection_error("committed height is zero"))?;
+    let block = app.kura.get_block(height).ok_or_else(|| {
+        pipeline_status_projection_error(format!("canonical block {} is unavailable", height.get()))
+    })?;
+    let block_ref = block.as_ref();
+    for (index, entrypoint, result) in block_ref.entrypoint_results() {
+        if index >= block_ref.external_entrypoint_count() {
+            break;
+        }
+        let entrypoint_hash =
+            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint.hash()));
+        if entrypoint_hash != *hash {
+            continue;
+        }
+        let (kind, rejection) = match &result.0 {
+            Ok(_) => (PipelineStatusKind::Applied, None),
+            Err(reason) => (PipelineStatusKind::Rejected, Some(reason.clone())),
+        };
+        return Ok(Some(PipelineStatusEntry::fresh(
+            kind,
+            Some(height_nz),
+            rejection,
+        )));
+    }
+
+    let reference = block_ref
+        .execution_context()
+        .and_then(|context| context.merge_entry.as_ref())
+        .ok_or_else(|| {
+            pipeline_status_projection_error(format!(
+                "transaction {hash} is indexed at block {} but is absent from its external body and has no merge reference",
+                height.get()
+            ))
+        })?;
+    let entry = app
+        .kura
+        .get_merge_entry_by_carrier_height(height)
+        .map_err(pipeline_status_projection_error)?
+        .ok_or_else(|| {
+            pipeline_status_projection_error(format!(
+                "block {} has a merge reference but no canonical sidecar",
+                height.get()
+            ))
+        })?;
+    let transactions = certified_merge_pipeline_transactions(block_ref.hash(), reference, &entry)?;
+    let transaction = transactions
+        .iter()
+        .find(|(membership_hash, _)| membership_hash == hash)
+        .map(|(_, transaction)| transaction)
+        .ok_or_else(|| {
+            pipeline_status_projection_error(format!(
+                "transaction {hash} is indexed at merge carrier {} but its authenticated transcript does not contain it",
+                height.get()
+            ))
+        })?;
+    let (kind, rejection) = match &transaction.result().0 {
+        Ok(_) => (PipelineStatusKind::Applied, None),
+        Err(reason) => (PipelineStatusKind::Rejected, Some(reason.clone())),
+    };
+    Ok(Some(PipelineStatusEntry::fresh(
+        kind,
+        Some(height_nz),
+        rejection,
+    )))
+}
+
+fn pipeline_status_terminal_or_state_entry(
+    app: &SharedAppState,
+    hash: &HashOf<SignedTransaction>,
+) -> Result<Option<(PipelineStatusEntry, &'static str)>, Error> {
+    app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
+
+    if let Some(entry) = pipeline_status_from_state(app.as_ref(), hash)? {
+        app.pipeline_status_cache
+            .record_entry(hash.clone(), entry.clone());
+        return Ok(Some((entry, "state")));
+    }
+
+    if let Some(entry) = app.pipeline_status_cache.lookup(hash) {
+        if entry.kind.is_terminal() {
+            return Ok(Some((entry, "cache")));
+        }
+    }
+
+    Ok(None)
+}
+
+fn pipeline_status_local_entry_checked(
+    app: &SharedAppState,
+    hash: &HashOf<SignedTransaction>,
+) -> Result<Option<(PipelineStatusEntry, &'static str)>, Error> {
+    if let Some(entry) = pipeline_status_terminal_or_state_entry(app, hash)? {
+        return Ok(Some(entry));
+    }
+
+    if let Some(entry) = app.pipeline_status_cache.lookup(hash) {
+        if entry.kind == PipelineStatusKind::Queued
+            && !app.queue.contains_pending_hash(hash.clone(), &app.state)
+        {
+            app.pipeline_status_cache.remove_entry_by_hash(hash);
+            return Ok(None);
+        }
+        return Ok(Some((entry, "cache")));
+    }
+
+    if app.queue.contains_pending_hash(hash.clone(), &app.state) {
+        let entry = PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None);
+        app.pipeline_status_cache
+            .record_entry(hash.clone(), entry.clone());
+        return Ok(Some((entry, "queue")));
+    }
+
+    Ok(None)
+}
+
+fn pipeline_status_local_entry(
+    app: &SharedAppState,
+    hash: &HashOf<SignedTransaction>,
+) -> Option<(PipelineStatusEntry, &'static str)> {
+    match pipeline_status_local_entry_checked(app, hash) {
+        Ok(entry) => entry,
+        Err(error) => {
+            iroha_logger::error!(
+                ?error,
+                %hash,
+                "internal pipeline-status consumer rejected canonical transaction evidence"
+            );
+            None
+        }
+    }
+}
+
+fn pipeline_status_response_with_route(
+    app: &SharedAppState,
+    hash: &HashOf<SignedTransaction>,
+    entry: &PipelineStatusEntry,
+    scope: PipelineStatusReadScope,
+    resolved_from: &'static str,
+    format: ResponseFormat,
+    route: Option<(RoutingDecision, &'static str)>,
+) -> Response {
+    let mut response = crate::utils::respond_with_format(
+        pipeline_status_response(app, hash, entry, scope, resolved_from),
+        format,
+    );
+    if let Some((routing_decision, routed_by)) = route {
+        insert_routing_headers(&mut response, routing_decision, routed_by);
+    }
+    response
+}
+
+fn pipeline_status_not_found_error() -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::NotFound,
+    ))
+}
+
+fn pipeline_status_error_is_not_found(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound
+        ))
+    )
+}
+
+fn pipeline_status_proxy_query(
+    hash: &HashOf<SignedTransaction>,
+    scope: PipelineStatusReadScope,
+) -> Result<Option<String>, Error> {
+    encode_torii_proxy_query(&PipelineStatusQuery {
+        hash: Some(hash.to_string()),
+        scope: Some(scope.as_str().to_owned()),
+    })
+}
+
+fn execute_pipeline_status_local_read(
+    app: &SharedAppState,
+    query: &PipelineStatusQuery,
+    format: ResponseFormat,
+    route: Option<(RoutingDecision, &'static str)>,
+) -> Result<Response, Error> {
+    let hash_raw = query
+        .hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| conversion_error("missing hash query parameter".to_owned()))?;
+    let read_scope = parse_pipeline_status_scope(query.scope.as_deref())?;
+    let hash = parse_signed_transaction_hash(hash_raw)?;
+
+    let local_entry = if matches!(read_scope, PipelineStatusReadScope::Local) {
+        pipeline_status_local_entry_checked(app, &hash)?
+    } else {
+        pipeline_status_terminal_or_state_entry(app, &hash)?
+    };
+
+    if let Some((entry, resolved_from)) = local_entry {
+        return Ok(pipeline_status_response_with_route(
+            app,
+            &hash,
+            &entry,
+            read_scope,
+            resolved_from,
+            format,
+            route,
+        ));
+    }
+
+    Err(pipeline_status_not_found_error())
+}
+
+#[cfg(feature = "app_api")]
+fn pipeline_status_payload_is_authoritative_hint(
+    payload: &PipelineTransactionStatusResponse,
+) -> bool {
+    match payload.status.kind.as_str() {
+        "Applied" => true,
+        "Rejected" | "Expired" => payload.resolved_from == "state",
+        _ => false,
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn pipeline_status_hinted_global_response(
+    response: Response,
+) -> Result<Option<Response>, Response> {
+    if should_skip_singleton_routed_query_route_error(&response) {
+        return Ok(None);
+    }
+    if !response.status().is_success() {
+        return Ok(Some(response));
+    }
+
+    let (parts, body) = response.into_parts();
+    let bytes = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .map_err(|error| {
+            torii_proxy_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "invalid_proxy_response",
+                format!("failed to read hinted pipeline status response: {error}"),
+            )
+        })?;
+    let is_terminal = norito::json::from_slice::<PipelineTransactionStatusResponse>(&bytes)
+        .map(|payload| pipeline_status_payload_is_authoritative_hint(&payload))
+        .unwrap_or(false);
+    let response = Response::from_parts(parts, Body::from(bytes));
+
+    Ok(is_terminal.then_some(response))
+}
+
+async fn handler_pipeline_transaction_status(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    crate::NoritoStringQuery(query): crate::NoritoStringQuery<PipelineStatusQuery>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(format) => format,
+        Err(resp) => return Ok(resp),
+    };
+    check_access_with_rate_limiter(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/pipeline/transactions/status",
+        &app.pipeline_status_rate_limiter,
+    )
+    .await?;
+    let read_scope = parse_pipeline_status_scope(query.scope.as_deref())?;
+    let hash_raw = query
+        .hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| conversion_error("missing hash query parameter".to_owned()))?;
+    let hash = parse_signed_transaction_hash(hash_raw)?;
+
+    match execute_pipeline_status_local_read(&app, &query, format, None) {
+        Ok(response) => return Ok(response),
+        Err(error) if pipeline_status_error_is_not_found(&error) => {}
+        Err(error) => return Err(error),
+    }
+
+    if matches!(read_scope, PipelineStatusReadScope::Local) {
+        return Err(pipeline_status_not_found_error());
+    }
+
+    #[cfg(feature = "app_api")]
+    {
+        let query_string = pipeline_status_proxy_query(&hash, read_scope)?;
+        if let Some(route) = queue::routing_plan_hint(&hash).map(|plan| plan.coordinator_route()) {
+            let hinted = execute_torii_single_route_read(
+                &app,
+                route,
+                ToriiReadEndpointV1::PipelineTransactionStatusGet,
+                Vec::new(),
+                query_string.clone(),
+                Vec::new(),
+            )
+            .await;
+            match pipeline_status_hinted_global_response(hinted).await {
+                Ok(Some(hinted)) => return Ok(hinted),
+                Ok(None) => {}
+                Err(response) => return Ok(response),
+            }
+        }
+
+        Ok(execute_torii_fanout_singleton_read(
+            &app,
+            ToriiReadEndpointV1::PipelineTransactionStatusGet,
+            Vec::new(),
+            query_string,
+            Vec::new(),
+        )
+        .await)
+    }
+
+    #[cfg(not(feature = "app_api"))]
+    {
+        let _ = headers;
+        let _ = remote_ip;
+        let _ = hash;
+        Err(pipeline_status_not_found_error())
+    }
+}
+
+async fn handler_trigger_completions(
+    State(app): State<SharedAppState>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    AxQuery(query): AxQuery<TriggerCompletionQuery>,
+) -> Result<Response, Error> {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(format) => format,
+        Err(resp) => return Ok(resp),
+    };
+    Ok(crate::utils::respond_with_format(
+        trigger_completion_query_response(&app, &query)?,
+        format,
+    ))
+}
+
+async fn handler_policy(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<impl IntoResponse, Error> {
+    #[allow(clippy::too_many_arguments, clippy::ref_option)]
+    fn build_policy_body(
+        require_token: bool,
+        fee_policy: &FeePolicy,
+        queue_len: u64,
+        normal_th: usize,
+        stream_th: usize,
+        sub_th: usize,
+        token_required: bool,
+    ) -> axum::response::Response {
+        let mut obj = norito::json::Map::new();
+        obj.insert(
+            "require_api_token".into(),
+            norito::json::Value::from(require_token),
+        );
+        obj.insert(
+            "token_required".into(),
+            norito::json::Value::from(token_required),
+        );
+        match fee_policy.asset_id() {
+            Some(asset) => obj.insert(
+                "fee_asset_id".into(),
+                norito::json::Value::from(asset.to_owned()),
+            ),
+            None => obj.insert("fee_asset_id".into(), norito::json::Value::Null),
+        };
+        match fee_policy.receiver() {
+            Some(r) => obj.insert(
+                "fee_receiver".into(),
+                norito::json::Value::from(r.to_owned()),
+            ),
+            None => obj.insert("fee_receiver".into(), norito::json::Value::Null),
+        };
+        match fee_policy.amount() {
+            Some(amount) => obj.insert(
+                "fee_amount".into(),
+                norito::json::Value::from(amount.to_string()),
+            ),
+            None => obj.insert("fee_amount".into(), norito::json::Value::Null),
+        };
+        obj.insert("queue_len".into(), norito::json::Value::from(queue_len));
+        obj.insert(
+            "rate_limit_threshold".into(),
+            norito::json::Value::from(normal_th as u64),
+        );
+        obj.insert(
+            "stream_rate_limit_threshold".into(),
+            norito::json::Value::from(stream_th as u64),
+        );
+        obj.insert(
+            "subscription_rate_limit_threshold".into(),
+            norito::json::Value::from(sub_th as u64),
+        );
+        let fees_enabled = fee_policy.is_enabled();
+        let enforced = true;
+        let stream_shed = (queue_len as usize) >= stream_th;
+        let sub_shed = (queue_len as usize) >= sub_th;
+        obj.insert(
+            "rate_limit_enforced".into(),
+            norito::json::Value::from(enforced),
+        );
+        obj.insert(
+            "stream_rate_limit_enforced".into(),
+            norito::json::Value::from(true),
+        );
+        obj.insert(
+            "subscription_rate_limit_enforced".into(),
+            norito::json::Value::from(true),
+        );
+        obj.insert(
+            "stream_admission_shed".into(),
+            norito::json::Value::from(stream_shed),
+        );
+        obj.insert(
+            "subscription_admission_shed".into(),
+            norito::json::Value::from(sub_shed),
+        );
+        let explain = format!(
+            "rate_limits_always_on=true, fees_enabled={}, queue_len={}, high_load_admission_shed_thresholds(normal={}, stream={}, subscription={})",
+            fees_enabled, queue_len, normal_th, stream_th, sub_th
+        );
+        obj.insert("explain".into(), norito::json::Value::from(explain));
+        let body = norito::json::to_json_pretty(&norito::json::Value::Object(obj))
+            .unwrap_or_else(|_| "{}".into());
+        let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+        resp.headers_mut().insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+        resp
+    }
+
+    let queue_len = app.queue.active_len() as u64;
+    let token_required = app.require_api_token;
+
+    if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
+        return Ok(build_policy_body(
+            app.require_api_token,
+            &app.fee_policy,
+            queue_len,
+            app.high_load_tx_threshold,
+            app.high_load_stream_tx_threshold,
+            app.high_load_subscription_tx_threshold,
+            token_required,
+        ));
+    }
+
+    validate_api_token(app.as_ref(), &headers)?;
+    let key = rate_limit_key(
+        &headers,
+        Some(remote.ip()),
+        "v1/policy",
+        app.api_token_enforced(),
+    );
+    if !app.rate_limiter.allow(&key).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+
+    Ok(build_policy_body(
+        app.require_api_token,
+        &app.fee_policy,
+        queue_len,
+        app.high_load_tx_threshold,
+        app.high_load_stream_tx_threshold,
+        app.high_load_subscription_tx_threshold,
+        token_required,
+    ))
+}

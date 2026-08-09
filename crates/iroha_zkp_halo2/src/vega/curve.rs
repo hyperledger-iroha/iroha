@@ -9,10 +9,7 @@ use core::{
 use halo2curves::t256::Fp;
 use halo2curves::{
     Coordinates, CurveAffine, CurveExt,
-    ff::{
-        PrimeField,
-        derive::subtle::{Choice, ConditionallySelectable as _},
-    },
+    ff::PrimeField,
     group::{Curve as _, Group as _, GroupEncoding as _},
     t256::{T256, T256Affine},
 };
@@ -222,13 +219,12 @@ impl VegaT256PointV1 {
 
     /// Select `a` for zero and `b` for one without secret-dependent branches.
     ///
-    /// Only the low bit of `choice` is used. It is converted directly to the
-    /// `Choice` consumed by the linked `CurveExt` implementation, which selects
-    /// every projective coordinate without a field conversion or zero test.
+    /// Only the low bit of `choice` is used. Multiplication by that scalar uses
+    /// the linked curve's constant-time scalar multiplication and avoids a
+    /// secret-dependent branch or table lookup.
     #[must_use]
     pub fn conditional_select(a: &Self, b: &Self, choice: u8) -> Self {
-        let select_b = Choice::from(choice & 1);
-        Self(T256::conditional_select(&a.0, &b.0, select_b))
+        *a + (*b - *a).mul_scalar(VegaT256ScalarV1::from_u64(u64::from(choice & 1)))
     }
 
     /// Replace this complete projective point instance with the identity.

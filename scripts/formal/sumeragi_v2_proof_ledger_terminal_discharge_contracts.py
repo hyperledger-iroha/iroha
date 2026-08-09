@@ -20,7 +20,7 @@ REPLAY_TRACE_SOURCE_SHA256 = {
         "87305ef2c045f815b18d9bac556285fe15813b4b3ff801f3c1f19c7272a55349"
     ),
     "scripts/formal/run_sumeragi_v2_harness.sh": (
-        "d3637e08cd97783506adb397a97885ac27daa4633abccdd38fbe7a47b78eeac1"
+        "2439194fb0980a35df8183a520839f58d2ecf6e30ae95b6351d7495e49f7cd48"
     ),
 }
 
@@ -420,7 +420,7 @@ def _exact_tla_call_statement_tokens(
 
 _SAME_ROUND_STRICT_TLA_SOURCE_SHA256 = {
     "SumeragiV2InductiveProofs.tla": (
-        "74ed46cc0c891ee2b54b708bf025f1422e913a28108d6135ed1fb40286de6573"
+        "95847dd312a0ab74744303f4b4e55d09a56acec11731490aa0d9e917cbb22981"
     ),
     "SumeragiV2Proofs.tla": (
         "98d4af84143ef116ea96872bca81c6b79b606f5936718f69d6f28b7fda7b2ab2"
@@ -458,10 +458,10 @@ _READINESS_TOOL_SOURCE_SHA256 = {
         "bb69d0d022c3111db49f6016220122c3617b2c701d5127ee73eb81140b981cbe"
     ),
     "scripts/formal/check_sumeragi_v2_command_execution_ready_contract.py": (
-        "607f4f7e7f4b98706e175099a30da305a72d295df8ac1f6554cc914c69145b63"
+        "2979beaad191ae886b39370afef4168c3cee05e2cd6d8a42bf0e25cf8939e147"
     ),
     "scripts/formal/run_sumeragi_v2_command_execution_ready_mutation.sh": (
-        "1507c6d2442df0cf7a804f20f2869321457f9d678829bcc0effad55e3deae64d"
+        "42da6f28bcd5a980acd2eae792f2a730a06de4373e7eb25d5c1fcfcd6a8a9efe"
     ),
 }
 
@@ -961,32 +961,24 @@ def _atomic_timeout_completion_source_fidelity_errors(
 
 _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
-        "61c374819d09f0bb17e235a2d344d724ff2adbb0600b5899723dd94464259a10"
+        "2795cb0b98dafe93a05bafe01680d2ffab9d5527a35b1530af43a97d0e7083d9"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
-        "43dc16ddaf1fd2d9faf9ea90e596497e9812b22dcfead443a005274d9fa33d09"
+        "b4dad546374a4b3eaab321e127d075bcb280f5a0821f50fb31c35575245364f5"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
-        "c9be95c54480b74106ce845c44a82727ccf8a2fd1e1ef16ba9b4faa314608f2a"
+        "b8e3639568e60423f2b1b42db90e25bd4ee81bc82dccc1dd8ff7920d53d1d19a"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/wal.rs": (
         "6bff6e8e90983f8bd1657de5faaf59b5db9a57e99ba0f9e0be96e7de0d3e2b9f"
     ),
-    "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "c65f0cba916fddcff324329a7be15e2f0d19d970860f92b059e2a63f3f4fd2a1"
-    ),
-    "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "72a6ddce7c3905eed02431309c328d6f56c2854f7971832c7419bbc1352f43ad"
-    ),
-    "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "296fd9494bd0d8ba1d01c65825b6e24286fcd13dc78a5fb553079bfd84d93779"
-    ),
+    "crates/iroha_core/src/sumeragi/v2_effects.rs": "PENDING",
+    "crates/iroha_core/src/sumeragi/v2_runner.rs": "PENDING",
+    "crates/iroha_core/src/sumeragi/v2_worker.rs": "PENDING",
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
-        "ee0a1f7d536e7f2ef6e5847f090c4af28241f086912e8f9c7672971b648604af"
+        "8854b0996f37153290c6dda30c0a504b7af16c5105ee86c5ebd1fa12949f507d"
     ),
 }
-
-
 _INSTALLED_TC_SELECTOR_PROOF_SHA256 = (
     "99743a47d15918454ec638c35556ed1a7d985247d982ecd31032d7dfec0292bf"
 )
@@ -1057,6 +1049,9 @@ _LOCAL_PROPOSAL_TIMEOUT_RUST_ITEM_SHA256 = {
 
 
 _PROPOSAL_TIMEOUT_EXACTNESS_RUST_ITEM_SHA256 = {
+    "timeout_justification": (
+        "5de5731defcd8e33d2198a66a5bec8899a2f11f6eb1c7fa74a722952b36b5e5e"
+    ),
     "proposal_validate": (
         "8c2418e5ea37d1f40c540014be16ad687d6841b1ce7e5d4113570c2ee22c99a4"
     ),
@@ -1067,10 +1062,10 @@ _PROPOSAL_TIMEOUT_EXACTNESS_RUST_ITEM_SHA256 = {
         "f3acc9c98b9e00a25ba462409364972e8714da10fa836912a72811655559fd9f"
     ),
     "wire_regression": (
-        "d4ad8d326dd83cd21f15261ef8ca648dfd8828cf0f62808a39bf5e4cf1f9eb01"
+        "cc2553698898aef5b1bc5186f8b183e267dd456e52355d989ace443688203759"
     ),
     "adapter_regression": (
-        "da4be67ab88f7683c231afbde6ce90cb027057cb500f9fa8cb9c7d37178345db"
+        "8e58636fd87f6e00573fdf95b894cd917ae768c7888eee2a1795b29be20bda68"
     ),
 }
 
@@ -1085,11 +1080,14 @@ def _same_round_semantic_kernel_source_fidelity_errors(
     for relative, expected_sha256 in (
         _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256.items()
     ):
-        path = repo_root / relative
-        if not path.is_file() or path.is_symlink():
-            errors.append(f"{path}: same-round semantic kernel source must be regular")
+        path, source = _read_reviewed_rust_source(
+            repo_root,
+            relative,
+            errors,
+            "same-round semantic kernel source",
+        )
+        if not source:
             continue
-        source = path.read_text(encoding="utf-8")
         observed_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
         if observed_sha256 != expected_sha256:
             errors.append(
@@ -1302,6 +1300,7 @@ if let Some(existing) = self.durable.decision() {
     }
     return Ok(StepOutcome::ignored(IgnoreReason::Duplicate));
 }
+self.park_awaiting_signature_for_certified_progress();
 let effect = self.start_persistence(
 """,
                 "Commit admission must let the first validated CommitQC supersede any Prepare lock and reject only a conflicting durable Decision",
@@ -1311,10 +1310,13 @@ let effect = self.start_persistence(
                 "view-zero proposal admission must bind the semantic parent decision",
             ),
             (
-                """
-let Some(checked_refinement) = refinement::check(transition) else {
-""",
-                "Reducer::step must invoke the production refinement commit gate",
+                "let Some(checked_refinement) = refinement::check(transition) "
+                "else { let diagnostic = refinement::diagnose(transition); "
+                "iroha_logger::error!(event = ?audit_event, ?diagnostic, "
+                '"Sumeragi v2 reducer rejected the transition refinement predicate"); '
+                "return Err(ReducerError::RefinementViolation); };",
+                "Reducer::step must acquire checked production refinement "
+                "authority before committing candidate state",
             ),
             (
                 """
@@ -1324,12 +1326,14 @@ let _authorized_refinement = checked_refinement.into_projection();
                 "Reducer::step must consume checked refinement authority before commit",
             ),
             (
-                """
-let Some(checked_transition) =
-    check_production_durable_intent_transition(durable_intent_trace)
-else {
-""",
-                "Reducer::step must invoke the shared durable-intent kernel",
+                "let Some(checked_transition) = "
+                "check_production_durable_intent_transition(durable_intent_trace) "
+                "else { iroha_logger::error!(event = ?audit_event, "
+                "?durable_intent_trace, "
+                '"Sumeragi v2 reducer rejected the durable-intent refinement predicate"); '
+                "return Err(ReducerError::RefinementViolation); };",
+                "Reducer::step must acquire the source-shared durable-intent "
+                "authorization token",
             ),
             (
                 """
@@ -1369,7 +1373,7 @@ let next_generation = match pending.entry.record() {
     _ => self.generation,
 };
 """,
-                "InstallTimeout acknowledgement must preflight same-view exhaustion and advancing-view reset before durable mutation",
+                "InstallTimeout acknowledgement must preflight same-round generation exhaustion and advancing-view reset before durable mutation",
             ),
             (
                 "self.generation = next_generation;",
@@ -1565,6 +1569,16 @@ self.decision_body_drained |= drain_decision_body;
                 "effect reconciliation must rebind terminal protection to the exact durable Decision",
             ),
         ),
+        "crates/iroha_core/src/sumeragi/v2_runner.rs": (
+            (
+                """
+EffectExecutorStep::Advanced { .. } => {
+    let _ = reconcile_executor_locked_body(executor, services)?;
+}
+""",
+                "the production runner must reconcile the exact durable lock or Decision after every serialized transition",
+            ),
+        ),
         "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
             (
                 """
@@ -1714,6 +1728,17 @@ if facts.install_view_unchanged {
 }
 """,
                 "Verus volatile preservation must prove exact timeout control retention or advancing-view absence",
+            ),
+            (
+                "pub closed spec fn production_transition_action_relation("
+                "facts: ProductionTransitionFactsProjection,) -> bool { "
+                "production_transition_gate_body!(facts, "
+                "production_volatile_summary_well_formed, "
+                "production_named_action_relation, "
+                "production_effect_trace_relation, "
+                "production_transition_branch_relation,) }",
+                "the Verus production relation must gate source-derived facts "
+                "through the shared transition body",
             ),
         ),
     }
@@ -2048,18 +2073,14 @@ def _local_proposal_timeout_source_fidelity_errors(
         "crates/iroha_core/src/sumeragi/v2_core/tests.rs",
         "crates/iroha_sumeragi_core/src/verus_proofs.rs",
     ):
-        path = repo_root / relative
-        if not path.is_file() or path.is_symlink():
-            errors.append(
-                f"{path}: exact local-proposal timeout source must be regular"
-            )
-            continue
-        try:
-            sources[relative] = (path, path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError) as error:
-            errors.append(
-                f"{path}: cannot read exact local-proposal timeout source: {error}"
-            )
+        path, source = _read_reviewed_rust_source(
+            repo_root,
+            relative,
+            errors,
+            "exact local-proposal timeout source",
+        )
+        if source:
+            sources[relative] = (path, source)
 
     specs = (
         (
@@ -2539,18 +2560,14 @@ def _proposal_timeout_exactness_source_fidelity_errors(
         "crates/iroha_data_model/src/block/consensus_v2.rs",
         "crates/iroha_core/src/sumeragi/v2.rs",
     ):
-        path = repo_root / relative
-        if not path.is_file() or path.is_symlink():
-            errors.append(
-                f"{path}: proposal timeout exactness source must be a regular file"
-            )
-            continue
-        try:
-            sources[relative] = (path, path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError) as error:
-            errors.append(
-                f"{path}: cannot read proposal timeout exactness source: {error}"
-            )
+        path, source = _read_reviewed_rust_source(
+            repo_root,
+            relative,
+            errors,
+            "proposal timeout exactness source",
+        )
+        if source:
+            sources[relative] = (path, source)
 
     data_model = sources.get(
         "crates/iroha_data_model/src/block/consensus_v2.rs"
@@ -2560,6 +2577,21 @@ def _proposal_timeout_exactness_source_fidelity_errors(
 
     if data_model is not None:
         path, source = data_model
+        timeout_justification = _require_rust_item(
+            path,
+            source,
+            "timeout_justification",
+            errors,
+        )
+        _require_rust_item_context(
+            path,
+            timeout_justification,
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "timeout-justification test fixture",
+            errors,
+        )
+        observed["timeout_justification"] = (path, timeout_justification)
+
         proposal_validate = _require_qualified_rust_item(
             path,
             source,
@@ -2632,6 +2664,9 @@ def _proposal_timeout_exactness_source_fidelity_errors(
             item,
             _PROPOSAL_TIMEOUT_EXACTNESS_RUST_ITEM_SHA256[key],
             {
+                "timeout_justification": (
+                    "timeout-justification test fixture"
+                ),
                 "proposal_validate": (
                     "Proposal::validate exact repeated-PrepareQC gate"
                 ),
@@ -2663,6 +2698,23 @@ def _proposal_timeout_exactness_source_fidelity_errors(
             path, item, sequence, description, errors
         )
 
+    require_sequence(
+        "timeout_justification",
+        """
+ProposalJustification::Timeout(TimeoutJustification {
+    timeout_certificate: TimeoutCertificate {
+        round: timeout_round,
+        groups: vec![TimeoutVoteGroup {
+            highest_prepare_qc: certificate_high,
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![signature_seed; 48],
+        }],
+    },
+    highest_prepare_qc: proposal_high,
+})
+""",
+        "timeout fixture must keep independent certificate and proposal high evidence",
+    )
     require_sequence(
         "proposal_validate",
         """
@@ -2707,17 +2759,8 @@ timeout.highest_prepare_qc.as_ref().is_some_and(|highest| {
     require_sequence(
         "wire_regression",
         """
-proposal.justification = ProposalJustification::Timeout(TimeoutJustification {
-    timeout_certificate: TimeoutCertificate {
-        round: timeout_round,
-        groups: vec![TimeoutVoteGroup {
-            highest_prepare_qc: None,
-            signers: vec![0, 1, 2],
-            aggregate_signature: vec![0x43; 48],
-        }],
-    },
-    highest_prepare_qc: Some(highest_prepare.clone()),
-});
+proposal.justification =
+    timeout_justification(timeout_round, None, Some(highest_prepare.clone()), 0x43);
 assert_eq!(
     proposal.validate(&context),
     Err(ValidationError::InvalidProposalJustification),
@@ -2851,7 +2894,8 @@ def _locked_assembly_retention_mutation_errors(
                 "/\\ CommandExecutionReady(command) "
                 "/\\ (NodeIdle(command.node) "
                 '\\/ command.class = "Completion" '
-                "\\/ LocalAssemblyBusyDispatchAllowed(command))"
+                "\\/ LocalAssemblyBusyDispatchAllowed(command) "
+                "\\/ AsyncCandidateHasCertifiedFenceRoot(command))"
             ),
         }
         for symbol, expected in exact_operators.items():

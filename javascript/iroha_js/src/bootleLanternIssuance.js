@@ -25,32 +25,39 @@ export const BOOTLE_LANTERN_ISSUANCE_CREDENTIAL_MAX_BYTES_V1 = 4_096;
 export const BOOTLE_LANTERN_ISSUANCE_ERROR_RESPONSE_MAX_BYTES_V1 = 512;
 
 const JSON_MEDIA_TYPE_V1 = "application/json";
-const AUTHORIZATION_MAGIC_V1 = Uint8Array.of(0x49, 0x4c, 0x41, 0x31);
-const BLIND_REQUEST_MAGIC_V1 = Uint8Array.of(0x49, 0x4c, 0x51, 0x31);
-const RESPONSE_MAGIC_V1 = Uint8Array.of(0x49, 0x4c, 0x52, 0x31);
+const AUTHORIZATION_MAGIC_V1 = "ILA1";
+const BLIND_REQUEST_MAGIC_V1 = "ILQ1";
+const RESPONSE_MAGIC_V1 = "ILR1";
 const WWW_AUTHENTICATE_VALUE_V1 =
   'Bearer realm="iroha-bootle-lantern-issuance"';
 const ERROR_ENVELOPE_TYPE_NAME_V1 = "iroha_torii_shared::ErrorEnvelope";
-const ERROR_CONTRACT_V1 = Object.freeze({
-  400: Object.freeze({ code: "privacy_issuance_invalid_request", mediaType: BOOTLE_LANTERN_ISSUANCE_MEDIA_TYPE_V1 }),
-  401: Object.freeze({ code: "privacy_issuance_unauthorized", mediaType: BOOTLE_LANTERN_ISSUANCE_MEDIA_TYPE_V1, wwwAuthenticate: WWW_AUTHENTICATE_VALUE_V1 }),
-  406: Object.freeze({ code: "privacy_issuance_not_acceptable", mediaType: JSON_MEDIA_TYPE_V1 }),
-  409: Object.freeze({ code: "privacy_issuance_state_conflict", mediaType: BOOTLE_LANTERN_ISSUANCE_MEDIA_TYPE_V1 }),
-  413: Object.freeze({ code: "privacy_issuance_payload_too_large", mediaType: BOOTLE_LANTERN_ISSUANCE_MEDIA_TYPE_V1 }),
-  415: Object.freeze({ code: "privacy_issuance_unsupported_media_type", mediaType: BOOTLE_LANTERN_ISSUANCE_MEDIA_TYPE_V1 }),
-  429: Object.freeze({ code: "privacy_issuance_capacity_exhausted", mediaType: BOOTLE_LANTERN_ISSUANCE_MEDIA_TYPE_V1, retryAfterSeconds: 1 }),
-  503: Object.freeze({ code: "privacy_issuance_unavailable", mediaType: BOOTLE_LANTERN_ISSUANCE_MEDIA_TYPE_V1 }),
+const ISSUANCE_CONTEXT_V1 = "Bootle/Lantern issuance";
+const CREDENTIAL_CONTEXT_V1 = `${ISSUANCE_CONTEXT_V1} credential`;
+const CANONICAL_CREDENTIAL_ERROR_V1 =
+  `${CREDENTIAL_CONTEXT_V1} must be canonical unpadded base64url`;
+const REQUEST_HEADER_GUARD_ERROR_V1 =
+  "transport cannot enforce canonical request headers";
+const NONCANONICAL_JSON_ERROR_V1 = "non-canonical JSON error envelope";
+const INVALID_RESPONSE_ERROR_V1 = "response is invalid";
+const CONTENT_TYPE_HEADER_V1 = "Content-Type";
+const WWW_AUTHENTICATE_HEADER_V1 = "WWW-Authenticate";
+const BASE64URL_ENCODING_V1 = "base64url";
+const NO_STORE_V1 = "no-store";
+const POST_METHOD_V1 = "POST";
+const FUNCTION_TYPE = "function";
+const ERROR_CODE_BY_STATUS_V1 = Object.freeze({
+  400: "privacy_issuance_invalid_request",
+  401: "privacy_issuance_unauthorized",
+  406: "privacy_issuance_not_acceptable",
+  409: "privacy_issuance_state_conflict",
+  413: "privacy_issuance_payload_too_large",
+  415: "privacy_issuance_unsupported_media_type",
+  429: "privacy_issuance_capacity_exhausted",
+  503: "privacy_issuance_unavailable",
 });
 
 const MAX_ENCODED_CREDENTIAL_BYTES =
   Math.ceil(BOOTLE_LANTERN_ISSUANCE_CREDENTIAL_MAX_BYTES_V1 / 3) * 4;
-const BASE64URL_ALPHABET =
-  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-const BASE64URL_INDEX = new Int16Array(128).fill(-1);
-for (let index = 0; index < BASE64URL_ALPHABET.length; index += 1) {
-  BASE64URL_INDEX[BASE64URL_ALPHABET.charCodeAt(index)] = index;
-}
-
 const credentialState = new WeakMap();
 
 function requireBytes(value, context) {
@@ -61,72 +68,32 @@ function requireBytes(value, context) {
 }
 
 function encodeBase64Url(bytes) {
-  let encoded = "";
-  for (let offset = 0; offset < bytes.length; offset += 3) {
-    const remaining = bytes.length - offset;
-    const first = bytes[offset];
-    const second = remaining > 1 ? bytes[offset + 1] : 0;
-    const third = remaining > 2 ? bytes[offset + 2] : 0;
-    encoded += BASE64URL_ALPHABET[first >>> 2];
-    encoded += BASE64URL_ALPHABET[((first & 0x03) << 4) | (second >>> 4)];
-    if (remaining > 1) {
-      encoded += BASE64URL_ALPHABET[((second & 0x0f) << 2) | (third >>> 6)];
-    }
-    if (remaining > 2) {
-      encoded += BASE64URL_ALPHABET[third & 0x3f];
-    }
-  }
-  return encoded;
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString(
+    BASE64URL_ENCODING_V1,
+  );
 }
 
 function decodeCanonicalBase64Url(encoded) {
   if (typeof encoded !== "string") {
-    throw new TypeError("Bootle/Lantern issuance credential must be a string");
+    throw new TypeError(`${CREDENTIAL_CONTEXT_V1} must be a string`);
   }
   if (
     encoded.length === 0 ||
     encoded.length > MAX_ENCODED_CREDENTIAL_BYTES ||
     encoded.length % 4 === 1
   ) {
-    throw new TypeError(
-      "Bootle/Lantern issuance credential must be canonical unpadded base64url",
-    );
+    throw new TypeError(CANONICAL_CREDENTIAL_ERROR_V1);
   }
 
-  const decoded = new Uint8Array(Math.floor((encoded.length * 6) / 8));
-  let accumulator = 0;
-  let bits = 0;
-  let outputOffset = 0;
-  for (let index = 0; index < encoded.length; index += 1) {
-    const code = encoded.charCodeAt(index);
-    const value = code < BASE64URL_INDEX.length ? BASE64URL_INDEX[code] : -1;
-    if (value < 0) {
-      decoded.fill(0);
-      throw new TypeError(
-        "Bootle/Lantern issuance credential must be canonical unpadded base64url",
-      );
-    }
-    accumulator = (accumulator << 6) | value;
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      decoded[outputOffset] = (accumulator >>> bits) & 0xff;
-      outputOffset += 1;
-      accumulator &= (1 << bits) - 1;
-    }
-  }
+  const decoded = Buffer.from(encoded, BASE64URL_ENCODING_V1);
 
   if (
-    outputOffset !== decoded.length ||
-    accumulator !== 0 ||
     decoded.length === 0 ||
     decoded.length > BOOTLE_LANTERN_ISSUANCE_CREDENTIAL_MAX_BYTES_V1 ||
     encodeBase64Url(decoded) !== encoded
   ) {
     decoded.fill(0);
-    throw new TypeError(
-      "Bootle/Lantern issuance credential must be canonical unpadded base64url",
-    );
+    throw new TypeError(CANONICAL_CREDENTIAL_ERROR_V1);
   }
   return decoded;
 }
@@ -139,13 +106,13 @@ function decodeCanonicalBase64Url(encoded) {
  */
 export class BootleLanternIssuanceCredentialV1 {
   constructor(secret) {
-    const bytes = requireBytes(secret, "Bootle/Lantern issuance credential");
+    const bytes = requireBytes(secret, CREDENTIAL_CONTEXT_V1);
     if (
       bytes.length === 0 ||
       bytes.length > BOOTLE_LANTERN_ISSUANCE_CREDENTIAL_MAX_BYTES_V1
     ) {
       throw new RangeError(
-        `Bootle/Lantern issuance credential must contain 1..${BOOTLE_LANTERN_ISSUANCE_CREDENTIAL_MAX_BYTES_V1} bytes`,
+        `${CREDENTIAL_CONTEXT_V1} must contain 1..${BOOTLE_LANTERN_ISSUANCE_CREDENTIAL_MAX_BYTES_V1} bytes`,
       );
     }
     credentialState.set(this, { bytes: Uint8Array.from(bytes), destroyed: false });
@@ -190,7 +157,7 @@ function authorizationHeaderValue(credential) {
   }
   const state = credentialState.get(credential);
   if (!state || state.destroyed) {
-    throw new TypeError("Bootle/Lantern issuance credential has been destroyed");
+    throw new TypeError(`${CREDENTIAL_CONTEXT_V1} has been destroyed`);
   }
   return `Bearer ${encodeBase64Url(state.bytes)}`;
 }
@@ -206,13 +173,20 @@ export class BootleLanternIssuanceClientErrorV1 extends Error {
   }
 }
 
+function clientError(operation, detail, options) {
+  return new BootleLanternIssuanceClientErrorV1(
+    `${operation} ${detail}`,
+    options,
+  );
+}
+
 function validateBaseUrl(value) {
   let url;
   try {
     url = value instanceof URL ? new URL(value.href) : new URL(value);
   } catch {
     throw new TypeError(
-      "Bootle/Lantern issuance requires an absolute HTTPS base URL",
+      `${ISSUANCE_CONTEXT_V1} requires an absolute HTTPS base URL`,
     );
   }
   if (
@@ -227,7 +201,7 @@ function validateBaseUrl(value) {
     (url.pathname !== "" && url.pathname !== "/")
   ) {
     throw new TypeError(
-      "Bootle/Lantern issuance requires an origin-only HTTPS base URL",
+      `${ISSUANCE_CONTEXT_V1} requires an origin-only HTTPS base URL`,
     );
   }
   return url.origin;
@@ -237,26 +211,19 @@ function headerValues(headers, name) {
   if (!headers) {
     return [];
   }
-  if (typeof headers.raw === "function") {
-    const raw = headers.raw();
-    for (const [candidate, values] of Object.entries(raw)) {
-      if (candidate.toLowerCase() === name.toLowerCase()) {
-        return Array.isArray(values) ? values.map(String) : [String(values)];
-      }
-    }
-    return [];
-  }
-  if (typeof headers.getAll === "function") {
+  if (typeof headers.getAll === FUNCTION_TYPE) {
     const values = headers.getAll(name);
     return Array.from(values ?? [], String);
   }
-  if (typeof headers.get === "function") {
+  if (typeof headers.get === FUNCTION_TYPE) {
     const value = headers.get(name);
     return value === null || value === undefined ? [] : [String(value)];
   }
+  const record = typeof headers.raw === FUNCTION_TYPE ? headers.raw() : headers;
+  const normalizedName = name.toLowerCase();
   const values = [];
-  for (const [candidate, value] of Object.entries(headers)) {
-    if (candidate.toLowerCase() === name.toLowerCase()) {
+  for (const [candidate, value] of Object.entries(record)) {
+    if (candidate.toLowerCase() === normalizedName) {
       if (Array.isArray(value)) {
         values.push(...value.map(String));
       } else {
@@ -267,120 +234,118 @@ function headerValues(headers, name) {
   return values;
 }
 
-function validateResponseHeaders(response, operation, expectedBytes) {
-  const contentTypes = headerValues(response.headers, "Content-Type");
-  if (
-    contentTypes.length !== 1 ||
-    contentTypes[0] !== BOOTLE_LANTERN_ISSUANCE_MEDIA_TYPE_V1
-  ) {
-    throw new BootleLanternIssuanceClientErrorV1(
-      `${operation} response Content-Type must be exactly ${BOOTLE_LANTERN_ISSUANCE_MEDIA_TYPE_V1}`,
+function validateResponseHeaders(response, operation, expectedBytes, error = false) {
+  const status = response.status;
+  const mediaType =
+    error && status === 406
+      ? JSON_MEDIA_TYPE_V1
+      : BOOTLE_LANTERN_ISSUANCE_MEDIA_TYPE_V1;
+  const contentTypes = headerValues(response.headers, CONTENT_TYPE_HEADER_V1);
+  if (contentTypes.length !== 1 || contentTypes[0] !== mediaType) {
+    throw clientError(
+      operation,
+      error
+        ? "error response Content-Type is invalid"
+        : `response Content-Type must be exactly ${mediaType}`,
     );
   }
   if (headerValues(response.headers, "Content-Encoding").length !== 0) {
-    throw new BootleLanternIssuanceClientErrorV1(
-      `${operation} response must not contain Content-Encoding`,
+    throw clientError(
+      operation,
+      `${error ? "error response" : "response"} must not contain Content-Encoding`,
     );
   }
-  if (headerValues(response.headers, "WWW-Authenticate").length !== 0) {
-    throw new BootleLanternIssuanceClientErrorV1(
-      `${operation} response contains an unexpected WWW-Authenticate`,
-    );
-  }
-  const lengths = headerValues(response.headers, "Content-Length");
-  if (lengths.length === 0) {
-    return;
-  }
-  const value = lengths[0];
-  if (
-    lengths.length !== 1 ||
-    value !== String(expectedBytes)
-  ) {
-    throw new BootleLanternIssuanceClientErrorV1(
-      `${operation} response Content-Length must be canonical and exact`,
-    );
-  }
-}
-
-function validateErrorResponseHeaders(response, contract, bodyBytes, operation) {
-  const contentTypes = headerValues(response.headers, "Content-Type");
-  if (contentTypes.length !== 1 || contentTypes[0] !== contract.mediaType) {
-    throw new BootleLanternIssuanceClientErrorV1(
-      `${operation} error response Content-Type is invalid`,
-    );
-  }
-  if (headerValues(response.headers, "Content-Encoding").length !== 0) {
-    throw new BootleLanternIssuanceClientErrorV1(
-      `${operation} error response must not contain Content-Encoding`,
-    );
-  }
-  const lengths = headerValues(response.headers, "Content-Length");
-  if (lengths.length !== 0 && (lengths.length !== 1 || lengths[0] !== String(bodyBytes))) {
-    throw new BootleLanternIssuanceClientErrorV1(
-      `${operation} error response Content-Length is invalid`,
-    );
-  }
-  const retryAfter = headerValues(response.headers, "Retry-After");
-  if (contract.retryAfterSeconds === 1) {
-    if (retryAfter.length !== 1 || retryAfter[0] !== "1") {
-      throw new BootleLanternIssuanceClientErrorV1(
-        `${operation} error response Retry-After is invalid`,
+  if (!error) {
+    if (headerValues(response.headers, WWW_AUTHENTICATE_HEADER_V1).length !== 0) {
+      throw clientError(
+        operation,
+        "response contains an unexpected WWW-Authenticate",
       );
     }
-  } else if (retryAfter.length !== 0) {
-    throw new BootleLanternIssuanceClientErrorV1(
-      `${operation} error response contains an unexpected Retry-After`,
+  }
+  const lengths = headerValues(response.headers, "Content-Length");
+  if (
+    lengths.length !== 0 &&
+    (lengths.length !== 1 || lengths[0] !== String(expectedBytes))
+  ) {
+    throw clientError(
+      operation,
+      error
+        ? "error response Content-Length is invalid"
+        : "response Content-Length must be canonical and exact",
     );
   }
-  const wwwAuthenticate = headerValues(response.headers, "WWW-Authenticate");
-  if (contract.wwwAuthenticate === WWW_AUTHENTICATE_VALUE_V1) {
+  if (!error) {
+    return;
+  }
+  const retryAfter = headerValues(response.headers, "Retry-After");
+  if (status === 429) {
+    if (retryAfter.length !== 1 || retryAfter[0] !== "1") {
+      throw clientError(operation, "error response Retry-After is invalid");
+    }
+  } else if (retryAfter.length !== 0) {
+    throw clientError(
+      operation,
+      "error response contains an unexpected Retry-After",
+    );
+  }
+  const wwwAuthenticate = headerValues(response.headers, WWW_AUTHENTICATE_HEADER_V1);
+  if (status === 401) {
     if (
       wwwAuthenticate.length !== 1 ||
       wwwAuthenticate[0] !== WWW_AUTHENTICATE_VALUE_V1
     ) {
-      throw new BootleLanternIssuanceClientErrorV1(
-        `${operation} error response WWW-Authenticate is invalid`,
+      throw clientError(
+        operation,
+        "error response WWW-Authenticate is invalid",
       );
     }
   } else if (wwwAuthenticate.length !== 0) {
-    throw new BootleLanternIssuanceClientErrorV1(
-      `${operation} error response contains an unexpected WWW-Authenticate`,
+    throw clientError(
+      operation,
+      "error response contains an unexpected WWW-Authenticate",
     );
   }
 }
 
 function hasExactMagic(bytes, expectedMagic, offset = 0) {
-  return expectedMagic.every(
-    (byte, index) => bytes[offset + index] === byte,
-  );
+  for (let index = 0; index < 4; index += 1) {
+    if (bytes[offset + index] !== expectedMagic.charCodeAt(index)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function requireCanonicalRequestHeaderGuard(target, headers, operation) {
   let probe;
   try {
-    probe = new Request(target, { method: "POST", headers });
+    probe = new Request(target, { method: POST_METHOD_V1, headers });
   } catch {
-    throw new BootleLanternIssuanceClientErrorV1(
-      `${operation} transport cannot enforce canonical request headers`,
+    throw clientError(
+      operation,
+      REQUEST_HEADER_GUARD_ERROR_V1,
     );
   }
   for (const [name, expected] of Object.entries(headers)) {
     if (probe.headers.get(name) !== expected) {
-      throw new BootleLanternIssuanceClientErrorV1(
-        `${operation} transport cannot enforce canonical request headers`,
+      throw clientError(
+        operation,
+        REQUEST_HEADER_GUARD_ERROR_V1,
       );
     }
   }
 }
 
-async function readExactBody(response, expectedBytes, operation) {
+async function readResponseBody(response, byteLimit, operation, exact) {
   const reader = response.body?.getReader?.();
   if (!reader) {
-    throw new BootleLanternIssuanceClientErrorV1(
-      `${operation} response body is not a bounded byte stream`,
+    throw clientError(
+      operation,
+      "response body is not a bounded byte stream",
     );
   }
-  const result = new Uint8Array(expectedBytes);
+  const result = new Uint8Array(byteLimit);
   let offset = 0;
   try {
     for (;;) {
@@ -389,69 +354,35 @@ async function readExactBody(response, expectedBytes, operation) {
         break;
       }
       const bytes = requireBytes(chunk.value, `${operation} response chunk`);
-      if (offset + bytes.length > expectedBytes) {
-        throw new BootleLanternIssuanceClientErrorV1(
-          `${operation} response must be exactly ${expectedBytes} bytes`,
+      if (offset + bytes.length > byteLimit) {
+        throw clientError(
+          operation,
+          exact
+            ? `response must be exactly ${byteLimit} bytes`
+            : "error response exceeds its byte bound",
         );
       }
       result.set(bytes, offset);
       offset += bytes.length;
     }
+    if (exact ? offset !== byteLimit : offset === 0) {
+      const detail = exact
+        ? `response must be exactly ${byteLimit} bytes`
+        : "error response body is empty";
+      throw clientError(operation, detail);
+    }
+    if (exact) {
+      return result;
+    }
+    const bounded = result.slice(0, offset);
+    result.fill(0);
+    return bounded;
   } catch (error) {
     result.fill(0);
     throw error;
   } finally {
     reader.releaseLock?.();
   }
-  if (offset !== expectedBytes) {
-    result.fill(0);
-    throw new BootleLanternIssuanceClientErrorV1(
-      `${operation} response must be exactly ${expectedBytes} bytes`,
-    );
-  }
-  return result;
-}
-
-async function readBoundedBody(response, maximumBytes, operation) {
-  const reader = response.body?.getReader?.();
-  if (!reader) {
-    throw new BootleLanternIssuanceClientErrorV1(
-      `${operation} response body is not a bounded byte stream`,
-    );
-  }
-  const chunks = [];
-  let length = 0;
-  try {
-    for (;;) {
-      const chunk = await reader.read();
-      if (chunk.done) {
-        break;
-      }
-      const bytes = requireBytes(chunk.value, `${operation} response chunk`);
-      if (length + bytes.length > maximumBytes) {
-        throw new BootleLanternIssuanceClientErrorV1(
-          `${operation} error response exceeds its byte bound`,
-        );
-      }
-      chunks.push(Uint8Array.from(bytes));
-      length += bytes.length;
-    }
-  } finally {
-    reader.releaseLock?.();
-  }
-  if (length === 0) {
-    throw new BootleLanternIssuanceClientErrorV1(
-      `${operation} error response body is empty`,
-    );
-  }
-  const result = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) {
-    result.set(chunk, offset);
-    offset += chunk.length;
-    chunk.fill(0);
-  }
-  return result;
 }
 
 function readCompactLength(payload, state) {
@@ -476,20 +407,7 @@ function readCompactLength(payload, state) {
   }
 }
 
-function readNoritoString(payload, state) {
-  const length = readCompactLength(payload, state);
-  const end = state.offset + length;
-  if (end > payload.length) {
-    throw new Error("truncated string");
-  }
-  const value = new TextDecoder("utf-8", { fatal: true }).decode(
-    payload.subarray(state.offset, end),
-  );
-  state.offset = end;
-  return value;
-}
-
-function readNoritoField(payload, state) {
+function readNoritoField(payload, state, decodeString = false) {
   const length = readCompactLength(payload, state);
   const end = state.offset + length;
   if (end > payload.length) {
@@ -497,22 +415,26 @@ function readNoritoField(payload, state) {
   }
   const field = payload.subarray(state.offset, end);
   state.offset = end;
-  return field;
-}
-
-function readNoritoStringField(payload, state) {
-  const field = readNoritoField(payload, state);
+  if (!decodeString) {
+    return field;
+  }
   const fieldState = { offset: 0 };
-  const value = readNoritoString(field, fieldState);
-  if (fieldState.offset !== field.length) {
+  const stringLength = readCompactLength(field, fieldState);
+  const stringEnd = fieldState.offset + stringLength;
+  if (stringEnd > field.length) {
+    throw new Error("truncated string");
+  }
+  if (stringEnd !== field.length) {
     throw new Error("trailing bytes in error-envelope string field");
   }
-  return value;
+  return new TextDecoder("utf-8", { fatal: true }).decode(
+    field.subarray(fieldState.offset, stringEnd),
+  );
 }
 
 function decodeCanonicalNoritoErrorEnvelope(body) {
   const frame = validateNoritoFrame(body, {
-    context: "Bootle/Lantern issuance error envelope",
+    context: `${ISSUANCE_CONTEXT_V1} error envelope`,
     expectedTypeName: ERROR_ENVELOPE_TYPE_NAME_V1,
     expectedPaddingLength: 0,
     requireNonEmptyPayload: true,
@@ -521,8 +443,8 @@ function decodeCanonicalNoritoErrorEnvelope(body) {
     throw new Error("non-canonical error envelope flags");
   }
   const state = { offset: 0 };
-  const code = readNoritoStringField(frame.payload, state);
-  const message = readNoritoStringField(frame.payload, state);
+  const code = readNoritoField(frame.payload, state, true);
+  const message = readNoritoField(frame.payload, state, true);
   const details = readNoritoField(frame.payload, state);
   if (details.length !== 1 || details[0] !== 0) {
     throw new Error("error details must be absent");
@@ -538,56 +460,53 @@ function decodeCanonicalJsonErrorEnvelope(body, expectedCode) {
     `{"code":"${expectedCode}","message":"${expectedCode}"}`,
   );
   if (body.length !== expected.length) {
-    throw new Error("non-canonical JSON error envelope");
+    throw new Error(NONCANONICAL_JSON_ERROR_V1);
   }
   for (let index = 0; index < expected.length; index += 1) {
     if (body[index] !== expected[index]) {
-      throw new Error("non-canonical JSON error envelope");
+      throw new Error(NONCANONICAL_JSON_ERROR_V1);
     }
   }
-  const decoded = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
-  return decoded;
+  return { code: expectedCode, message: expectedCode };
 }
 
 async function decodeErrorResponse(response, operation) {
-  const contract = ERROR_CONTRACT_V1[response.status];
-  if (!contract) {
-    throw new BootleLanternIssuanceClientErrorV1(
-      `${operation} returned an unsupported error response`,
-    );
+  const code = ERROR_CODE_BY_STATUS_V1[response.status];
+  if (!code) {
+    throw clientError(operation, "returned an unsupported error response");
   }
-  const body = await readBoundedBody(
+  const body = await readResponseBody(
     response,
     BOOTLE_LANTERN_ISSUANCE_ERROR_RESPONSE_MAX_BYTES_V1,
     operation,
+    false,
   );
   try {
-    validateErrorResponseHeaders(response, contract, body.length, operation);
+    validateResponseHeaders(response, operation, body.length, true);
     const envelope = response.status === 406
-      ? decodeCanonicalJsonErrorEnvelope(body, contract.code)
+      ? decodeCanonicalJsonErrorEnvelope(body, code)
       : decodeCanonicalNoritoErrorEnvelope(body);
     if (
-      envelope.code !== contract.code ||
-      envelope.message !== contract.code ||
+      envelope.code !== code ||
+      envelope.message !== code ||
       Object.hasOwn(envelope, "details")
     ) {
       throw new Error("error envelope does not match its HTTP status");
     }
-    return new BootleLanternIssuanceClientErrorV1(
-      `${operation} returned HTTP ${response.status}: ${contract.code}`,
+    return clientError(
+      operation,
+      `returned HTTP ${response.status}: ${code}`,
       {
         status: response.status,
-        code: contract.code,
-        retryAfterSeconds: contract.retryAfterSeconds ?? null,
+        code,
+        retryAfterSeconds: response.status === 429 ? 1 : null,
       },
     );
   } catch (error) {
     if (error instanceof BootleLanternIssuanceClientErrorV1) {
       throw error;
     }
-    throw new BootleLanternIssuanceClientErrorV1(
-      `${operation} returned an invalid error response`,
-    );
+    throw clientError(operation, "returned an invalid error response");
   } finally {
     body.fill(0);
   }
@@ -603,8 +522,8 @@ export class BootleLanternIssuanceClientV1 {
 
   constructor({ baseUrl, fetch: fetchImplementation = globalThis.fetch } = {}) {
     this.#baseUrl = validateBaseUrl(baseUrl);
-    if (typeof fetchImplementation !== "function") {
-      throw new TypeError("Bootle/Lantern issuance requires a fetch implementation");
+    if (typeof fetchImplementation !== FUNCTION_TYPE) {
+      throw new TypeError(`${ISSUANCE_CONTEXT_V1} requires a fetch implementation`);
     }
     this.#fetch = fetchImplementation;
   }
@@ -612,7 +531,7 @@ export class BootleLanternIssuanceClientV1 {
   /** Requests one exact 320-byte `ILA1` authorization. */
   async authorize(credential) {
     return this.#executeExact(
-      "Bootle/Lantern issuance authorization",
+      `${ISSUANCE_CONTEXT_V1} authorization`,
       BOOTLE_LANTERN_ISSUANCE_AUTHORIZE_PATH_V1,
       credential,
       new Uint8Array(0),
@@ -666,50 +585,45 @@ export class BootleLanternIssuanceClientV1 {
     const target = `${this.#baseUrl}${path}`;
     const headers = {
       Authorization: authorization,
-      "Content-Type": BOOTLE_LANTERN_ISSUANCE_MEDIA_TYPE_V1,
+      [CONTENT_TYPE_HEADER_V1]: BOOTLE_LANTERN_ISSUANCE_MEDIA_TYPE_V1,
       Accept: BOOTLE_LANTERN_ISSUANCE_MEDIA_TYPE_V1,
       "Accept-Encoding": "identity",
-      "Cache-Control": "no-store",
+      "Cache-Control": NO_STORE_V1,
       Pragma: "no-cache",
     };
     requireCanonicalRequestHeaderGuard(target, headers, operation);
     let response;
     try {
       response = await this.#fetch(target, {
-        method: "POST",
+        method: POST_METHOD_V1,
         headers,
         body,
         redirect: "manual",
-        cache: "no-store",
+        cache: NO_STORE_V1,
         credentials: "omit",
       });
     } catch {
-      throw new BootleLanternIssuanceClientErrorV1(`${operation} request failed`);
+      throw clientError(operation, "request failed");
     }
 
     try {
       if (!response || typeof response.status !== "number") {
-        throw new BootleLanternIssuanceClientErrorV1(
-          `${operation} response is invalid`,
-        );
+        throw clientError(operation, INVALID_RESPONSE_ERROR_V1);
       }
       if (response.redirected === true || response.type === "opaqueredirect") {
-        throw new BootleLanternIssuanceClientErrorV1(
-          `${operation} response redirected`,
-        );
+        throw clientError(operation, "response redirected");
       }
       if (response.url) {
         let responseUrl;
         try {
           responseUrl = new URL(response.url).href;
         } catch {
-          throw new BootleLanternIssuanceClientErrorV1(
-            `${operation} response URL is invalid`,
-          );
+          throw clientError(operation, "response URL is invalid");
         }
         if (responseUrl !== new URL(target).href) {
-          throw new BootleLanternIssuanceClientErrorV1(
-            `${operation} response URL does not match the request`,
+          throw clientError(
+            operation,
+            "response URL does not match the request",
           );
         }
       }
@@ -717,12 +631,15 @@ export class BootleLanternIssuanceClientV1 {
         throw await decodeErrorResponse(response, operation);
       }
       validateResponseHeaders(response, operation, expectedBytes);
-      const result = await readExactBody(response, expectedBytes, operation);
+      const result = await readResponseBody(
+        response,
+        expectedBytes,
+        operation,
+        true,
+      );
       if (!hasExactMagic(result, expectedMagic)) {
         result.fill(0);
-        throw new BootleLanternIssuanceClientErrorV1(
-          `${operation} response wire magic is invalid`,
-        );
+        throw clientError(operation, "response wire magic is invalid");
       }
       return result;
     } catch (error) {
@@ -734,10 +651,10 @@ export class BootleLanternIssuanceClientV1 {
       if (error instanceof BootleLanternIssuanceClientErrorV1) {
         throw error;
       }
-      throw new BootleLanternIssuanceClientErrorV1(
-        `${operation} response is invalid`,
-      );
+      throw clientError(operation, INVALID_RESPONSE_ERROR_V1);
     }
   }
 }
+import { Buffer } from "buffer";
+
 import { validateNoritoFrame } from "./norito.js";

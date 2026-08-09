@@ -43,7 +43,8 @@ def _fixture(
     gate_mode: str = "pass",
     drift_after: int = 0,
     checker_status: int = 0,
-    cross_tool_required: bool = False,
+    trace_writer_status: int = 0,
+    cross_tool_required: bool = True,
     emit_cross_tool: bool | None = None,
     skip_artifact: str | None = None,
 ) -> tuple[Path, dict[str, str], Path]:
@@ -155,6 +156,19 @@ case "${{1:-}}" in
         fi
         exit 0
         ;;
+      *" --write-production-trace-extraction-evidence "*)
+        if [[ "$FORMAL_TRACE_WRITER_STATUS" != 0 ]]; then
+          printf '%s\n' \
+            'production trace-extraction theorem missing authenticated binding ready_authorization' \
+            >&2
+          exit "$FORMAL_TRACE_WRITER_STATUS"
+        fi
+        output="${{@: -1}}"
+        printf '%s\n' \
+          '{{"backend_verification":true,"canonical_encoding":"utf8-json-sort-keys-compact-lf-v1","certificate_type":"production_trace_extraction_theorem","schema_version":2,"theorem":"sumeragi-v2-production-in-flight-first-release-trace-extraction"}}' \
+          >"$output"
+        exit 0
+        ;;
     esac
     if [[ "$FORMAL_CROSS_TOOL_REQUIRED" == 1 ]]; then
       [[ " $* " == *" --verus-evidence "* ]] || exit 86
@@ -164,6 +178,10 @@ case "${{1:-}}" in
       [[ " $* " == *" --verus-evidence "* ]] || exit 88
       [[ " $* " == *" --verus-log "* ]] || exit 90
       [[ " $* " != *" --cross-tool-evidence "* ]] || exit 89
+    fi
+    if [[ " $* " == *" --production-trace-extraction-evidence "* ]]; then
+      certificate="${{@: -1}}"
+      [[ -f "$certificate" && ! -L "$certificate" ]] || exit 91
     fi
     exit "$FORMAL_CHECKER_STATUS"
     ;;
@@ -191,6 +209,7 @@ esac
     env["FORMAL_IDENTITY_COUNTER"] = str(counter)
     env["FORMAL_DRIFT_AFTER"] = str(drift_after)
     env["FORMAL_CHECKER_STATUS"] = str(checker_status)
+    env["FORMAL_TRACE_WRITER_STATUS"] = str(trace_writer_status)
     env["FORMAL_CROSS_TOOL_REQUIRED"] = "1" if cross_tool_required else "0"
     env["FORMAL_EMIT_CROSS_TOOL"] = "1" if emit_cross_tool else "0"
     env["FORMAL_SKIP_ARTIFACT"] = skip_artifact or ""
@@ -234,7 +253,7 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def test_formal_launcher_publishes_complete_source_bound_archive(
+def test_formal_launcher_publishes_authenticated_source_bound_completion(
     tmp_path: Path,
 ) -> None:
     launcher, env, evidence = _fixture(tmp_path)
@@ -247,6 +266,7 @@ def test_formal_launcher_publishes_complete_source_bound_archive(
     invocation = _invocation(evidence)
     completion = invocation / "COMPLETED.tsv"
     fields = _fields(completion)
+    assert fields["schema_version"] == "2"
     assert fields["head_commit"] == HEAD
     assert fields["head_tree"] == TREE
     assert fields["source_manifest_sha256"] == MANIFEST
@@ -265,8 +285,12 @@ def test_formal_launcher_publishes_complete_source_bound_archive(
     assert fields["multilane_apalache_evidence_sha256"] == _sha256(
         invocation / "multilane_apalache_evidence.tsv"
     )
-    assert "cross_tool_evidence_sha256" not in fields
-    assert not (invocation / "cross_tool_evidence.json").exists()
+    assert fields["cross_tool_evidence_sha256"] == _sha256(
+        invocation / "cross_tool_evidence.json"
+    )
+    assert fields["production_trace_extraction_evidence_sha256"] == _sha256(
+        invocation / "production_trace_extraction_evidence.json"
+    )
     assert fields["harness_cargo_lock_sha256"] == _sha256(
         invocation / "harness-Cargo.lock"
     )
@@ -303,6 +327,20 @@ def test_formal_launcher_archives_required_cross_tool_evidence(
     ] == _sha256(cross_tool)
 
 
+def test_formal_launcher_refuses_completion_when_trace_theorem_is_missing(
+    tmp_path: Path,
+) -> None:
+    launcher, env, evidence = _fixture(tmp_path, trace_writer_status=92)
+
+    result = _run(launcher, env)
+
+    assert result.returncode == 92
+    assert "missing authenticated binding ready_authorization" in result.stderr
+    invocation = _invocation(evidence)
+    assert not (invocation / "production_trace_extraction_evidence.json").exists()
+    assert not (invocation / "COMPLETED.tsv").exists()
+
+
 def test_formal_launcher_rejects_missing_required_cross_tool_evidence(
     tmp_path: Path,
 ) -> None:
@@ -320,7 +358,9 @@ def test_formal_launcher_rejects_missing_required_cross_tool_evidence(
 def test_formal_launcher_rejects_cross_tool_evidence_while_dormant(
     tmp_path: Path,
 ) -> None:
-    launcher, env, evidence = _fixture(tmp_path, emit_cross_tool=True)
+    launcher, env, evidence = _fixture(
+        tmp_path, cross_tool_required=False, emit_cross_tool=True
+    )
 
     result = _run(launcher, env)
 

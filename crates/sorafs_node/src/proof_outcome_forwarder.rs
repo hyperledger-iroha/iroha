@@ -389,8 +389,9 @@ pub struct ProofOutcomeOutbox {
 }
 
 impl ProofOutcomeOutbox {
-    /// Construct a non-persistent outbox for focused composition tests.
-    pub fn in_memory(policy: ProofOutcomeOutboxPolicyV1) -> Result<Self, ProofOutcomeOutboxError> {
+    /// Construct a bounded non-persistent outbox for unit tests.
+    #[cfg(test)]
+    fn in_memory(policy: ProofOutcomeOutboxPolicyV1) -> Result<Self, ProofOutcomeOutboxError> {
         policy.validate()?;
         Ok(Self {
             policy,

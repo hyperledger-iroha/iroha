@@ -1284,6 +1284,107 @@ def test_transport_geometry_source_fidelity_rejects_short_exact_progress_bound(
 
 
 @pytest.mark.parametrize(
+    ("item_name", "old", "new", "expected_error"),
+    (
+        (
+            "configure_roster_for_context",
+            ".max(required_lane_progress_frame_bytes)\n"
+            "                .max(crate::MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES);",
+            ".max(required_lane_progress_frame_bytes);",
+            "consensus frame geometry must include the exact Kura replica-advert network ceiling",
+        ),
+        (
+            "configure_roster_for_context",
+            ".max(MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES)\n"
+            "                .max(crate::MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES),",
+            ".max(MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES),",
+            "ordinary source geometry must include the exact Kura replica-advert network ceiling",
+        ),
+        (
+            "try_recv_if_at_checked",
+            "FairV2IngressBarrierBypass::None,",
+            "FairV2IngressBarrierBypass::TimeoutVoteEpisode,",
+            "ordinary timestamped ingress must delegate with no barrier bypass",
+        ),
+    ),
+)
+def test_transport_geometry_reviewed_ingress_items_survive_digest_refresh(
+    tmp_path: Path,
+    item_name: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Reviewed Kura geometry and ordinary selection survive an item reseal."""
+
+    module = load_checker()
+    formal_names = tuple(
+        dict.fromkeys(
+            (
+                "SumeragiV2AsyncNetwork.tla",
+                *module._TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256,
+                *module._TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256,
+            )
+        )
+    )
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path, module, *formal_names
+    )
+    repo_root = formal_dir.parents[2]
+    core_path = repo_root / "crates/iroha_core/src/sumeragi/mod.rs"
+    mutate_rust_item_source_in_context(
+        module,
+        core_path,
+        item_name,
+        (("impl", "FairV2Ingress"),),
+        old,
+        new,
+    )
+    item = next(
+        candidate
+        for candidate in module.rust_items(
+            core_path.read_text(encoding="utf-8"), item_name
+        )
+        if candidate.brace_context == (("impl", "FairV2Ingress"),)
+    )
+    digest = module._rust_item_token_sha256(item)
+    module._PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256[item_name] = digest
+    if item_name == "try_recv_if_at_checked":
+        module._LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256[item_name] = digest
+        module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256[
+            f"ingress::{item_name}"
+        ] = digest
+
+    geometry_errors = (
+        module._transport_geometry_production_source_fidelity_errors(repo_root)
+    )
+    assert any(
+        expected_error in error and "exact reviewed token digest" not in error
+        for error in geometry_errors
+    ), geometry_errors
+    if item_name == "try_recv_if_at_checked":
+        leader_errors = (
+            module._leader_wire_physical_ingress_production_source_fidelity_errors(
+                repo_root
+            )
+        )
+        timeout_errors = module._timeout_vote_episode_source_fidelity_errors(
+            repo_root, formal_dir
+        )
+        assert any(
+            expected_error in error
+            and "exact reviewed token digest" not in error
+            for error in leader_errors
+        ), leader_errors
+        assert any(
+            "ordinary timestamped ingress must pass "
+            "FairV2IngressBarrierBypass::None" in error
+            and "exact reviewed token digest" not in error
+            for error in timeout_errors
+        ), timeout_errors
+
+
+@pytest.mark.parametrize(
     ("item_name", "context", "old", "new", "expected_error"),
     (
         (
@@ -1303,7 +1404,7 @@ def test_transport_geometry_source_fidelity_rejects_short_exact_progress_bound(
             "roster-origin premise for completion relayed through any authenticated hop",
         ),
         (
-            "try_recv_if_at_checked",
+            "try_recv_if_at_checked_classified",
             (("impl", "FairV2Ingress"),),
             "if entry.class == FairV2IngressClass::TransportCompletion {",
             "if false && entry.class == FairV2IngressClass::TransportCompletion {",
@@ -1616,3 +1717,70 @@ def test_transport_geometry_source_fidelity_rejects_cap_threading_mutants(
 
     errors = module._transport_geometry_production_source_fidelity_errors(repo_root)
     assert any(expected_error in error for error in errors), errors
+
+
+
+
+def test_exact_output_source_seals_reject_combined_ownership_mutations(
+    tmp_path: Path,
+) -> None:
+    """Keep refreshed physical, lane, Kura, and runner ownership fail-closed."""
+
+    module = load_checker()
+    sources = (
+        "crates/iroha_core/src/lib.rs",
+        "crates/iroha_core/src/merge_sidecar.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker/exact_output_rollover_claim.rs",
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "crates/iroha_core/src/sumeragi/mod.rs",
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "crates/iroha_core/src/sumeragi/v2_core.rs",
+        "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "crates/iroha_config/src/parameters/defaults.rs",
+        "crates/iroha_config/src/parameters/actual.rs",
+        "crates/iroha_config/src/parameters/user.rs",
+    )
+    for relative in sources:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+
+    mutations = (
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "runtime_physical_cut: Option<u128>,",
+            "runtime_physical_cut: Option<u64>,",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker/exact_output_rollover_claim.rs",
+            "HashOf::new(message) != message_hash",
+            "HashOf::new(message) == message_hash",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            ".schedule_retired_exact_output_heights(",
+            ".schedule_retired_exact_output_heights_unchecked(",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "certified_serve_ingress_binding.retire()?;",
+            "let _ = certified_serve_ingress_binding.retire();",
+        ),
+    )
+    for relative, old, new in mutations:
+        path = tmp_path / relative
+        source = path.read_text(encoding="utf-8")
+        assert old in source, (relative, old)
+        path.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+    errors = module._exact_output_production_source_fidelity_errors(tmp_path)
+    expected_fragments = (
+        "fair-ingress evidence must bind semantic occurrence history",
+        "exact-output claim validate_non_retireable_lane_transport_fanout",
+        "production handoff must pass exact lane and Kura authorities into retirement",
+        "every clean shutdown and finality path must retire the exact Serve ingress binding",
+    )
+    for fragment in expected_fragments:
+        assert any(fragment in error for error in errors), (fragment, errors)

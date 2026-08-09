@@ -49,8 +49,8 @@ impl std::error::Error for PopRuntimeStartupError {
 /// Build the `PoP` runtime from public config and one deployment-owned registry.
 ///
 /// The Torii constructor validates the exact configured provider handle,
-/// revision, policy digest, resolved HSM identity, enrollment-recipient public
-/// key digest, and wallet wrapping-key identity before opening durable service
+/// revision, policy digest, resolved HSM identity, both protected recipient
+/// identities, and wallet wrapping-key identity before opening durable service
 /// state. It also guards every resolved provider operation against
 /// qualification drift.
 ///
@@ -92,19 +92,20 @@ mod tests {
     use iroha_crypto::{Algorithm, HybridKeyPair, KeyPair};
     use iroha_torii::sorafs::pop_api::{
         PopCredentialRuntimeProviderBindingsV1, PopCredentialRuntimeProviderQualificationV1,
-        PopCredentialRuntimeProviderRegistryErrorV1, PopCredentialRuntimeSecretsV1,
+        PopCredentialRuntimeProviderRegistryErrorV1, PopCredentialRuntimeProvidersV1,
         PopFinalizedTimeProviderErrorV1, PopFinalizedTimeProviderV1, PopFinalizedTimeSampleV1,
         PopIssuanceDraftProviderV1, PopPrivateMaterialProviderErrorV1, PopWalletWitnessProviderV1,
     };
-    use rand::{
-        SeedableRng as _,
-        rngs::{OsRng, StdRng},
+    use rand::{SeedableRng as _, rngs::StdRng};
+    use sorafs_manifest::{
+        hybrid_envelope::{HybridPayloadEnvelopeV1, decrypt_payload},
+        pop_credentials::PopMembershipWitnessV1,
     };
-    use sorafs_manifest::pop_credentials::PopMembershipWitnessV1;
     use sorafs_node::pop_credentials::{
         PopAuthenticatedPrincipalV1, PopCredentialApiActionV1, PopCredentialApiAuthenticator,
-        PopFinalizedRegistryProjectionV1, PopFinalizedRegistryReader, PopIssuanceDraftV1,
-        PopIssuerHsm, PopRegistryOperationV1, PopRegistrySubmitter, PopWalletKeyWrapper,
+        PopEnrollmentRecipientV1, PopFinalizedRegistryProjectionV1, PopFinalizedRegistryReader,
+        PopIssuanceDraftV1, PopIssuerHsm, PopRecipientOpenErrorV1, PopRegistryOperationV1,
+        PopRegistrySubmitter, PopRequestAuthorityV1, PopWalletKeyWrapper, PopWalletRecipientV1,
         pop_enrollment_recipient_public_key_digest_v1,
     };
 
@@ -159,6 +160,60 @@ mod tests {
         }
     }
 
+    struct FixedRecipient {
+        key_id: String,
+        secret: iroha_crypto::HybridSecretKey,
+        public_key_digest: [u8; 32],
+    }
+
+    impl fmt::Debug for FixedRecipient {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("FixedRecipient")
+                .field("key_id", &self.key_id)
+                .field("private_key", &"[REDACTED]")
+                .finish()
+        }
+    }
+
+    impl PopEnrollmentRecipientV1 for FixedRecipient {
+        fn key_id(&self) -> &str {
+            &self.key_id
+        }
+
+        fn public_key_digest(&self) -> [u8; 32] {
+            self.public_key_digest
+        }
+
+        fn open_enrollment(
+            &self,
+            encrypted_payload: &HybridPayloadEnvelopeV1,
+            aad: &[u8],
+        ) -> Result<Vec<u8>, PopRecipientOpenErrorV1> {
+            decrypt_payload(encrypted_payload, aad, &self.secret)
+                .map_err(|_| PopRecipientOpenErrorV1::Rejected)
+        }
+    }
+
+    impl PopWalletRecipientV1 for FixedRecipient {
+        fn key_id(&self) -> &str {
+            &self.key_id
+        }
+
+        fn public_key_digest(&self) -> [u8; 32] {
+            self.public_key_digest
+        }
+
+        fn open_wallet_delivery(
+            &self,
+            encrypted_payload: &HybridPayloadEnvelopeV1,
+            aad: &[u8],
+        ) -> Result<Vec<u8>, PopRecipientOpenErrorV1> {
+            decrypt_payload(encrypted_payload, aad, &self.secret)
+                .map_err(|_| PopRecipientOpenErrorV1::Rejected)
+        }
+    }
+
     #[derive(Debug)]
     struct FixedAuthenticator;
 
@@ -173,6 +228,7 @@ mod tests {
             Ok(PopAuthenticatedPrincipalV1 {
                 principal_digest: [0x81; 32],
                 expires_at_epoch: 1_000,
+                request_authority: PopRequestAuthorityV1::CallerSignedTransaction,
             })
         }
     }
@@ -249,7 +305,7 @@ mod tests {
         stale_or_revoked: bool,
         drift_after_first_qualification: bool,
         qualification_calls: AtomicUsize,
-        secrets: Mutex<Option<PopCredentialRuntimeSecretsV1>>,
+        providers: Mutex<Option<PopCredentialRuntimeProvidersV1>>,
         observed_bindings: Mutex<Option<PopCredentialRuntimeProviderBindingsV1>>,
     }
 
@@ -292,14 +348,14 @@ mod tests {
         fn resolve(
             &self,
             bindings: &PopCredentialRuntimeProviderBindingsV1,
-        ) -> Result<PopCredentialRuntimeSecretsV1, PopCredentialRuntimeProviderRegistryErrorV1>
+        ) -> Result<PopCredentialRuntimeProvidersV1, PopCredentialRuntimeProviderRegistryErrorV1>
         {
             *self
                 .observed_bindings
                 .lock()
                 .map_err(|_| PopCredentialRuntimeProviderRegistryErrorV1::Unavailable)? =
                 Some(bindings.clone());
-            self.secrets
+            self.providers
                 .lock()
                 .map_err(|_| PopCredentialRuntimeProviderRegistryErrorV1::Unavailable)?
                 .take()
@@ -322,8 +378,14 @@ mod tests {
         HybridKeyPair::generate(&mut rng).expect("deterministic enrollment recipient key")
     }
 
+    fn wallet_recipient_key() -> HybridKeyPair {
+        let mut rng = StdRng::from_seed([0x32; 32]);
+        HybridKeyPair::generate(&mut rng).expect("deterministic wallet recipient key")
+    }
+
     fn service_config(root: &Path) -> SorafsPopCredentialService {
         let enrollment_recipient = enrollment_recipient_key();
+        let wallet_recipient = wallet_recipient_key();
         SorafsPopCredentialService {
             issuer_state_dir: root.join("issuer"),
             wallet_state_dir: root.join("wallet"),
@@ -334,6 +396,10 @@ mod tests {
             enrollment_recipient_key_id: "kms:pop/enrollment:primary".to_owned(),
             enrollment_recipient_public_key_digest: pop_enrollment_recipient_public_key_digest_v1(
                 enrollment_recipient.public(),
+            ),
+            wallet_recipient_key_id: "kms:pop/wallet-recipient:primary".to_owned(),
+            wallet_recipient_public_key_digest: pop_enrollment_recipient_public_key_digest_v1(
+                wallet_recipient.public(),
             ),
             wallet_wrapping_key_id: "kms:pop/wallet:primary".to_owned(),
             runtime_provider_registry_handle: "runtime:pop:providers:primary".to_owned(),
@@ -379,8 +445,7 @@ mod tests {
         drift_after_first_qualification: bool,
     ) -> Arc<TestProviderRegistry> {
         let enrollment_recipient = enrollment_recipient_key();
-        let mut rng = OsRng;
-        let wallet_recipient = HybridKeyPair::generate(&mut rng).expect("wallet recipient key");
+        let wallet_recipient = wallet_recipient_key();
         Arc::new(TestProviderRegistry {
             handle: handle.into(),
             revision,
@@ -388,8 +453,12 @@ mod tests {
             stale_or_revoked,
             drift_after_first_qualification,
             qualification_calls: AtomicUsize::new(0),
-            secrets: Mutex::new(Some(PopCredentialRuntimeSecretsV1 {
-                enrollment_recipient_secret: enrollment_recipient.secret().clone(),
+            providers: Mutex::new(Some(PopCredentialRuntimeProvidersV1 {
+                enrollment_recipient: Arc::new(FixedRecipient {
+                    key_id: config.enrollment_recipient_key_id.clone(),
+                    secret: enrollment_recipient.secret().clone(),
+                    public_key_digest: config.enrollment_recipient_public_key_digest,
+                }),
                 issuer_hsm: Arc::new(FixedIssuerHsm {
                     key_id: config.issuer_hsm_key_id.clone(),
                     public_key: config.issuer_public_key,
@@ -398,7 +467,11 @@ mod tests {
                 registry_submitter: Arc::new(NoopRegistrySubmitter),
                 registry_reader: Arc::new(EmptyRegistryReader),
                 issuance_draft_provider: Arc::new(UnavailableIssuanceDraftProvider),
-                wallet_recipient_secret: wallet_recipient.secret().clone(),
+                wallet_recipient: Arc::new(FixedRecipient {
+                    key_id: config.wallet_recipient_key_id.clone(),
+                    secret: wallet_recipient.secret().clone(),
+                    public_key_digest: config.wallet_recipient_public_key_digest,
+                }),
                 wallet_key_wrapper: Arc::new(FixedWalletKeyWrapper {
                     key_id: config.wallet_wrapping_key_id.clone(),
                 }),
@@ -501,6 +574,14 @@ mod tests {
         assert_eq!(
             observed.enrollment_recipient_public_key_digest(),
             config.enrollment_recipient_public_key_digest
+        );
+        assert_eq!(
+            observed.wallet_recipient_key_id(),
+            config.wallet_recipient_key_id
+        );
+        assert_eq!(
+            observed.wallet_recipient_public_key_digest(),
+            config.wallet_recipient_public_key_digest
         );
         assert_eq!(
             observed.wallet_wrapping_key_id(),

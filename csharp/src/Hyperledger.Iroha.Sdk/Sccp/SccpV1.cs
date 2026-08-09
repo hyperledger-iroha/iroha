@@ -1180,8 +1180,7 @@ public static class SccpV1
     {
         if (anchor.ProtocolVersion is < 3 or > 4 || anchor.CheckpointHeight == 0)
         {
-            throw new ArgumentException(
-                "SCCP finality anchor must bind protocol version 3 or 4 and a nonzero height.");
+            throw new ArgumentException("SCCP finality anchor must bind protocol version 3 or 4 and a nonzero height.");
         }
         foreach (var (value, name) in new[]
         {

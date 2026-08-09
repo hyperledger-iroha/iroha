@@ -19,7 +19,7 @@ groups:
         annotations:
           summary: "Appeal SLA miss rate above 5%"
           description: |
-            The rolling appeal SLA miss rate crossed 5% (value={{ printf "%.2f%%" (mul $value 100) }}). Review backlog + staffing before next publication.
+            The rolling appeal SLA miss rate crossed 5% (value={{ humanizePercentage $value }}). Review backlog + staffing before next publication.
       - alert: MinistryDpBudgetExhausted
         expr: min(ministry_transparency_dp_budget_remaining{environment="prod"}) < 0.1
         for: 5m
@@ -28,7 +28,7 @@ groups:
         annotations:
           summary: "DP budget nearly exhausted"
           description: |
-            Only {{ printf "%.1f%%" (mul $value 100) }} of the quarterly DP budget remains. Rotate salts or refresh the privacy plan before publishing.
+            Only {{ humanizePercentage $value }} of the quarterly DP budget remains. Rotate salts or refresh the privacy plan before publishing.
       - alert: MinistryEmergencyCanonQueue
         expr: sum(increase(ministry_transparency_denylist_emergency_total{environment="prod"}[30m])) > 0
         for: 30m

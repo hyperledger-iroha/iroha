@@ -9,7 +9,8 @@ Usage:
 Checks that the Iroha mobile SDK packaging surface is ready for wallet
 integration:
   - SwiftPM package manifest and NoritoBridge binary target exist.
-  - NoritoBridge.xcframework contains iOS device, iOS simulator, and macOS slices.
+  - NoritoBridge.xcframework contains iOS device plus universal iOS simulator
+    and macOS slices.
   - The canonical manifest is embedded in the XCFramework, and the public
     NoritoBridge.artifacts.json path is its stable relative symlink.
   - The manifest records per-slice SHA-256 hashes and the privacy-production
@@ -499,6 +500,14 @@ SORAFS_APPEAL_FINANCE_C_SYMBOLS=(
   connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json
 )
 
+PRIVACY_COMPILED_PROFILE_C_SYMBOLS=(
+  iroha_privacy_compiled_profile_catalog_v1
+  iroha_privacy_validate_compiled_profile_catalog_v1
+  iroha_privacy_exact12_fixture_bundle_v1
+  iroha_privacy_validate_exact12_fixture_bundle_v1
+  iroha_privacy_free_buffer
+)
+
 REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_bridge_abi_version
   connect_norito_free
@@ -511,11 +520,7 @@ REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_canonical_json_blake3_v1
   connect_norito_encode_account_onboarding_plan_body_v1
   connect_norito_alias_instruction_round_trip_v1
-  iroha_privacy_compiled_profile_catalog_v1
-  iroha_privacy_validate_compiled_profile_catalog_v1
-  iroha_privacy_exact12_fixture_bundle_v1
-  iroha_privacy_validate_exact12_fixture_bundle_v1
-  iroha_privacy_free_buffer
+  "${PRIVACY_COMPILED_PROFILE_C_SYMBOLS[@]}"
   connect_norito_sorafs_reference_validate_bundle_json
   connect_norito_sorafs_reference_validate_governance_json
   connect_norito_sorafs_reference_validate_governance_dag_block_json
@@ -526,8 +531,9 @@ REQUIRED_BRIDGE_SYMBOLS=(
   "${KAGEMUSHA_C_SYMBOLS[@]}"
 )
 
-# These process-global controls and fail-only compatibility entry points are
-# forbidden from every first-release Apple and Android native slice.
+# These process-global controls, retired privacy proof-construction exports,
+# and fail-only compatibility entry points are forbidden from every
+# first-release Apple and Android native slice.
 FORBIDDEN_MOBILE_BRIDGE_SYMBOLS=(
   connect_norito_get_chain_discriminant
   connect_norito_set_chain_discriminant
@@ -614,6 +620,19 @@ SORAFS_APPEAL_FINANCE_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateAppealFinanceCancelAssetLockJson
   Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeHasAppealFinanceSymbols
   Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateAppealFinanceCancelAssetLockJson
+)
+
+PRIVACY_COMPILED_PROFILE_JNI_SYMBOLS=(
+  Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeCompiledProfileCatalog
+  Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateCompiledProfileCatalog
+  Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeExact12FixtureBundle
+  Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateExact12FixtureBundle
+  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeCompiledProfileCatalog
+  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateCompiledProfileCatalog
+  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeExact12FixtureBundle
+  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateExact12FixtureBundle
 )
 
 NATIVE_SIGNER_JNI_CONTRACT_SYMBOLS=(
@@ -909,6 +928,7 @@ check_bridge_source_contract() {
   local bridge_header="$ROOT_DIR/crates/connect_norito_bridge/include/connect_norito_bridge.h"
   local privacy_protocol="$ROOT_DIR/crates/iroha_data_model/src/privacy/protocol.rs"
   local bridge_cargo="$ROOT_DIR/crates/connect_norito_bridge/Cargo.toml"
+  local canonical_abi_source="$ROOT_DIR/crates/iroha_data_model/src/privacy/protocol.rs"
 
   # Packaged artifacts can be checked outside a source checkout. When source is
   # present, however, refuse to certify a build whose callable Kagemusha ABI is
@@ -937,6 +957,11 @@ lab_separator = sys.argv.index("--lab")
 expected = set(sys.argv[shipping_separator + 1:lab_separator])
 expected_lab = set(sys.argv[lab_separator + 1:])
 text = open(path, "r", encoding="utf-8").read()
+try:
+    header_text = open(header_path, "r", encoding="utf-8").read()
+    canonical_abi_text = open(canonical_abi_path, "r", encoding="utf-8").read()
+except OSError:
+    header_text = canonical_abi_text = ""
 
 
 def rust_code_mask(source):
@@ -1691,6 +1716,7 @@ check_swift_package() {
   require_literal "$package" '.binaryTarget(' "NoritoBridge binary target declaration"
   require_literal "$package" 'name: "NoritoBridge"' "NoritoBridge binary target name"
   require_literal "$package" '.iOS(.v15)' "IrohaSwift iOS platform floor"
+  require_literal "$package" '.macOS(.v12)' "IrohaSwift macOS platform floor"
   require_literal "$package" '"MOBILE_SDK_APPLE_ARTIFACT_DIR"' "external NoritoBridge artifact directory input"
   require_literal "$package" 'path: bridgeTargetPath' "resolved NoritoBridge artifact path"
 }
@@ -1703,7 +1729,8 @@ check_xcframework() {
   local checked_in_swift_loader="$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
   local swift_loader="$checked_in_swift_loader"
   local privacy_marker="$xcframework/.privacy-production-enabled"
-  local slices=(ios-arm64 ios-arm64_x86_64-simulator macos-arm64)
+  local test_only_prebuilt_marker="$xcframework/.test-only-prebuilt-slices"
+  local slices=(ios-arm64 ios-arm64_x86_64-simulator macos-arm64_x86_64)
   local slice
 
   require_dir "$xcframework" "NoritoBridge XCFramework"
@@ -1727,6 +1754,77 @@ check_xcframework() {
       fi
     fi
   done
+  if ! run_isolated_checker_python - "$info" <<'PY'
+from pathlib import Path
+import plistlib
+import sys
+
+
+expected = {
+    "ios-arm64": {
+        "architectures": ["arm64"],
+        "platform": "ios",
+        "variant": None,
+    },
+    "ios-arm64_x86_64-simulator": {
+        "architectures": ["arm64", "x86_64"],
+        "platform": "ios",
+        "variant": "simulator",
+    },
+    "macos-arm64_x86_64": {
+        "architectures": ["arm64", "x86_64"],
+        "platform": "macos",
+        "variant": None,
+    },
+}
+try:
+    with Path(sys.argv[1]).open("rb") as handle:
+        payload = plistlib.load(handle)
+    libraries = payload.get("AvailableLibraries")
+    valid = (
+        isinstance(payload, dict)
+        and payload.get("CFBundlePackageType") == "XFWK"
+        and payload.get("XCFrameworkFormatVersion") == "1.0"
+        and isinstance(libraries, list)
+        and len(libraries) == len(expected)
+        and all(isinstance(library, dict) for library in libraries)
+    )
+    indexed = {
+        library.get("LibraryIdentifier"): library
+        for library in libraries
+    } if valid else {}
+    valid = valid and len(indexed) == len(libraries) and set(indexed) == set(expected)
+    if valid:
+        for identifier, contract in expected.items():
+            library = indexed[identifier]
+            valid = (
+                library.get("LibraryPath") == "libNoritoBridge.a"
+                and (
+                    "BinaryPath" not in library
+                    or library["BinaryPath"] == "libNoritoBridge.a"
+                )
+                and library.get("HeadersPath") == "Headers"
+                and library.get("SupportedArchitectures")
+                == contract["architectures"]
+                and library.get("SupportedPlatform") == contract["platform"]
+                and (
+                    (
+                        contract["variant"] is None
+                        and "SupportedPlatformVariant" not in library
+                    )
+                    or library.get("SupportedPlatformVariant")
+                    == contract["variant"]
+                )
+            )
+            if not valid:
+                break
+except (OSError, plistlib.InvalidFileException, TypeError, ValueError):
+    valid = False
+raise SystemExit(0 if valid else 1)
+PY
+  then
+    fail "NoritoBridge Info.plist does not declare the canonical universal Apple slices"
+  fi
 
   require_file "$embedded_manifest" "embedded NoritoBridge artifact manifest"
   require_file "$checked_in_swift_loader" "IrohaSwift native bridge loader"
@@ -1736,7 +1834,29 @@ check_xcframework() {
     fail "public NoritoBridge artifact manifest has a non-canonical symlink target"
   fi
   require_file "$manifest" "NoritoBridge artifact manifest"
+  if [[ -e "$test_only_prebuilt_marker" || -L "$test_only_prebuilt_marker" ]]; then
+    fail "NoritoBridge release artifact must not carry the test-only prebuilt-slices marker"
+  fi
   if [[ -f "$manifest" ]]; then
+    if ! run_isolated_checker_python - "$manifest" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+try:
+    payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, UnicodeError, ValueError):
+    # The canonical manifest parser below reports malformed input.
+    raise SystemExit(0)
+raise SystemExit(
+    1
+    if isinstance(payload, dict) and "test_only_prebuilt_slices" in payload
+    else 0
+)
+PY
+    then
+      fail "NoritoBridge release artifact manifest must not contain test_only_prebuilt_slices"
+    fi
     local prospective_validation="${MOBILE_SDK_STAGED_BUILD_VALIDATION:-0}"
     local prospective_loader="${MOBILE_SDK_PROSPECTIVE_SWIFT_LOADER_PATH:-}"
     if [[ "$prospective_validation" != "0" || -n "$prospective_loader" ]]; then
@@ -1882,6 +2002,18 @@ if (
 sha256 = re.compile(r"^[0-9a-f]{64}$")
 commit = re.compile(r"^[0-9a-f]{40}$")
 version = re.compile(r"^[0-9]+(?:\.[0-9]+){1,2}$")
+hashes = manifest.get("hashes")
+expected_hash_keys = {
+    "ios-arm64",
+    "ios-arm64_x86_64-simulator",
+    "macos-arm64_x86_64",
+}
+if (
+    not isinstance(hashes, dict)
+    or set(hashes) != expected_hash_keys
+    or any(not isinstance(value, str) or not sha256.fullmatch(value) for value in hashes.values())
+):
+    raise SystemExit(1)
 for field in (
     "hermetic_runner_sha256",
     "cargo_binary_sha256",
@@ -2176,12 +2308,12 @@ PY
       fi
       actual_arches="$(lipo -archs "$binary" 2>/dev/null || true)"
       case "$slice" in
-        ios-arm64|macos-arm64)
+        ios-arm64)
           if [[ "$actual_arches" != "arm64" ]]; then
             fail "NoritoBridge $slice architectures must be arm64 (found ${actual_arches:-unreadable})"
           fi
           ;;
-        ios-arm64_x86_64-simulator)
+        ios-arm64_x86_64-simulator|macos-arm64_x86_64)
           if [[ " $actual_arches " != *" arm64 "* \
             || " $actual_arches " != *" x86_64 "* \
             || "$(wc -w <<<"$actual_arches" | tr -d '[:space:]')" != "2" ]]; then
@@ -2295,6 +2427,7 @@ check_android_native_symbols() {
   local expected_jni=(
     "${VALIDATION_FEE_JNI_SYMBOLS[@]}"
     "${SORAFS_APPEAL_FINANCE_JNI_SYMBOLS[@]}"
+    "${PRIVACY_COMPILED_PROFILE_JNI_SYMBOLS[@]}"
     "${NATIVE_SIGNER_JNI_CONTRACT_SYMBOLS[@]}"
   )
 
@@ -2327,6 +2460,7 @@ check_android_native_symbols() {
   if ! run_isolated_checker_python - "$abi" \
     "${KAGEMUSHA_C_SYMBOLS[@]}" \
     "${SORAFS_APPEAL_FINANCE_C_SYMBOLS[@]}" \
+    "${PRIVACY_COMPILED_PROFILE_C_SYMBOLS[@]}" \
     -- "${expected_jni[@]}" 3<<<"$symbols" <<'PY'
 import os
 import sys

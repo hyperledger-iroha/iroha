@@ -122,24 +122,24 @@ pub const DYNAMIC_ACCESS_HINT_RESERVED_STATE_PREFIXES_V1: &[&str] = &["__kotodam
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DynamicAccessHintV1Error {
     /// `base_key` was not exactly `state:` plus one state declaration identifier.
-    InvalidBaseKey,
+    BaseKey,
     /// `key_type` was not an active V1 `StateMap` key type.
-    InvalidKeyType,
+    KeyType,
     /// `bound_kind` was not an active V1 bound source.
-    InvalidBoundKind,
+    BoundKind,
     /// `max_keys` was outside `1..=64`.
-    InvalidMaxKeys,
+    MaxKeys,
 }
 
 impl fmt::Display for DynamicAccessHintV1Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::InvalidBaseKey => {
+            Self::BaseKey => {
                 "base_key must be `state:` followed by one canonical state declaration identifier"
             }
-            Self::InvalidKeyType => "key_type must be an active Kotodama V1 StateMap key type",
-            Self::InvalidBoundKind => "bound_kind must be exactly `range` or `take`",
-            Self::InvalidMaxKeys => "max_keys must be in 1..=64",
+            Self::KeyType => "key_type must be an active Kotodama V1 StateMap key type",
+            Self::BoundKind => "bound_kind must be exactly `range` or `take`",
+            Self::MaxKeys => "max_keys must be in 1..=64",
         })
     }
 }
@@ -163,10 +163,10 @@ pub fn is_canonical_dynamic_state_identifier_v1(name: &str) -> bool {
 /// Extract the state declaration name from a canonical V1 dynamic base key.
 pub fn dynamic_access_hint_state_name_v1(base_key: &str) -> Result<&str, DynamicAccessHintV1Error> {
     let Some(name) = base_key.strip_prefix("state:") else {
-        return Err(DynamicAccessHintV1Error::InvalidBaseKey);
+        return Err(DynamicAccessHintV1Error::BaseKey);
     };
     if !is_canonical_dynamic_state_identifier_v1(name) {
-        return Err(DynamicAccessHintV1Error::InvalidBaseKey);
+        return Err(DynamicAccessHintV1Error::BaseKey);
     }
     Ok(name)
 }
@@ -190,13 +190,13 @@ pub fn validate_dynamic_access_hint_v1(
 ) -> Result<(), DynamicAccessHintV1Error> {
     dynamic_access_hint_state_name_v1(&hint.base_key)?;
     if !is_dynamic_access_hint_key_type_v1(&hint.key_type) {
-        return Err(DynamicAccessHintV1Error::InvalidKeyType);
+        return Err(DynamicAccessHintV1Error::KeyType);
     }
     if !is_dynamic_access_hint_bound_kind_v1(&hint.bound_kind) {
-        return Err(DynamicAccessHintV1Error::InvalidBoundKind);
+        return Err(DynamicAccessHintV1Error::BoundKind);
     }
     if !(1..=DYNAMIC_ACCESS_HINT_MAX_KEYS_V1).contains(&hint.max_keys) {
-        return Err(DynamicAccessHintV1Error::InvalidMaxKeys);
+        return Err(DynamicAccessHintV1Error::MaxKeys);
     }
     Ok(())
 }
@@ -260,7 +260,7 @@ mod tests {
         ] {
             assert_eq!(
                 validate_dynamic_access_hint_v1(&hint(invalid, "int", "range", 1)),
-                Err(DynamicAccessHintV1Error::InvalidBaseKey),
+                Err(DynamicAccessHintV1Error::BaseKey),
                 "{invalid:?} must reject"
             );
         }
@@ -271,21 +271,21 @@ mod tests {
         for invalid in ["Int", "Numeric", "Amount", "json", "AccountID", " int"] {
             assert_eq!(
                 validate_dynamic_access_hint_v1(&hint("state:Orders", invalid, "range", 1)),
-                Err(DynamicAccessHintV1Error::InvalidKeyType),
+                Err(DynamicAccessHintV1Error::KeyType),
                 "{invalid:?} must reject"
             );
         }
         for invalid in ["", "loop", "Take", "range ", "bounded"] {
             assert_eq!(
                 validate_dynamic_access_hint_v1(&hint("state:Orders", "int", invalid, 1)),
-                Err(DynamicAccessHintV1Error::InvalidBoundKind),
+                Err(DynamicAccessHintV1Error::BoundKind),
                 "{invalid:?} must reject"
             );
         }
         for invalid in [0, DYNAMIC_ACCESS_HINT_MAX_KEYS_V1 + 1, u32::MAX] {
             assert_eq!(
                 validate_dynamic_access_hint_v1(&hint("state:Orders", "int", "take", invalid)),
-                Err(DynamicAccessHintV1Error::InvalidMaxKeys),
+                Err(DynamicAccessHintV1Error::MaxKeys),
                 "{invalid} must reject"
             );
         }
