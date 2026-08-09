@@ -24,7 +24,7 @@ def test_cargo_slice_builds_use_one_locked_offline_single_job_target() -> None:
         for index, line in enumerate(lines)
         if line == "run_hermetic_apple_cargo \\"
     ]
-    assert len(call_starts) == 4
+    assert len(call_starts) == 5
 
     calls: list[list[str]] = []
     for start in call_starts:

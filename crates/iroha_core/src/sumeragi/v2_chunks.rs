@@ -357,10 +357,11 @@ mod tests {
             },
             phase: wire::GlobalPhase::Commit,
             subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups(
+            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"chunk fixture parent state"),
                 Hash::new(b"chunk fixture post state"),
                 Hash::new(b"chunk fixture ordinary writes"),
+                1,
                 Hash::new(b"chunk fixture executed block wire"),
             ),
             signers: vec![0, 1, 2],

@@ -4,9 +4,6 @@ import XCTest
 
 final class SigningKeyTests: XCTestCase {
     func testEd25519SigningProducesEnvelope() throws {
-        guard #available(macOS 10.15, iOS 13.0, *) else {
-            throw XCTSkip("Curve25519 requires macOS 10.15 / iOS 13")
-        }
         let key = Curve25519.Signing.PrivateKey()
         let signingKey = try SigningKey.ed25519(privateKey: key.rawRepresentation,
                                                 metadata: SigningMetadata(label: "unit-test"))
@@ -20,9 +17,6 @@ final class SigningKeyTests: XCTestCase {
     }
 
     func testEd25519SignatureAdmissionRejectsInertAndMalformedR() throws {
-        guard #available(macOS 10.15, iOS 13.0, *) else {
-            throw XCTSkip("Curve25519 requires macOS 10.15 / iOS 13")
-        }
         let key = Curve25519.Signing.PrivateKey()
         let message = Data("swift-ed25519-signature-admission".utf8)
         let signature = try key.signature(for: message)
@@ -51,9 +45,6 @@ final class SigningKeyTests: XCTestCase {
     }
 
     func testEd25519PublicKeyAdmissionRejectsWeakOrNoncanonicalMaterial() throws {
-        guard #available(macOS 10.15, iOS 13.0, *) else {
-            throw XCTSkip("Curve25519 requires macOS 10.15 / iOS 13")
-        }
         let key = Curve25519.Signing.PrivateKey()
         XCTAssertTrue(Ed25519PublicKeyAdmission.isValidPublicKey(key.publicKey.rawRepresentation))
 
@@ -262,9 +253,6 @@ final class SigningKeyTests: XCTestCase {
     }
 
     func testMultihashPrivateKeyMatchesKnownAuthority() throws {
-        guard #available(macOS 10.15, iOS 13.0, *) else {
-            throw XCTSkip("Curve25519 requires macOS 10.15 / iOS 13")
-        }
         let authorityId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
         guard let privateKeyBytes = Data(hexString: "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53") else {
             return XCTFail("invalid multihash private key hex")

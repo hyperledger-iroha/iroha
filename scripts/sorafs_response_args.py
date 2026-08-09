@@ -334,6 +334,14 @@ def expand_response_args(
             label="@ARGFILE",
         )
         if resolved is None:
+            # Python 3.12 may consult ``Path.stat()`` while resolving. Preserve
+            # the public inspection diagnostic when that probe is what failed.
+            try:
+                path.stat()
+            except FileNotFoundError:
+                pass
+            except (OSError, RuntimeError):
+                raise ValueError(ARGFILE_INSPECTION_DIAGNOSTIC) from None
             raise ValueError(ARGFILE_RESOLUTION_DIAGNOSTIC)
         if resolved in seen:
             raise ValueError(ARGFILE_RECURSION_DIAGNOSTIC)

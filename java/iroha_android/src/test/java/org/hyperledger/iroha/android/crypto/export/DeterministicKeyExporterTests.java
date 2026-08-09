@@ -75,11 +75,7 @@ public final class DeterministicKeyExporterTests {
   }
 
   private static void exportSupportsBouncyCastleKeys() throws Exception {
-    if (!ensureBouncyCastleProvider()) {
-      System.out.println(
-          "[IrohaAndroid] Skipping BouncyCastle export test (provider unavailable).");
-      return;
-    }
+    requireBouncyCastleProvider();
     final KeyPairGenerator generator = bouncyCastleEd25519Generator();
     final KeyPair keyPair = generator.generateKeyPair();
     final char[] passphrase = "bouncy-castle-passphrase".toCharArray();
@@ -317,7 +313,7 @@ public final class DeterministicKeyExporterTests {
     return ((raw[offset] & 0xFF) << 8) | (raw[offset + 1] & 0xFF);
   }
 
-  private static boolean ensureBouncyCastleProvider() {
+  private static void requireBouncyCastleProvider() {
     try {
       final Class<?> providerClass =
           Class.forName("org.bouncycastle.jce.provider.BouncyCastleProvider");
@@ -326,9 +322,8 @@ public final class DeterministicKeyExporterTests {
       if (Security.getProvider(provider.getName()) == null) {
         Security.addProvider(provider);
       }
-      return true;
-    } catch (final ReflectiveOperationException | ClassCastException ignored) {
-      return false;
+    } catch (final ReflectiveOperationException | ClassCastException ex) {
+      throw new AssertionError("BouncyCastle provider is required by this test", ex);
     }
   }
 

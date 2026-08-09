@@ -246,6 +246,8 @@ struct V2StartupFinalityVerificationInventory {
     finality_directory: StableSidecarDirectoryMetadata,
     retained_directory: StableSidecarDirectoryMetadata,
     auxiliary_sidecars: BTreeMap<PathBuf, StableSidecarDirectoryInventory>,
+    /// Exact subset of `auxiliary_sidecars` derived from the active lane catalog.
+    lane_auxiliary_directories: BTreeSet<PathBuf>,
     hash_only_heights: BTreeSet<u64>,
     entries: BTreeMap<u64, VerifiedV2StartupFinalityEntry>,
     replay_sidecars: Vec<V2StartupReplaySidecarsAtHeight>,

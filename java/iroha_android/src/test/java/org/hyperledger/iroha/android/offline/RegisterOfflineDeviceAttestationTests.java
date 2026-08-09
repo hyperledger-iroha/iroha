@@ -29,7 +29,7 @@ import org.hyperledger.iroha.norito.NoritoEncoder;
 import org.hyperledger.iroha.norito.TypeAdapter;
 import org.junit.Test;
 
-/** Exact Rust/Java parity and adversarial coverage for the sole ABI-21 registration path. */
+/** Exact Rust/Java parity and adversarial coverage for the sole ABI-22 registration path. */
 public final class RegisterOfflineDeviceAttestationTests {
   private static final NetworkId TEST_NETWORK_ID =
       NetworkId.parse(

@@ -52,7 +52,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install pinned workflow-test dependency
-        run: python3 -m pip install --disable-pip-version-check pytest==8.4.2
+        run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
       - name: Verify release-workflow semantics
         run: python3 -m pytest -q pytests/scripts/workspace_release_gate_test.py
       - name: Verify locked metadata and workspace formatting
@@ -276,3 +276,58 @@ jobs:
         run: >-
           cargo clippy --locked --workspace --all-targets --all-features
           -- -D warnings
+
+  adversarial:
+    name: Adversarial Norito and IVM fuzz gate
+    runs-on: [self-hosted, Linux, iroha2]
+    timeout-minutes: 180
+    env:
+      RUNS: "10000"
+      FUZZ_MAX_TOTAL_TIME: "60"
+      FUZZ_RSS_LIMIT_MB: "3072"
+      FUZZ_CODEGEN_UNITS: "16"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify exact workflow source
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
+          test "$(git rev-parse HEAD)" = "$source_sha"
+          test "$WORKFLOW_SHA" = "$source_sha"
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          cache: "false"
+          toolchain: nightly-2025-05-08
+      - name: Install pinned cargo-fuzz
+        run: |
+          cargo +nightly-2025-05-08 install cargo-fuzz \
+            --version 0.13.2 \
+            --locked
+          test "$(cargo-fuzz --version)" = "cargo-fuzz 0.13.2"
+      - name: Verify immutable security-corpus integrity fingerprints
+        run: python3 scripts/replay_security_corpora.py
+      - name: Verify integrity and fuzz inventory contracts without executing Cargo
+        run: >-
+          python3 -m unittest -v
+          pytests.scripts.corpora_integrity_replay_test
+          pytests.scripts.fuzz_smoke_inventory_test
+      - name: Run strict Norito and IVM fuzz targets
+        run: scripts/fuzz_smoke.sh --strict
+      - name: Archive fuzz crash artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: workspace-release-fuzz-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            crates/norito/fuzz/artifacts
+            crates/ivm/fuzz/artifacts
+          if-no-files-found: ignore
+          retention-days: 30

@@ -42,9 +42,9 @@ public final class SccpClientExactTests {
       FeePaymentIntent.authority(Collections.emptyList());
   // These authenticate this fixture's semantic commitments and deployment code hashes.
   private static final String BSC_ROUTE_CONFIG_HASH =
-      "77D2C235AABDFFE9125F27F960FE58F34E9C418BBE452CCC926B10DE18B22BD1";
+      "65ABF3081D137062860FD712B5414A17C3664FD42C7567373FF3302BA331EFDD";
   private static final String TRON_ROUTE_CONFIG_HASH =
-      "6D14339A4E342F0F5E72947A19133426EAC1DA9F9A01FB15DCAC55078A842AE2";
+      "1BB8C081AA96766CF63FFE063E5B506FF17005E033C7B47E9760214C4C8D5519";
 
   private SccpClientExactTests() {}
 
@@ -1070,23 +1070,26 @@ public final class SccpClientExactTests {
     assert request.soraFinalityAnchor.chainIdHash.equals(tairaChainIdHash());
     assert request.soraFinalityAnchor.checkpointHeight.equals(BigInteger.valueOf(7));
     assert request.soraFinalityAnchor.checkpointBlockHash.equals(upper(0xa1, 32));
-    assert request.soraFinalityAnchor.protocolVersion == 3;
+    assert request.soraFinalityAnchor.protocolVersion == 4;
     assert request.soraFinalityAnchor.checkpointContextId.equals(upper(0xa2, 32));
     assert request.soraFinalityAnchor.checkpointFinalityArtifactHash.equals(upper(0xa3, 32));
     assert request.soraFinalityAnchor.anchorHash.equals(
-        "0xec6c821caf5fa74368c08e9101ab310f132fb7f627a09f6f9481aa9484054bba");
+        "0x4410ee4ccfd06f2d0e3a658615d516ac8cf65255d8a8716ce511ea95e135c8c3");
     assert request.soraFinalityAnchor.anchorHash.equals(
         "0x" + finalityAnchorHash().toLowerCase());
 
-    final Map<String, Object> current = proofRequest();
-    final Map<String, Object> currentAnchor = object(current.get("sora_finality_anchor"));
-    currentAnchor.put("protocol_version", 4);
-    current.put(
-        "sora_finality_anchor_hash", "0x" + finalityAnchorHash(currentAnchor).toLowerCase());
-    final SccpModels.Groth16ProofRequestV1 currentRequest =
-        SccpJsonParser.parseProofRequest(jsonBytes(current));
-    assert currentRequest.soraFinalityAnchor.protocolVersion == 4;
-    assert !currentRequest.soraFinalityAnchor.anchorHash.equals(
+    final Map<String, Object> historical = proofRequest();
+    final Map<String, Object> historicalAnchor =
+        object(historical.get("sora_finality_anchor"));
+    historicalAnchor.put("protocol_version", 3);
+    historical.put(
+        "sora_finality_anchor_hash", "0x" + finalityAnchorHash(historicalAnchor).toLowerCase());
+    final SccpModels.Groth16ProofRequestV1 historicalRequest =
+        SccpJsonParser.parseProofRequest(jsonBytes(historical));
+    assert historicalRequest.soraFinalityAnchor.protocolVersion == 3;
+    assert historicalRequest.soraFinalityAnchor.anchorHash.equals(
+        "0xec6c821caf5fa74368c08e9101ab310f132fb7f627a09f6f9481aa9484054bba");
+    assert !historicalRequest.soraFinalityAnchor.anchorHash.equals(
         request.soraFinalityAnchor.anchorHash);
 
     final Map<String, Object> wrongProtocol = proofRequest();
@@ -1096,10 +1099,10 @@ public final class SccpClientExactTests {
     object(futureProtocol.get("sora_finality_anchor")).put("protocol_version", 5);
     expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(futureProtocol)));
     final Map<String, Object> wrongProtocolType = proofRequest();
-    object(wrongProtocolType.get("sora_finality_anchor")).put("protocol_version", "3");
+    object(wrongProtocolType.get("sora_finality_anchor")).put("protocol_version", "4");
     expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(wrongProtocolType)));
     final Map<String, Object> floatingProtocol = proofRequest();
-    object(floatingProtocol.get("sora_finality_anchor")).put("protocol_version", 3.0d);
+    object(floatingProtocol.get("sora_finality_anchor")).put("protocol_version", 4.0d);
     expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(floatingProtocol)));
     final Map<String, Object> booleanProtocol = proofRequest();
     object(booleanProtocol.get("sora_finality_anchor")).put("protocol_version", true);
@@ -1530,7 +1533,7 @@ public final class SccpClientExactTests {
     final Map<String, Object> anchor = map();
     anchor.put("version", 1);
     anchor.put("source_network", network("sora-taira"));
-    anchor.put("protocol_version", 3);
+    anchor.put("protocol_version", 4);
     anchor.put("chain_id_hash", tairaChainIdHash());
     anchor.put("checkpoint_height", 7);
     anchor.put("checkpoint_block_hash", upper(0xa1, 32));

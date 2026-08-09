@@ -12,7 +12,9 @@ provider or governance council. Binary `.to` files are canonical Norito; matchin
 are human-readable summaries, not alternative wire payloads.
 
 Additional artifacts include a payload-bound `sorafs.chunk_fetch_plan.v1` multi-source plan so SDKs
-can exercise chunk scheduling end-to-end. Standalone plans are strict V1 envelopes; the retired
-bare-array representation is not an accepted interchange format.
+can exercise deterministic fixture parsing and chunk scheduling. Standalone plans are strict V1
+envelopes; the retired bare-array representation is not an accepted interchange format. These
+fixtures do not provide or qualify authenticated multi-provider transport, a governance-aware
+HSM/KMS completion signer, a sealed-CAS retention backend, or four-validator deployment evidence.
 
 Do not edit manually; rerun the generator if data changes.

@@ -978,10 +978,11 @@ pub(super) mod tests {
     }
 
     fn execution_commitment(seed: u8) -> wire::ExecutionCommitment {
-        wire::ExecutionCommitment::without_topups(
+        wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new([seed, 1]),
             Hash::new([seed, 2]),
             Hash::new([seed, 3]),
+            1,
             Hash::new([seed, 4]),
         )
     }
@@ -1059,9 +1060,12 @@ pub(super) mod tests {
         executed_block
             .set_transaction_results(Vec::new(), &[], Vec::new())
             .expect("attach deterministic history-fixture results");
-        let executed_block_wire_hash = executed_block
-            .executed_block_wire_hash()
+        let executed_block_wire = executed_block
+            .encode_wire()
             .expect("encode executed history-fixture block");
+        let executed_block_wire_len =
+            u64::try_from(executed_block_wire.len()).expect("executed wire length fits u64");
+        let executed_block_wire_hash = Hash::new(&executed_block_wire);
         let proposal = executed_block.canonical_resultless_proposal();
         let canonical_wire = proposal
             .encode_wire()
@@ -1077,6 +1081,7 @@ pub(super) mod tests {
             payload_hash: Hash::new(&canonical_wire),
         };
         let mut execution = execution_commitment(0x43);
+        execution.executed_block_wire_len = executed_block_wire_len;
         execution.executed_block_wire_hash = executed_block_wire_hash;
         let mut certificate = wire::QuorumCertificate {
             round: wire::ConsensusRound {
@@ -1661,7 +1666,8 @@ pub(super) mod tests {
         prepare_qc.aggregate_signature = aggregate_certificate(&prepare_qc, &history.validators);
         let request = sign_body_request(prepare_qc.clone());
         let request_hash = HashOf::new(&request);
-        let mut server = V2BlockSyncServer::new(context.network_id.clone(), 1).expect("body server");
+        let mut server =
+            V2BlockSyncServer::new(context.network_id.clone(), 1).expect("body server");
         let response = server
             .serve_historical_body(
                 history.kura.as_ref(),
@@ -1743,9 +1749,12 @@ pub(super) mod tests {
             .set_transaction_results(Vec::new(), &[], Vec::new())
             .expect("attach an empty deterministic execution result");
         assert!(!executed_block.is_resultless_proposal());
-        let executed_block_wire_hash = executed_block
-            .executed_block_wire_hash()
+        let executed_block_wire = executed_block
+            .encode_wire()
             .expect("canonical executed block wire");
+        let executed_block_wire_len =
+            u64::try_from(executed_block_wire.len()).expect("executed wire length fits u64");
+        let executed_block_wire_hash = Hash::new(&executed_block_wire);
         let proposal = executed_block.canonical_resultless_proposal();
         let canonical_wire = proposal
             .encode_wire()
@@ -1762,6 +1771,7 @@ pub(super) mod tests {
             payload_hash: Hash::new(&canonical_wire),
         };
         let mut exact_execution_commitment = execution_commitment(0x43);
+        exact_execution_commitment.executed_block_wire_len = executed_block_wire_len;
         exact_execution_commitment.executed_block_wire_hash = executed_block_wire_hash;
         let mut certificate = wire::QuorumCertificate {
             round: wire::ConsensusRound {
@@ -1801,7 +1811,8 @@ pub(super) mod tests {
 
         let request = fixture.body_request(certificate.clone());
         let request_hash = HashOf::new(&request);
-        let mut server = V2BlockSyncServer::new(context.network_id.clone(), 2).expect("sync server");
+        let mut server =
+            V2BlockSyncServer::new(context.network_id.clone(), 2).expect("sync server");
         let response = server
             .serve_historical_body(
                 kura.as_ref(),

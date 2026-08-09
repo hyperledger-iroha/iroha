@@ -22,6 +22,7 @@ def _copy_workflows(target: Path) -> None:
         *automation.RELEASE_AUTH_HISTORICAL_FINDINGS,
         *automation.REFERENCE_SDK_RELEASE_EXAMPLE_REQUIRED_MARKERS,
         *automation.NATIVE_GOVERNANCE_SDK_CONTRACTS,
+        *automation.RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS,
         automation.PACKAGE_RELEASE_SMOKE_SCRIPT,
     ):
         source = REPO_ROOT / relative
@@ -40,6 +41,212 @@ def test_validate_release_automation_accepts_repository_contract() -> None:
         "workflow_count": 3,
         "workflows": sorted(automation.WORKFLOWS),
     }
+
+
+@pytest.mark.parametrize(
+    "marker",
+    automation.RUNTIME_PROVIDER_RELEASE_WORKFLOW_MARKERS,
+)
+def test_runtime_provider_release_workflow_markers_are_mandatory(
+    tmp_path: Path, marker: str
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    drifted = source.replace(marker, "REMOVED_RUNTIME_PROVIDER_CONTRACT", 1)
+    assert drifted != source
+    workflow.write_text(drifted, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="missing contract marker"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    sorted(automation.RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS),
+)
+def test_runtime_provider_deployment_asset_removal_fails_closed(
+    tmp_path: Path, relative: str
+) -> None:
+    _copy_workflows(tmp_path)
+    (tmp_path / relative).unlink()
+
+    with pytest.raises(ValueError, match="source is missing"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("relative", "marker"),
+    [
+        (relative, marker)
+        for relative, markers in sorted(
+            automation.RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS.items()
+        )
+        for marker in markers
+    ],
+)
+def test_runtime_provider_deployment_asset_markers_are_mandatory(
+    tmp_path: Path, relative: str, marker: str
+) -> None:
+    _copy_workflows(tmp_path)
+    asset = tmp_path / relative
+    source = asset.read_text(encoding="utf-8")
+    # Some security invariants are intentionally enforced at more than one
+    # boundary. Remove every occurrence so this mutation proves the release
+    # gate requires the invariant itself, not merely one duplicated spelling.
+    drifted = source.replace(marker, "REMOVED_RUNTIME_PROVIDER_ASSET_MARKER")
+    assert drifted != source
+    asset.write_text(drifted, encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match="missing runtime-provider deployment contract marker",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("relative", "marker"),
+    [
+        (relative, marker)
+        for relative, markers in sorted(
+            automation.RUNTIME_PROVIDER_DEPLOYMENT_FORBIDDEN_MARKERS.items()
+        )
+        for marker in markers
+    ],
+)
+def test_runtime_provider_deployment_assets_reject_credential_or_override_inputs(
+    tmp_path: Path, relative: str, marker: str
+) -> None:
+    _copy_workflows(tmp_path)
+    asset = tmp_path / relative
+    with asset.open("a", encoding="utf-8") as destination:
+        destination.write(f"\n{marker}\n")
+
+    with pytest.raises(
+        ValueError,
+        match="forbidden runtime-provider deployment marker",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_pop_broker_hard_cut_contract_accepts_repository() -> None:
+    assert automation._validate_pop_broker_hard_cut_contract(REPO_ROOT) == []
+
+
+def test_pop_broker_operation_60_cannot_be_reassigned(tmp_path: Path) -> None:
+    _copy_workflows(tmp_path)
+    protocol = (
+        tmp_path
+        / "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs"
+    )
+    with protocol.open("a", encoding="utf-8") as destination:
+        destination.write(
+            "\npub(super) const OPERATION_POP_RETIRED_TEST_V1: u16 = 60;\n"
+        )
+
+    with pytest.raises(ValueError, match="operation 60/runtime resolve must remain retired"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "struct_name",
+    sorted(automation.POP_BROKER_WIRE_FIELD_INVENTORIES),
+)
+def test_pop_broker_wire_structs_reject_private_recipient_fields(
+    tmp_path: Path, struct_name: str
+) -> None:
+    _copy_workflows(tmp_path)
+    protocol = (
+        tmp_path
+        / "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs"
+    )
+    source = protocol.read_text(encoding="utf-8")
+    declaration = f"struct {struct_name} {{"
+    drifted = source.replace(
+        declaration,
+        f"{declaration}\n    recipient_private_key: Vec<u8>,",
+        1,
+    )
+    assert drifted != source
+    protocol.write_text(drifted, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=rf"wire struct {struct_name} fields must be exactly"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_pop_broker_wire_structs_reject_field_type_substitution(tmp_path: Path) -> None:
+    _copy_workflows(tmp_path)
+    protocol = (
+        tmp_path
+        / "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs"
+    )
+    source = protocol.read_text(encoding="utf-8")
+    drifted = source.replace(
+        "issuer_public_key: [u8; 32],",
+        "issuer_public_key: Vec<u8>,",
+        1,
+    )
+    assert drifted != source
+    protocol.write_text(drifted, encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match="wire struct PopRuntimeOpenResultWireV1 fields must be exactly",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_pop_runtime_production_source_rejects_private_recipient_material(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    runtime = tmp_path / "crates/irohad/src/sorafs_pop_runtime.rs"
+    source = runtime.read_text(encoding="utf-8")
+    drifted = source.replace(
+        "#[cfg(test)]",
+        "type LeakedRecipient = iroha_crypto::HybridSecretKey;\n\n#[cfg(test)]",
+        1,
+    )
+    assert drifted != source
+    runtime.write_text(drifted, encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match="production PoP runtime must not own private recipient material",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("original", "replacement"),
+    [
+        (
+            "python3 scripts/check_sorafs_release_version_map.py | tee "
+            "version-map-summary.replay.json",
+            "printf '{}\\n' | tee version-map-summary.replay.json",
+        ),
+        (
+            "cmp version-map-summary.first.json version-map-summary.replay.json",
+            "true # removed version-map replay comparison",
+        ),
+    ],
+)
+def test_release_gate_requires_byte_identical_version_map_double_run(
+    tmp_path: Path,
+    original: str,
+    replacement: str,
+) -> None:
+    """The release version cannot come from a single or unchecked map pass."""
+
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    assert original in source
+    workflow.write_text(source.replace(original, replacement, 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="version map must be validated exactly twice"):
+        automation.validate_release_automation(tmp_path)
 
 
 def test_csharp_ci_requires_native_sorafs_governance_validation() -> None:
@@ -67,6 +274,7 @@ def test_csharp_ci_requires_native_sorafs_governance_validation() -> None:
     assert "package_csharp_native_artifacts.py verify-package" in workflow
     assert "dotnet test Hyperledger.Iroha.Sdk.sln" in workflow
     assert "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION" not in validator_tests
+    assert "WhenAvailable" not in validator_tests
     assert "Assert.True(" in validator_tests
     assert (
         "ABI-22 connect_norito_bridge with Governance DAG symbols is required."
@@ -1544,8 +1752,9 @@ def test_release_workflow_script_dependencies_are_exactly_pinned() -> None:
     assert requirements == sorted(requirements)
     assert requirements == [
         "blake3==1.0.9",
-        "pytest==8.4.2",
-        "requests==2.32.5",
+        "jsonschema==4.26.0",
+        "pytest==9.0.3",
+        "requests==2.33.0",
         'tomli==2.4.1; python_version < "3.11"',
         "tomli_w==1.2.0",
     ]

@@ -41,7 +41,8 @@ public final class SumeragiDiagnosticsModelsTests {
     final AutonomousLaneExecution row =
         new AutonomousLaneExecution(
             3, BigInteger.valueOf(8), hash(0x54), BigInteger.valueOf(8),
-            BigInteger.ONE, BigInteger.TEN, BigInteger.valueOf(2), hash(0x73),
+            BigInteger.ONE, BigInteger.TEN, BigInteger.valueOf(2),
+            hash(0x70), hash(0x71), hash(0x72), hash(0x73),
             hash(0x75), hash(0x77), hash(0x79), hash(0x7b),
             BigInteger.valueOf(12), hash(0x7d), 2, 2,
             AutonomousLaneExecutionStage.KURA_WSV_APPLICATION_RECEIPT_DURABLE,
@@ -60,14 +61,16 @@ public final class SumeragiDiagnosticsModelsTests {
         IllegalArgumentException.class,
         () -> new AutonomousLaneExecution(
             3, BigInteger.valueOf(8), hash(0x54), BigInteger.valueOf(8),
-            BigInteger.ONE, BigInteger.TEN, BigInteger.valueOf(2), hash(0x73),
+            BigInteger.ONE, BigInteger.TEN, BigInteger.valueOf(2),
+            hash(0x70), hash(0x71), hash(0x72), hash(0x73),
             hash(0x75), hash(0x77), hash(0x79), hash(0x7b),
             BigInteger.valueOf(12), hash(0x7d), 1, 2,
             AutonomousLaneExecutionStage.KURA_WSV_APPLICATION_RECEIPT_DURABLE,
             AutonomousLaneExecutionStuckReason.QUEUE_FINALIZATION_UNVERIFIABLE));
     new AutonomousLaneExecution(
         3, BigInteger.valueOf(8), hash(0x54), BigInteger.valueOf(8),
-        BigInteger.ONE, BigInteger.TEN, BigInteger.valueOf(2), hash(0x73),
+        BigInteger.ONE, BigInteger.TEN, BigInteger.valueOf(2),
+        hash(0x70), hash(0x71), hash(0x72), hash(0x73),
         hash(0x75), null, null, null, null, null, 1, 2,
         AutonomousLaneExecutionStage.CONFLICT,
         AutonomousLaneExecutionStuckReason.EVIDENCE_CONFLICT);
@@ -75,10 +78,134 @@ public final class SumeragiDiagnosticsModelsTests {
         IllegalArgumentException.class,
         () -> new AutonomousLaneExecution(
             3, BigInteger.valueOf(8), hash(0x54), BigInteger.valueOf(8),
-            BigInteger.ONE, BigInteger.TEN, BigInteger.valueOf(2), hash(0x73),
+            BigInteger.ONE, BigInteger.TEN, BigInteger.valueOf(2),
+            hash(0x70), hash(0x71), hash(0x72), hash(0x73),
             hash(0x75), null, null, null, null, null, 2, 2,
             AutonomousLaneExecutionStage.CONFLICT,
             AutonomousLaneExecutionStuckReason.AWAITING_MERGE_SELECTION));
+  }
+
+  @Test
+  public void autonomousReservationsRequireProvisionalIdentityAndExactGeometry() {
+    for (int field = 0; field < 3; field++) {
+      final String[] missing = {hash(0x70), hash(0x71), hash(0x72)};
+      missing[field] = null;
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> autonomousExecution(
+              BigInteger.valueOf(2), missing[0], missing[1], missing[2],
+              hash(0x73), hash(0x75), hash(0x77), hash(0x79), hash(0x7b),
+              BigInteger.valueOf(12), hash(0x7d), 2,
+              AutonomousLaneExecutionStage.KURA_WSV_APPLICATION_RECEIPT_DURABLE,
+              AutonomousLaneExecutionStuckReason.QUEUE_FINALIZATION_UNVERIFIABLE));
+      final String[] bare = {hash(0x70), hash(0x71), hash(0x72)};
+      bare[field] = "ab".repeat(32);
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> autonomousExecution(
+              BigInteger.valueOf(2), bare[0], bare[1], bare[2],
+              hash(0x73), hash(0x75), hash(0x77), hash(0x79), hash(0x7b),
+              BigInteger.valueOf(12), hash(0x7d), 2,
+              AutonomousLaneExecutionStage.KURA_WSV_APPLICATION_RECEIPT_DURABLE,
+              AutonomousLaneExecutionStuckReason.QUEUE_FINALIZATION_UNVERIFIABLE));
+      final String[] zero = {hash(0x70), hash(0x71), hash(0x72)};
+      zero[field] = "hash:" + "00".repeat(32) + "#6A0A";
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> autonomousExecution(
+              BigInteger.valueOf(2), zero[0], zero[1], zero[2],
+              hash(0x73), hash(0x75), hash(0x77), hash(0x79), hash(0x7b),
+              BigInteger.valueOf(12), hash(0x7d), 2,
+              AutonomousLaneExecutionStage.KURA_WSV_APPLICATION_RECEIPT_DURABLE,
+              AutonomousLaneExecutionStuckReason.QUEUE_FINALIZATION_UNVERIFIABLE));
+    }
+
+    final AutonomousLaneExecution reservations = autonomousExecution(
+        null, hash(0x70), hash(0x71), hash(0x72), null, null, null, null, null,
+        null, null, 2, AutonomousLaneExecutionStage.RESERVATIONS_DURABLE,
+        AutonomousLaneExecutionStuckReason.AWAITING_EXECUTABLE_PAYLOAD);
+    assertEquals(null, reservations.proposalView());
+    assertEquals(null, reservations.proposalHash());
+    assertEquals(
+        "awaiting_executable_payload",
+        AutonomousLaneExecutionStuckReason.AWAITING_EXECUTABLE_PAYLOAD.wireName());
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> autonomousExecution(
+            BigInteger.ZERO, hash(0x70), hash(0x71), hash(0x72), null, null,
+            null, null, null, null, null, 2,
+            AutonomousLaneExecutionStage.RESERVATIONS_DURABLE,
+            AutonomousLaneExecutionStuckReason.AWAITING_EXECUTABLE_PAYLOAD));
+
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> autonomousExecution(
+            null, hash(0x70), hash(0x71), hash(0x72), null, null, null, null, null,
+            null, null, 2, AutonomousLaneExecutionStage.RESERVATIONS_DURABLE,
+            AutonomousLaneExecutionStuckReason.AWAITING_PAYLOAD_AVAILABILITY));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> autonomousExecution(
+            null, hash(0x70), hash(0x71), hash(0x72), hash(0x73), hash(0x75),
+            null, null, null, null, null, 2,
+            AutonomousLaneExecutionStage.RESERVATIONS_DURABLE,
+            AutonomousLaneExecutionStuckReason.AWAITING_EXECUTABLE_PAYLOAD));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> autonomousExecution(
+            null, hash(0x70), hash(0x71), hash(0x72), null, null, hash(0x77),
+            null, null, null, null, 2,
+            AutonomousLaneExecutionStage.RESERVATIONS_DURABLE,
+            AutonomousLaneExecutionStuckReason.AWAITING_EXECUTABLE_PAYLOAD));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> autonomousExecution(
+            null, hash(0x70), hash(0x71), hash(0x72), null, null, null, null, null,
+            null, null, 1, AutonomousLaneExecutionStage.RESERVATIONS_DURABLE,
+            AutonomousLaneExecutionStuckReason.AWAITING_EXECUTABLE_PAYLOAD));
+
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> autonomousExecution(
+            BigInteger.valueOf(2), hash(0x70), hash(0x71), hash(0x72), hash(0x73),
+            null, hash(0x77), hash(0x79), hash(0x7b), BigInteger.valueOf(12),
+            hash(0x7d), 2,
+            AutonomousLaneExecutionStage.KURA_WSV_APPLICATION_RECEIPT_DURABLE,
+            AutonomousLaneExecutionStuckReason.QUEUE_FINALIZATION_UNVERIFIABLE));
+    assertEquals(
+        null,
+        autonomousExecution(
+            null, hash(0x70), hash(0x71), hash(0x72), hash(0x73), hash(0x75),
+            hash(0x77), hash(0x79), hash(0x7b), BigInteger.valueOf(12), hash(0x7d), 2,
+            AutonomousLaneExecutionStage.KURA_WSV_APPLICATION_RECEIPT_DURABLE,
+            AutonomousLaneExecutionStuckReason.QUEUE_FINALIZATION_UNVERIFIABLE).proposalView());
+
+    final AutonomousLaneExecution first = autonomousExecution(
+        BigInteger.valueOf(2), hash(0x70), hash(0x71), hash(0x72), hash(0x73),
+        hash(0x75), hash(0x77), hash(0x79), hash(0x7b), BigInteger.valueOf(12),
+        hash(0x7d), 2, AutonomousLaneExecutionStage.KURA_WSV_APPLICATION_RECEIPT_DURABLE,
+        AutonomousLaneExecutionStuckReason.QUEUE_FINALIZATION_UNVERIFIABLE);
+    final AutonomousLaneExecution sameProvisional = autonomousExecution(
+        BigInteger.valueOf(2), hash(0x70), hash(0x71), hash(0x72), hash(0x7e),
+        hash(0x7f), hash(0x77), hash(0x79), hash(0x7b), BigInteger.valueOf(12),
+        hash(0x7d), 2, AutonomousLaneExecutionStage.KURA_WSV_APPLICATION_RECEIPT_DURABLE,
+        AutonomousLaneExecutionStuckReason.QUEUE_FINALIZATION_UNVERIFIABLE);
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new AutonomousLaneExecutions(Arrays.asList(first, sameProvisional)));
+    final AutonomousLaneExecution descendingFirst = autonomousExecution(
+        BigInteger.valueOf(2), hash(0x70), hash(0x90), hash(0x72), hash(0x73),
+        hash(0x75), hash(0x77), hash(0x79), hash(0x7b), BigInteger.valueOf(12),
+        hash(0x7d), 2, AutonomousLaneExecutionStage.KURA_WSV_APPLICATION_RECEIPT_DURABLE,
+        AutonomousLaneExecutionStuckReason.QUEUE_FINALIZATION_UNVERIFIABLE);
+    final AutonomousLaneExecution descendingSecond = autonomousExecution(
+        BigInteger.valueOf(2), hash(0x70), hash(0x80), hash(0x72), hash(0x73),
+        hash(0x75), hash(0x77), hash(0x79), hash(0x7b), BigInteger.valueOf(12),
+        hash(0x7d), 2, AutonomousLaneExecutionStage.KURA_WSV_APPLICATION_RECEIPT_DURABLE,
+        AutonomousLaneExecutionStuckReason.QUEUE_FINALIZATION_UNVERIFIABLE);
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new AutonomousLaneExecutions(Arrays.asList(descendingFirst, descendingSecond)));
   }
 
   @Test
@@ -117,7 +244,7 @@ public final class SumeragiDiagnosticsModelsTests {
   }
 
   @Test
-  public void rowRejectsIncompleteCarrierAndOversizedGroup() {
+  public void rowEnforcesCarrierStateGeometryAndGroupBound() {
     assertThrows(
         IllegalArgumentException.class,
         () ->
@@ -134,6 +261,33 @@ public final class SumeragiDiagnosticsModelsTests {
                 2,
                 null,
                 BigInteger.valueOf(15L)));
+
+    final String geometryError =
+        "Native AMX participant state and application block identity disagree";
+    for (final NativeAmxParticipantApplicationState state :
+        Arrays.asList(
+            NativeAmxParticipantApplicationState.CERTIFIED_PENDING_CARRIER,
+            NativeAmxParticipantApplicationState.CONFLICT)) {
+      assertEquals(state, application(3, 2, null, null, state).state());
+      final IllegalArgumentException error =
+          assertThrows(
+              IllegalArgumentException.class,
+              () -> application(3, 2, hash(0x77), BigInteger.valueOf(15L), state));
+      assertEquals(geometryError, error.getMessage());
+    }
+    for (final NativeAmxParticipantApplicationState state :
+        Arrays.asList(
+            NativeAmxParticipantApplicationState.COMMITTED_EVIDENCE_PENDING,
+            NativeAmxParticipantApplicationState.DURABLY_APPLIED)) {
+      assertEquals(
+          state,
+          application(3, 2, hash(0x77), BigInteger.valueOf(15L), state).state());
+      final IllegalArgumentException error =
+          assertThrows(
+              IllegalArgumentException.class,
+              () -> application(3, 2, null, null, state));
+      assertEquals(geometryError, error.getMessage());
+    }
   }
 
   @Test
@@ -423,13 +577,33 @@ public final class SumeragiDiagnosticsModelsTests {
       final BigInteger applicationBlockHeight) {
     return application(
         laneId,
+        sourceCount,
+        applicationBlockHash,
+        applicationBlockHeight,
+        NativeAmxParticipantApplicationState.DURABLY_APPLIED);
+  }
+
+  private static NativeAmxParticipantApplication application(
+      final long laneId,
+      final long sourceCount,
+      final String applicationBlockHash,
+      final BigInteger applicationBlockHeight,
+      final NativeAmxParticipantApplicationState state) {
+    return new NativeAmxParticipantApplication(
+        laneId,
         BigInteger.valueOf(8L),
+        hash(0x51 + (int) laneId),
         BigInteger.valueOf(8L),
         BigInteger.ONE,
         BigInteger.valueOf(7L),
+        hash(0x61),
+        hash(0x71),
+        hash(0x73),
+        hash(0x75),
         sourceCount,
+        applicationBlockHeight,
         applicationBlockHash,
-        applicationBlockHeight);
+        state);
   }
 
   private static NativeAmxParticipantApplication application(
@@ -456,6 +630,45 @@ public final class SumeragiDiagnosticsModelsTests {
         applicationBlockHeight,
         applicationBlockHash,
         NativeAmxParticipantApplicationState.DURABLY_APPLIED);
+  }
+
+  private static AutonomousLaneExecution autonomousExecution(
+      final BigInteger proposalView,
+      final String reservationOwnerHash,
+      final String proposalIdentityHash,
+      final String reservationGroupHash,
+      final String proposalHash,
+      final String descriptorHash,
+      final String executablePayloadHash,
+      final String sourceBundleHash,
+      final String mergeEntryHash,
+      final BigInteger applicationBlockHeight,
+      final String applicationBlockHash,
+      final long reservationCount,
+      final AutonomousLaneExecutionStage stage,
+      final AutonomousLaneExecutionStuckReason reason) {
+    return new AutonomousLaneExecution(
+        3,
+        BigInteger.valueOf(8),
+        hash(0x54),
+        BigInteger.valueOf(8),
+        BigInteger.ONE,
+        BigInteger.TEN,
+        proposalView,
+        reservationOwnerHash,
+        proposalIdentityHash,
+        reservationGroupHash,
+        proposalHash,
+        descriptorHash,
+        executablePayloadHash,
+        sourceBundleHash,
+        mergeEntryHash,
+        applicationBlockHeight,
+        applicationBlockHash,
+        reservationCount,
+        2,
+        stage,
+        reason);
   }
 
   private static String hash(final int seed) {

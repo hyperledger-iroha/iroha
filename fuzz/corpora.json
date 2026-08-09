@@ -4,28 +4,28 @@
     "kind": "cli_dsl",
     "provenance": "pytests/iroha_cli_tests/common/json_isi_examples/grant_permission.json",
     "expected_validation_fail": null,
-    "fingerprint": "cf07fd816a5d8855513ec9b16bcb4447dabbd5fd9d2ff34c2537b36a36fec3fa"
+    "fingerprint": "b031b8132096e67a76f45600f299e1ba5d7c7601a6f5b0759e1437b1681b9ee0"
   },
   {
     "path": "cli_dsl/revoke_permission.json",
     "kind": "cli_dsl",
     "provenance": "pytests/iroha_cli_tests/common/json_isi_examples/revoke_permission.json",
     "expected_validation_fail": null,
-    "fingerprint": "83befee5d5a8689f3b70e80590afe4360a42c782b0c7cdf2e5f74137660b8dc2"
+    "fingerprint": "061f436a05255b44299aaa1756938ea1d9d7907f8c0a1d76cfde5657c68e374e"
   },
   {
     "path": "cli_dsl/unregister_asset.json",
     "kind": "cli_dsl",
     "provenance": "pytests/iroha_cli_tests/common/json_isi_examples/unregister_asset.json",
     "expected_validation_fail": null,
-    "fingerprint": "726c2cad68e89c3bde1143f98089b22422cd3b58f2fa1502cca27268f27d845a"
+    "fingerprint": "8d2d21617f6c5832e9469ac2920da3e30816c4fdb2aca1d715d93a334dde95b1"
   },
   {
     "path": "cli_dsl/multisig_set_key_value.json",
     "kind": "cli_dsl",
     "provenance": "scripts/tests/multisig.instructions.json",
     "expected_validation_fail": null,
-    "fingerprint": "53db630804f902ec3050b78958d4024482b1a44ee7d88f4c6589d44b909af27b"
+    "fingerprint": "035f9445fb4a6e22ed03060f377c679791f63fd7db52a9ac35fe19dbf90e5898"
   },
   {
     "path": "cli_dsl/transaction_log_message.json",
@@ -67,35 +67,28 @@
     "kind": "attachment",
     "provenance": "crates/iroha_cli/samples/zk/vk_register.json",
     "expected_validation_fail": null,
-    "fingerprint": "48fe3064f01ede60181d28752b1587283f5b88bc69fcabaf43a7d9d70beba0b2"
+    "fingerprint": "ceb94dad683763fb99aadc80b56cd0928dbaa1f7f44c774a5a0f6327577bd7d7"
   },
   {
     "path": "attachments/zk/vk_update.json",
     "kind": "attachment",
     "provenance": "crates/iroha_cli/samples/zk/vk_update.json",
     "expected_validation_fail": null,
-    "fingerprint": "5cb4ca8d1a439f56bff3d925f6421754a70a59d67ca58391bf697bc58f5b6e7c"
-  },
-  {
-    "path": "attachments/zk/vk_deprecate.json",
-    "kind": "attachment",
-    "provenance": "crates/iroha_cli/samples/zk/vk_deprecate.json",
-    "expected_validation_fail": null,
-    "fingerprint": "ec36e4aa9f2b09fe39fff0853a75c21ec66e8267749da82ee9fc028611e67efa"
+    "fingerprint": "906ad30b00b39beec7579919525be8f19154f516f6032ff5ee87b8208ec6f5d4"
   },
   {
     "path": "attachments/zk/vk_transfer.sample.json",
     "kind": "attachment",
     "provenance": "crates/iroha_cli/samples/zk/vk_transfer.sample.json",
     "expected_validation_fail": null,
-    "fingerprint": "1c43b201ea8dc4adb2b57c4cebf1391f6daf9f7e6850895c1daeb37533c2a3d4"
+    "fingerprint": "38181ba09c16035756330fad98954c1c4f88705df302e911d9e4d55fa28ecab8"
   },
   {
     "path": "attachments/zk/vk_unshield.sample.json",
     "kind": "attachment",
     "provenance": "crates/iroha_cli/samples/zk/vk_unshield.sample.json",
     "expected_validation_fail": null,
-    "fingerprint": "83723669487a13cde5d40528a664f198755f3179082431b579f95a0f2b66d2b9"
+    "fingerprint": "e1d6502437a385007224f8717a69a457f8405c034dde28d41b10f2da9bbfce5b"
   },
   {
     "path": "attachments/zk/unshield_proof.sample.json",
@@ -130,6 +123,6 @@
     "kind": "chunker",
     "provenance": "crates/sorafs_chunker/src/bin/export_vectors.rs (FixtureProfile::SF1_V1)",
     "expected_validation_fail": null,
-    "fingerprint": "32d2db7117888a82d246befacb6887e048eca36c101483e8f83c558ed169934f"
+    "fingerprint": "7ab310c6d058a09a96a5c1f144648aa39418fc41651f9a6be62e19b0a2ff29ca"
   }
 ]

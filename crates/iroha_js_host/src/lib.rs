@@ -66,13 +66,9 @@ use iroha_core::soracloud_runtime::{
     HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_TICKS,
     build_soracloud_hf_generated_agent_manifest, build_soracloud_hf_generated_service_bundle,
 };
-use iroha_core::zk::{
-    confidential_v2::{
-        self, ConfidentialTransferInputV2, ConfidentialTransferOutputV2,
-        ConfidentialUnshieldInputV2, ConfidentialUnshieldOutputV3,
-    },
-    hash_vk as hash_verifying_key_box,
-    test_utils::halo2_fixture_envelope,
+use iroha_core::zk::confidential_v2::{
+    self, ConfidentialTransferInputV2, ConfidentialTransferOutputV2, ConfidentialUnshieldInputV2,
+    ConfidentialUnshieldOutputV3,
 };
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PrivateKey, PublicKey, Signature,
@@ -212,7 +208,7 @@ use napi::{
 use napi_derive::napi;
 use norito::{
     codec::{DecodeAll, Encode},
-    core::{self as norito_core},
+    core::{self as norito_core, DecodeFromSlice},
     decode_from_bytes,
     json::{self, Map, Value},
 };
@@ -7670,16 +7666,6 @@ fn parse_u64_value(value: json::Value, context: &str) -> napi::Result<u64> {
     }
 }
 
-fn parse_u32_value(value: json::Value, context: &str) -> napi::Result<u32> {
-    let parsed = parse_u64_value(value, context)?;
-    u32::try_from(parsed).map_err(|_| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{context} must fit into u32"),
-        )
-    })
-}
-
 fn remove_case_insensitive(map: &mut json::Map, key: &str) -> Option<json::Value> {
     map.remove(key)
         .or_else(|| map.remove(&key.to_ascii_lowercase()))
@@ -12084,7 +12070,7 @@ fn encode_privacy_compiled_profile_catalog_archive(
         return Err(napi::Error::new(
             napi::Status::GenericFailure,
             format!(
-                "{context}: encoded privacy archive exceeds {PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1} bytes"
+                "{context}: encoded privacy compiled-profile catalog exceeds {PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1} bytes"
             ),
         ));
     }
@@ -12105,18 +12091,19 @@ fn encode_privacy_compiled_profile_catalog_archive(
 #[napi]
 /// Return this binary's canonical typed Norito V1 privacy compiled-profile catalog.
 ///
-/// This is local build metadata. Network activation and readiness must be read
-/// from Torii's committed `PrivacyCapabilitySnapshotV1` endpoint.
+/// This local catalog contains no committed height, governance activation, or
+/// readiness state. Those fields are authoritative only in a fresh
+/// `PrivacyCapabilitySnapshotV1` fetched from live Torii.
 pub fn privacy_compiled_profile_catalog_v1() -> napi::Result<Buffer> {
     let catalog = privacy_compiled_profile_catalog()?;
     encode_privacy_compiled_profile_catalog_archive(
         &catalog,
-        "encode privacy compiled-profile catalog",
+        "encode local privacy compiled-profile catalog",
     )
 }
 
 #[napi]
-/// Validate an archive as this binary's exact canonical compiled-profile catalog.
+/// Validate an archive as this binary's exact canonical local compiled-profile catalog.
 pub fn privacy_validate_compiled_profile_catalog_v1(archive: Uint8Array) -> i32 {
     validate_local_privacy_compiled_profile_catalog_archive_v1(archive.as_ref()).code()
 }
@@ -14514,7 +14501,7 @@ seiyaku Privacy {
     }
 
     #[test]
-    fn privacy_compiled_profile_catalog_is_the_exact_closed_registry() {
+    fn privacy_compiled_profile_catalog_is_the_exact_closed_local_registry() {
         let catalog = privacy_compiled_profile_catalog().expect("compiled-profile catalog");
         catalog
             .validate()
@@ -14543,6 +14530,17 @@ seiyaku Privacy {
             norito::decode_from_bytes(&bytes).expect("decode N-API compiled-profile catalog");
         catalog.validate().expect("N-API compiled-profile catalog");
         assert_eq!(catalog.protocols.len(), PrivacyProtocolIdV1::COUNT);
+        assert!(
+            norito::decode_from_bytes::<iroha_data_model::privacy::PrivacyCapabilitySnapshotV1>(
+                &bytes
+            )
+            .is_err(),
+            "a local compiled-profile catalog must not decode as network readiness"
+        );
+        assert!(
+            !iroha_data_model::privacy::validate_privacy_capability_archive_v1(&bytes).is_valid(),
+            "a local compiled-profile catalog must not pass snapshot admission"
+        );
 
         let mut one_byte_fake = norito::encode_canonical(&0_u8).expect("encode one-byte fake");
         one_byte_fake[6..22].copy_from_slice(&bytes[6..22]);
@@ -20158,28 +20156,5 @@ seiyaku Privacy {
         assert_eq!(js.misses.0, 10);
     }
 
-    #[test]
-    fn taikai_queue_stats_conversion_populates_js_struct() {
-        let queue = TaikaiPullQueueStats {
-            pending_segments: 2,
-            pending_bytes: 3,
-            pending_batches: 4,
-            in_flight_batches: 5,
-            hedged_batches: 6,
-            shaper_denials: QosStats {
-                priority: 1,
-                standard: 2,
-                bulk: 3,
-            },
-            dropped_segments: 7,
-            failovers: 8,
-            open_circuits: 9,
-        };
-
-        let js = JsTaikaiQueueStats::from(queue);
-        assert_eq!(js.pending_segments.0, 2);
-        assert_eq!(js.shaper_denials.bulk.0, 3);
-        assert_eq!(js.hedged_batches.0, 6);
-        assert_eq!(js.open_circuits.0, 9);
-    }
+    include!("taikai_queue_stats_test.rs");
 }

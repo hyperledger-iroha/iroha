@@ -353,10 +353,12 @@ private enum SorafsBridgeBootstrap {
     }
 
     private static func bridgeBinaryPathComponents() -> [String] {
-        #if arch(arm64)
-        return ["macos-arm64", "libNoritoBridge.a"]
-        #else
+        #if os(macOS)
+        return ["macos-arm64_x86_64", "libNoritoBridge.a"]
+        #elseif targetEnvironment(simulator)
         return ["ios-arm64_x86_64-simulator", "libNoritoBridge.a"]
+        #else
+        return ["ios-arm64", "libNoritoBridge.a"]
         #endif
     }
 
@@ -421,7 +423,9 @@ private enum SorafsBridgeBootstrap {
     }
 
     private static func unzipArchive(at zipURL: URL, into directory: URL) throws {
-        throw XCTSkip("unzip-based bridge materialization requires macOS Process support")
+        throw ParityHarnessError.unzipFailed(
+            "unzip-based bridge materialization is unavailable outside macOS"
+        )
     }
     #endif
 }

@@ -26,7 +26,11 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
-    isi::{Instruction, InstructionBox, decode_instruction_from_pair, frame_instruction_payload},
+    asset::{AssetBalancePolicy, AssetDefinition},
+    isi::{
+        Instruction, InstructionBox, Register, decode_instruction_from_pair,
+        frame_instruction_payload,
+    },
     metadata::Metadata,
     name::Name,
     sns::{NameControllerV1, NameRecordV1, NameSelectorV1, NameStatus, SuffixPolicyV1},
@@ -660,6 +664,37 @@ struct RawInstruction {
     payload_base64: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum InstructionSourceSlot {
+    Instructions(usize),
+    Batch(usize),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SemanticInstructionSource {
+    fixture_name: &'static str,
+    slot: InstructionSourceSlot,
+    wire_name: &'static str,
+}
+
+const SEMANTIC_INSTRUCTION_SOURCES: &[SemanticInstructionSource] = &[
+    SemanticInstructionSource {
+        fixture_name: "mixed_executable_batch",
+        slot: InstructionSourceSlot::Batch(0),
+        wire_name: "iroha.register",
+    },
+    SemanticInstructionSource {
+        fixture_name: "mixed_executable_batch",
+        slot: InstructionSourceSlot::Batch(2),
+        wire_name: "iroha.register",
+    },
+    SemanticInstructionSource {
+        fixture_name: "register_asset_definition",
+        slot: InstructionSourceSlot::Instructions(0),
+        wire_name: "iroha.register",
+    },
+];
+
 struct Fixture {
     name: String,
     payload_bytes: Vec<u8>,
@@ -728,7 +763,7 @@ impl RawPayloadFixture {
             );
         }
 
-        let builder = self.payload.to_builder().map_err(|err| {
+        let builder = self.payload.to_builder(&self.name).map_err(|err| {
             eyre!(
                 "failed to build Norito RPC fixture '{}': {err:#}",
                 self.name
@@ -792,7 +827,7 @@ impl RawPayloadFixture {
 }
 
 impl RawPayload {
-    fn to_builder(&self) -> Result<TransactionBuilder> {
+    fn to_builder(&self, fixture_name: &str) -> Result<TransactionBuilder> {
         let network_id = parse_network_id(&self.network_id)?;
         let authority = parse_account_id(&self.authority)
             .with_context(|| format!("invalid authority id '{}'", self.authority))?;
@@ -811,6 +846,7 @@ impl RawPayload {
         }
         builder = builder.with_metadata(metadata);
 
+        validate_semantic_instruction_shape(fixture_name, &self.executable)?;
         builder = match &self.executable {
             RawExecutable::Ivm(bytes) => {
                 builder.with_executable(Executable::Ivm(IvmBytecode::from_compiled(bytes.clone())))
@@ -818,7 +854,14 @@ impl RawPayload {
             RawExecutable::Instructions(raws) => {
                 let instructions = raws
                     .iter()
-                    .map(build_instruction)
+                    .enumerate()
+                    .map(|(index, raw)| {
+                        build_fixture_instruction(
+                            fixture_name,
+                            InstructionSourceSlot::Instructions(index),
+                            raw,
+                        )
+                    })
                     .collect::<Result<Vec<_>>>()?;
                 builder.with_instructions(instructions)
             }
@@ -828,10 +871,14 @@ impl RawPayload {
             RawExecutable::Batch(raws) => {
                 let items = raws
                     .iter()
-                    .map(|raw| match raw {
-                        RawBatchItem::Instruction(raw) => {
-                            build_instruction(raw).map(ExecutableBatchItem::Instruction)
-                        }
+                    .enumerate()
+                    .map(|(index, raw)| match raw {
+                        RawBatchItem::Instruction(raw) => build_fixture_instruction(
+                            fixture_name,
+                            InstructionSourceSlot::Batch(index),
+                            raw,
+                        )
+                        .map(ExecutableBatchItem::Instruction),
                         RawBatchItem::ContractCall(invocation) => {
                             Ok(ExecutableBatchItem::ContractCall(invocation.clone()))
                         }
@@ -1123,6 +1170,99 @@ fn parse_metadata_object(value: &Value) -> Result<Vec<(Name, Json)>> {
         entries.push((name, json_value));
     }
     Ok(entries)
+}
+
+fn observed_instruction_sources(executable: &RawExecutable) -> Vec<(InstructionSourceSlot, &str)> {
+    match executable {
+        RawExecutable::Instructions(raws) => raws
+            .iter()
+            .enumerate()
+            .map(|(index, raw)| {
+                (
+                    InstructionSourceSlot::Instructions(index),
+                    raw.wire_name.as_str(),
+                )
+            })
+            .collect(),
+        RawExecutable::Batch(items) => items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| match item {
+                RawBatchItem::Instruction(raw) => {
+                    Some((InstructionSourceSlot::Batch(index), raw.wire_name.as_str()))
+                }
+                RawBatchItem::ContractCall(_) => None,
+            })
+            .collect(),
+        RawExecutable::Ivm(_) | RawExecutable::ContractCall(_) => Vec::new(),
+    }
+}
+
+fn validate_semantic_instruction_shape(
+    fixture_name: &str,
+    executable: &RawExecutable,
+) -> Result<()> {
+    let observed = observed_instruction_sources(executable);
+    validate_semantic_instruction_observations(fixture_name, &observed)
+}
+
+fn validate_semantic_instruction_observations(
+    fixture_name: &str,
+    observed: &[(InstructionSourceSlot, &str)],
+) -> Result<()> {
+    let expected = SEMANTIC_INSTRUCTION_SOURCES
+        .iter()
+        .filter(|source| source.fixture_name == fixture_name)
+        .map(|source| (source.slot, source.wire_name))
+        .collect::<Vec<_>>();
+    if expected.is_empty() {
+        return Ok(());
+    }
+    if observed != expected.as_slice() {
+        bail!(
+            "fixture '{fixture_name}' semantic instruction shape mismatch: expected {expected:?}, got {observed:?}"
+        );
+    }
+    Ok(())
+}
+
+fn semantic_register_asset_definition() -> Result<Register<AssetDefinition>> {
+    let id = "6pEP9RjNoZ7beWkT3pLfKoM1dyfi"
+        .parse()
+        .context("invalid code-owned register_asset_definition id")?;
+    Ok(Register::asset_definition(AssetDefinition::numeric(
+        id,
+        "Rose Token",
+        AssetBalancePolicy::Global,
+        None,
+    )))
+}
+
+fn build_fixture_instruction(
+    fixture_name: &str,
+    slot: InstructionSourceSlot,
+    raw: &RawInstruction,
+) -> Result<InstructionBox> {
+    let source = SEMANTIC_INSTRUCTION_SOURCES
+        .iter()
+        .find(|source| source.fixture_name == fixture_name && source.slot == slot);
+    if let Some(source) = source {
+        if raw.wire_name != source.wire_name {
+            bail!(
+                "fixture '{fixture_name}' semantic instruction at {slot:?} requires wire '{}', got '{}'",
+                source.wire_name,
+                raw.wire_name
+            );
+        }
+        return Ok(semantic_register_asset_definition()?.into());
+    }
+    if SEMANTIC_INSTRUCTION_SOURCES
+        .iter()
+        .any(|source| source.fixture_name == fixture_name)
+    {
+        bail!("fixture '{fixture_name}' has an unowned semantic instruction at {slot:?}");
+    }
+    build_instruction(raw)
 }
 
 fn build_instruction(raw: &RawInstruction) -> Result<InstructionBox> {
@@ -2757,12 +2897,111 @@ fn verify_compact_hash_vector(path: &Path, fixtures: &[FixtureEntry]) -> Result<
 mod tests {
     use std::fs;
 
+    use iroha_data_model::asset::Mintable;
+    use iroha_primitives::numeric::NumericSpec;
     use norito::core::DecodeFromSlice;
 
     use super::*;
 
     const TEST_NETWORK_ID: &str =
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+
+    #[test]
+    fn register_asset_definition_fixture_source_is_current_and_semantic() {
+        let register = semantic_register_asset_definition().expect("semantic register source");
+        assert_eq!(
+            register.object.id.to_string(),
+            "6pEP9RjNoZ7beWkT3pLfKoM1dyfi"
+        );
+        assert_eq!(register.object.name, "Rose Token");
+        assert_eq!(register.object.spec, NumericSpec::default());
+        assert_eq!(register.object.mintable, Mintable::Infinitely);
+        assert_eq!(
+            register.object.balance_scope_policy,
+            AssetBalancePolicy::Global
+        );
+        assert!(register.object.owning_domain.is_none());
+
+        let value = json::to_value(&register.object).expect("serialize semantic source");
+        let object = value.as_object().expect("NewAssetDefinition JSON object");
+        assert_eq!(object.get("owning_domain"), Some(&Value::Null));
+        assert!(!object.contains_key("confidential_policy"));
+    }
+
+    #[test]
+    fn register_asset_definition_semantic_owner_table_is_exact() {
+        assert_eq!(
+            SEMANTIC_INSTRUCTION_SOURCES,
+            &[
+                SemanticInstructionSource {
+                    fixture_name: "mixed_executable_batch",
+                    slot: InstructionSourceSlot::Batch(0),
+                    wire_name: "iroha.register",
+                },
+                SemanticInstructionSource {
+                    fixture_name: "mixed_executable_batch",
+                    slot: InstructionSourceSlot::Batch(2),
+                    wire_name: "iroha.register",
+                },
+                SemanticInstructionSource {
+                    fixture_name: "register_asset_definition",
+                    slot: InstructionSourceSlot::Instructions(0),
+                    wire_name: "iroha.register",
+                },
+            ]
+        );
+        for fixture_name in [
+            "register_peer_with_pop_demo",
+            "register_role_demo",
+            "register_nft_demo",
+            "register_time_trigger_demo",
+            "unknown_fixture",
+        ] {
+            validate_semantic_instruction_observations(fixture_name, &[])
+                .expect("non-owned fixtures retain strict framed decoding");
+        }
+    }
+
+    #[test]
+    fn register_asset_definition_semantic_source_rejects_wrong_wire_or_ordinal() {
+        let exact = [(InstructionSourceSlot::Instructions(0), "iroha.register")];
+        validate_semantic_instruction_observations("register_asset_definition", &exact)
+            .expect("exact source identity");
+
+        for malformed in [
+            Vec::new(),
+            vec![(InstructionSourceSlot::Instructions(0), "iroha.transfer")],
+            vec![(InstructionSourceSlot::Instructions(1), "iroha.register")],
+            vec![
+                (InstructionSourceSlot::Instructions(0), "iroha.register"),
+                (InstructionSourceSlot::Instructions(1), "iroha.register"),
+            ],
+        ] {
+            validate_semantic_instruction_observations("register_asset_definition", &malformed)
+                .expect_err("semantic source shape must fail closed");
+        }
+
+        let shifted_batch = [
+            (InstructionSourceSlot::Batch(0), "iroha.register"),
+            (InstructionSourceSlot::Batch(1), "iroha.register"),
+        ];
+        validate_semantic_instruction_observations("mixed_executable_batch", &shifted_batch)
+            .expect_err("mixed-batch semantic instruction slots are exact");
+    }
+
+    #[test]
+    fn generated_register_asset_definition_roundtrips_current_register_box() {
+        let instruction: InstructionBox = semantic_register_asset_definition()
+            .expect("semantic register source")
+            .into();
+        let type_name = Instruction::id(&*instruction).to_owned();
+        let payload = Instruction::dyn_encode(&*instruction);
+        let framed = frame_instruction_payload(&type_name, &payload).expect("frame instruction");
+        let decoded =
+            decode_instruction_from_pair("iroha.register", &framed).expect("decode instruction");
+        assert_eq!(Instruction::id(&*decoded), type_name);
+        assert_eq!(Instruction::dyn_encode(&*decoded), payload);
+    }
 
     fn sample_manifest() -> Manifest {
         Manifest {
@@ -3471,7 +3710,7 @@ mod tests {
         };
 
         let error = payload
-            .to_builder()
+            .to_builder("invalid-network-id")
             .err()
             .expect("an empty network id must be rejected");
         assert!(

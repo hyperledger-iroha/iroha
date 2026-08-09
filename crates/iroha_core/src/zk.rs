@@ -1360,8 +1360,7 @@ where
         .map_err(|err| format!("failed to create {context} proof: {err}"))
 }
 
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 fn verify_halo2_ipa_payload_no_instances(
     params: &PastaParams,
     vk: &halo2_backend::VerifyingKey,
@@ -1390,8 +1389,7 @@ fn verify_halo2_ipa_payload_columns(
     verify_halo2_ipa_payload_columns_result(params, vk, proof_payload, col_refs).is_ok()
 }
 
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 fn verify_halo2_ipa_payload_optional_columns(
     params: &PastaParams,
     vk: &halo2_backend::VerifyingKey,
@@ -3030,16 +3028,14 @@ type CachedVk = Arc<halo2_backend::VerifyingKey>;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 static VK_CACHE: OnceLock<Mutex<BTreeMap<VkCacheKey, CachedVk>>> = OnceLock::new();
 
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 struct BuiltinVkCacheKey {
     backend: String,
     params_fingerprint: [u8; 32],
 }
 
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 static BUILTIN_VK_CACHE: OnceLock<Mutex<BTreeMap<BuiltinVkCacheKey, CachedVk>>> = OnceLock::new();
 
 #[cfg(feature = "telemetry")]
@@ -3333,8 +3329,7 @@ macro_rules! cached_vk_for {
     }};
 }
 
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 fn keygen_vk_cached<C>(
     backend: &str,
     params: &PastaParams,
@@ -3366,8 +3361,8 @@ where
     Ok(entry)
 }
 
-// Verifying keys are cached above (`VK_CACHE` / `BUILTIN_VK_CACHE`) and keyed by backend,
-// parameter fingerprint, and verifying-key hash so repeated proofs avoid recomputing `keygen_vk`.
+// Parsed verifying keys are cached above and keyed by backend, parameter fingerprint, and
+// verifying-key hash so repeated proofs avoid repeated strict parsing.
 
 /// Built-in verifier: native IPA polynomial opening (transparent) using Norito envelope.
 #[cfg(feature = "zk-ipa-native")]

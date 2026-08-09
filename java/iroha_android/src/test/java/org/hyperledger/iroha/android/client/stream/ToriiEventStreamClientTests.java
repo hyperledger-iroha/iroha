@@ -34,11 +34,6 @@ public final class ToriiEventStreamClientTests {
   private ToriiEventStreamClientTests() {}
 
   public static void main(final String[] args) throws Exception {
-    if (!SseServer.isSupported()) {
-      System.out.println(
-          "[IrohaAndroid] Torii SSE client tests skipped (loopback sockets disabled).");
-      return;
-    }
     sseStreamDeliversEvents();
     sseStreamEmitsRetryHints();
     sseStreamStopsAfterClose();
@@ -743,16 +738,6 @@ public final class ToriiEventStreamClientTests {
       server.createContext("/v1/events/sse", wrapper::handleExchange);
       server.start();
       return wrapper;
-    }
-
-    static boolean isSupported() {
-      try {
-        final HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        server.stop(0);
-        return true;
-      } catch (final IOException | SecurityException ex) {
-        return false;
-      }
     }
 
     URI baseUri() {

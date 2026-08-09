@@ -71,7 +71,7 @@ final class DemoConnectViewModelTests: XCTestCase {
     XCTAssertEqual(viewModel.approveSigB64, "c2lnbmF0dXJl")
   }
 
-  func testAddressPreviewAvailableWhenIrohaSwiftIsPresent() throws {
+  func testAddressPreviewAvailableWhenIrohaSwiftIsPresent() {
 #if canImport(IrohaSwift)
     let viewModel = DemoConnectViewModel()
     guard let preview = viewModel.addressPreview else {
@@ -82,7 +82,7 @@ final class DemoConnectViewModelTests: XCTestCase {
     XCTAssertFalse(preview.i105.contains("@"))
     XCTAssertTrue(preview.i105Warning.lowercased().contains("i105"))
 #else
-    throw XCTSkip("IrohaSwift framework is unavailable on this platform")
+    XCTFail("IrohaSwift framework is required for the address preview release test")
 #endif
   }
 }

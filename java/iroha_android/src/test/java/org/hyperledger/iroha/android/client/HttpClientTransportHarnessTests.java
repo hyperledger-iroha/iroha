@@ -31,11 +31,6 @@ public final class HttpClientTransportHarnessTests {
   public static void main(final String[] args) throws Exception {
     sorafsGatewayClientSharesConfig();
     noritoRpcClientUsesTransportExecutor();
-    if (!ToriiMockServer.isSupported()) {
-      System.out.println(
-          "[IrohaAndroid] HTTP client harness tests skipped (mock server cannot bind in this environment).");
-      return;
-    }
     submitSurfacedRejectCode();
     submitAndPollAgainstMockTorii();
     statusRetryContinuesAfter404();
@@ -44,12 +39,7 @@ public final class HttpClientTransportHarnessTests {
   }
 
   private static void submitAndPollAgainstMockTorii() throws Exception {
-    final var maybeServer = ToriiMockServer.tryCreate();
-    if (maybeServer.isEmpty()) {
-      System.out.println("[IrohaAndroid] submit/poll harness skipped (mock server unavailable).");
-      return;
-    }
-    try (ToriiMockServer server = maybeServer.get()) {
+    try (ToriiMockServer server = ToriiMockServer.create()) {
       final HttpClientTransport transport =
           new HttpClientTransport(
               new UrlConnectionTransportExecutor(),
@@ -97,12 +87,7 @@ public final class HttpClientTransportHarnessTests {
   }
 
   private static void submitSurfacedRejectCode() throws Exception {
-    final var maybeServer = ToriiMockServer.tryCreate();
-    if (maybeServer.isEmpty()) {
-      System.out.println("[IrohaAndroid] reject-code harness skipped (mock server unavailable).");
-      return;
-    }
-    try (ToriiMockServer server = maybeServer.get()) {
+    try (ToriiMockServer server = ToriiMockServer.create()) {
       final HttpClientTransport transport =
           new HttpClientTransport(
               new UrlConnectionTransportExecutor(),
@@ -184,12 +169,7 @@ public final class HttpClientTransportHarnessTests {
   }
 
   private static void statusRetryContinuesAfter404() throws Exception {
-    final var maybeServer = ToriiMockServer.tryCreate();
-    if (maybeServer.isEmpty()) {
-      System.out.println("[IrohaAndroid] status retry harness skipped (mock server unavailable).");
-      return;
-    }
-    try (ToriiMockServer server = maybeServer.get()) {
+    try (ToriiMockServer server = ToriiMockServer.create()) {
       final HttpClientTransport transport =
           new HttpClientTransport(
               new UrlConnectionTransportExecutor(),
@@ -219,12 +199,7 @@ public final class HttpClientTransportHarnessTests {
   }
 
   private static void transportExposesNoritoRpcClient() throws Exception {
-    final var maybeServer = ToriiMockServer.tryCreate();
-    if (maybeServer.isEmpty()) {
-      System.out.println("[IrohaAndroid] Norito RPC harness skipped (mock server unavailable).");
-      return;
-    }
-    try (ToriiMockServer server = maybeServer.get()) {
+    try (ToriiMockServer server = ToriiMockServer.create()) {
       server.enqueueSubmitResponse(MockResponse.empty(204));
       final CountingObserver observer = new CountingObserver();
       final HttpClientTransport transport =

@@ -2,7 +2,7 @@
 //!
 //! The verifier reconstructs every selector and constant column from the
 //! public statement. The prover commits only witness-bearing base columns;
-//! the sole profile auxiliary column is reserved as a constrained zero so the
+//! the sole profile auxiliary column is reserved as a zero bridge so the
 //! shared first-release note proof driver has one exact topology.
 
 use iroha_data_model::privacy::{
@@ -19,9 +19,13 @@ use super::{
         SCRATCH_NONZERO_BIT_SELECT_OFFSET, SCRATCH_NONZERO_BYTE_SELECT_OFFSET,
         SCRATCH_RELATION_CARRY_AFTER, SCRATCH_RELATION_CARRY_BEFORE,
         SCRATCH_RELATION_CARRY_BITS_OFFSET, SCRATCH_RUNNING_AFTER, SCRATCH_RUNNING_BEFORE,
-        SHA_BITS_OFFSET, SHA_CARRY_OFFSET, SHA_CARRY_WIDTH, SHA_INITIAL_STATE_OFFSET,
-        SHA_SCHEDULE_OFFSET, SHA_STATE_OFFSET, SHA_T1_OFFSET, SHA_T2_OFFSET,
-        SHA256_INITIAL_STATE_V1, SHA256_ROUND_CONSTANTS_V1, SumSideV1,
+        SCRATCH_VM_CARRY_AFTER, SCRATCH_VM_CARRY_BEFORE, SCRATCH_VM_DESTINATION_SELECT_OFFSET,
+        SCRATCH_VM_DIFFERENCE, SCRATCH_VM_DIFFERENCE_BITS_OFFSET, SCRATCH_VM_HALTED_AFTER,
+        SCRATCH_VM_HALTED_BEFORE, SCRATCH_VM_IMMEDIATE_OFFSET, SCRATCH_VM_LEFT_SELECT_OFFSET,
+        SCRATCH_VM_OPCODE_SELECT_OFFSET, SCRATCH_VM_RESULT, SCRATCH_VM_RESULT_BITS_OFFSET,
+        SCRATCH_VM_RIGHT_SELECT_OFFSET, SHA_BITS_OFFSET, SHA_CARRY_OFFSET, SHA_CARRY_WIDTH,
+        SHA_INITIAL_STATE_OFFSET, SHA_SCHEDULE_OFFSET, SHA_STATE_OFFSET, SHA_T1_OFFSET,
+        SHA_T2_OFFSET, SHA256_INITIAL_STATE_V1, SHA256_ROUND_CONSTANTS_V1, SumSideV1,
         build_pq_masp_copy_schedule_v1, build_pq_masp_fixed_trace_v1,
     },
     relation::PqMaspWitnessV1,
@@ -50,8 +54,10 @@ const TYPE_DISTINCT: usize = 3;
 const TYPE_NONZERO: usize = 4;
 const TYPE_SUM_IO: usize = 5;
 const TYPE_SUM_CONSERVATION: usize = 6;
-// Selector columns 7 through 10 remain canonical zero padding in the V0
-// profile, preserving its committed fixed-column layout.
+const TYPE_VM_HEADER: usize = 7;
+const TYPE_VM_PROGRAM: usize = 8;
+const TYPE_VM_PREVIOUS: usize = 9;
+const TYPE_VM_NEXT: usize = 10;
 const TYPE_PADDING: usize = 11;
 const TYPE_COLUMN_COUNT: usize = 12;
 
@@ -69,17 +75,22 @@ const FIXED_SEQUENCE_TRANSITION: usize = FIXED_SEQUENCE_LAST + 1;
 const FIXED_SUM_FIRST: usize = FIXED_SEQUENCE_TRANSITION + 1;
 const FIXED_SUM_LAST: usize = FIXED_SUM_FIRST + 1;
 const FIXED_SUM_TRANSITION: usize = FIXED_SUM_LAST + 1;
-// Fixed columns 99 through 121 are canonical zero padding in V0.
-const RESERVED_FIXED_PADDING_WIDTH_V1: usize = 23;
+const FIXED_VM_BYTE_SELECTOR_OFFSET: usize = FIXED_SUM_TRANSITION + 1;
+const FIXED_VM_PROGRAM_FIRST: usize = FIXED_VM_BYTE_SELECTOR_OFFSET + 16;
+const FIXED_VM_PROGRAM_LAST: usize = FIXED_VM_PROGRAM_FIRST + 1;
+const FIXED_VM_COMMON_TRANSITION: usize = FIXED_VM_PROGRAM_LAST + 1;
+const FIXED_VM_INSTRUCTION_TRANSITION: usize = FIXED_VM_COMMON_TRANSITION + 1;
+const FIXED_VM_ACTION_LIMB_ZERO_BYTE: usize = FIXED_VM_INSTRUCTION_TRANSITION + 1;
+const FIXED_VM_ACTION_LIMB_ONE_BYTE: usize = FIXED_VM_ACTION_LIMB_ZERO_BYTE + 1;
+const FIXED_VM_EXECUTION_EPOCH_BYTE: usize = FIXED_VM_ACTION_LIMB_ONE_BYTE + 1;
 
-pub(super) const PQ_MASP_PROFILE_FIXED_WIDTH_V1: usize =
-    FIXED_SUM_TRANSITION + 1 + RESERVED_FIXED_PADDING_WIDTH_V1;
+pub(super) const PQ_MASP_PROFILE_FIXED_WIDTH_V1: usize = FIXED_VM_EXECUTION_EPOCH_BYTE + 1;
 pub(super) const PQ_MASP_PROFILE_AUX_WIDTH_V1: usize = 1;
 pub(super) const PQ_MASP_PROFILE_CONSTRAINT_COUNT_V1: usize = 1_372;
 /// Audited maximum algebraic degree across the complete shared/profile AIR.
 pub(super) const PQ_MASP_PROFILE_CONSTRAINT_DEGREE_V1: u8 =
     PROOF_MANAGED_NOTE_MAX_CONSTRAINT_DEGREE_V1;
-const PROFILE_AUX_RESERVED_ZERO: usize = 0;
+const PROFILE_AUX_VM_CARRY_BRIDGE: usize = 0;
 
 /// Relation-local descriptor combined with the shared proof-driver geometry.
 pub(crate) const PQ_MASP_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"pq-masp-stark-v0:relation=proof-managed-note:wire=PQA1-outer+PQS1-inner-v1:trace=2^14:base=556:profile-aux=1:profile-fixed=122:profile-constraints=1372:constraint-degree=4:max-inner-proof=9431915:sha256-wide-air:public-digest=sha256-frame(canonical-statement,PrivacyNativeConsensusBindingDigestV1):tree-depth=32:authorization=ML-DSA-65(statement-digest+native-consensus-binding-digest-v1+inner-proof-digest):encryption=ML-KEM-768+XChaCha20Poly1305:value=u128-checked:fee=separate:legacy=unrepresentable:governance=typed-lifecycle";
@@ -160,12 +171,14 @@ fn pq_masp_protocol_v1() -> ProofManagedNoteStarkProtocolV1 {
 
 /// Validate the complete compiled proof-system and relation profile.
 pub(crate) fn validate_pq_masp_stark_profile_v1() -> Result<(), ProofManagedNoteStarkErrorV1> {
-    pq_masp_protocol_v1().validate()
+    pq_masp_protocol_v1().validate()?;
+    validate_reserved_vm_row_contract_v1()
 }
 
 fn map_air_error_v1(error: PqMaspAirErrorV1) -> ProofManagedNoteStarkErrorV1 {
     match error {
         PqMaspAirErrorV1::Resource => ProofManagedNoteStarkErrorV1::Resource,
+        PqMaspAirErrorV1::Copy => ProofManagedNoteStarkErrorV1::Copy,
         PqMaspAirErrorV1::Relation
         | PqMaspAirErrorV1::Topology
         | PqMaspAirErrorV1::Assignment
@@ -181,6 +194,89 @@ fn set(columns: &mut [Vec<F>], column: usize, row: usize, value: F) {
     columns[column][row] = value;
 }
 
+fn vm_same_instruction_transition(current: &PqMaspFixedRowV1, next: &PqMaspFixedRowV1) -> bool {
+    match (current, next) {
+        (
+            PqMaspFixedRowV1::VmProgram { instruction },
+            PqMaspFixedRowV1::VmPrevious {
+                instruction: next_instruction,
+                byte: 0,
+            },
+        ) => instruction == next_instruction,
+        (
+            PqMaspFixedRowV1::VmPrevious { instruction, byte },
+            PqMaspFixedRowV1::VmNext {
+                instruction: next_instruction,
+                byte: next_byte,
+            },
+        ) => instruction == next_instruction && byte == next_byte,
+        (
+            PqMaspFixedRowV1::VmNext { instruction, byte },
+            PqMaspFixedRowV1::VmPrevious {
+                instruction: next_instruction,
+                byte: next_byte,
+            },
+        ) => instruction == next_instruction && usize::from(*byte) + 1 == usize::from(*next_byte),
+        _ => false,
+    }
+}
+
+fn reserved_vm_type_column_v1(row: &PqMaspFixedRowV1) -> Option<usize> {
+    match row {
+        PqMaspFixedRowV1::VmHeader => Some(TYPE_VM_HEADER),
+        PqMaspFixedRowV1::VmProgram { .. } => Some(TYPE_VM_PROGRAM),
+        PqMaspFixedRowV1::VmPrevious { .. } => Some(TYPE_VM_PREVIOUS),
+        PqMaspFixedRowV1::VmNext { .. } => Some(TYPE_VM_NEXT),
+        _ => None,
+    }
+}
+
+fn validate_reserved_vm_row_contract_v1() -> Result<(), ProofManagedNoteStarkErrorV1> {
+    let rows = [
+        PqMaspFixedRowV1::VmHeader,
+        PqMaspFixedRowV1::VmProgram { instruction: 7 },
+        PqMaspFixedRowV1::VmPrevious {
+            instruction: 7,
+            byte: 0,
+        },
+        PqMaspFixedRowV1::VmNext {
+            instruction: 7,
+            byte: 0,
+        },
+        PqMaspFixedRowV1::VmPrevious {
+            instruction: 7,
+            byte: 1,
+        },
+    ];
+    let type_columns = [
+        reserved_vm_type_column_v1(&rows[0]),
+        reserved_vm_type_column_v1(&rows[1]),
+        reserved_vm_type_column_v1(&rows[2]),
+        reserved_vm_type_column_v1(&rows[3]),
+    ];
+    if [
+        TYPE_VM_HEADER,
+        TYPE_VM_PROGRAM,
+        TYPE_VM_PREVIOUS,
+        TYPE_VM_NEXT,
+    ] != [7, 8, 9, 10]
+        || type_columns
+            != [
+                Some(TYPE_VM_HEADER),
+                Some(TYPE_VM_PROGRAM),
+                Some(TYPE_VM_PREVIOUS),
+                Some(TYPE_VM_NEXT),
+            ]
+        || vm_same_instruction_transition(&rows[0], &rows[1])
+        || !vm_same_instruction_transition(&rows[1], &rows[2])
+        || !vm_same_instruction_transition(&rows[2], &rows[3])
+        || !vm_same_instruction_transition(&rows[3], &rows[4])
+    {
+        return Err(ProofManagedNoteStarkErrorV1::InvalidProfile);
+    }
+    Ok(())
+}
+
 pub(super) fn pq_masp_profile_fixed_columns_v1(
     statement: &PqMaspStarkStatementV1,
 ) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
@@ -190,6 +286,10 @@ pub(super) fn pq_masp_profile_fixed_columns_v1(
     }
     let mut columns = vec![vec![F::ZERO; PQ_MASP_TRACE_SIZE_V1]; PQ_MASP_PROFILE_FIXED_WIDTH_V1];
     for (row, current) in fixed.rows.iter().enumerate() {
+        let next = fixed
+            .rows
+            .get((row + 1).min(PQ_MASP_TRACE_SIZE_V1 - 1))
+            .ok_or(ProofManagedNoteStarkErrorV1::InvalidProfile)?;
         match current {
             PqMaspFixedRowV1::ShaRound { round, block, .. } => {
                 set(&mut columns, TYPE_SHA_ROUND, row, F::ONE);
@@ -299,15 +399,25 @@ pub(super) fn pq_masp_profile_fixed_columns_v1(
                     f(u64::from(*byte < 15)),
                 );
             }
+            PqMaspFixedRowV1::VmHeader
+            | PqMaspFixedRowV1::VmProgram { .. }
+            | PqMaspFixedRowV1::VmPrevious { .. }
+            | PqMaspFixedRowV1::VmNext { .. } => {
+                return Err(ProofManagedNoteStarkErrorV1::InvalidProfile);
+            }
             PqMaspFixedRowV1::Padding => {
                 set(&mut columns, TYPE_PADDING, row, F::ONE);
             }
+        }
+        if vm_same_instruction_transition(current, next) {
+            set(&mut columns, FIXED_VM_COMMON_TRANSITION, row, F::ONE);
         }
     }
     Ok(columns)
 }
 
 pub(super) fn pq_masp_profile_aux_columns_v1(
+    statement: &PqMaspStarkStatementV1,
     base_columns: &[Vec<F>],
 ) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
     if base_columns.len() != PQ_MASP_BASE_WIDTH_V1
@@ -317,7 +427,17 @@ pub(super) fn pq_masp_profile_aux_columns_v1(
     {
         return Err(ProofManagedNoteStarkErrorV1::InvalidTrace);
     }
-    Ok(vec![vec![F::ZERO; PQ_MASP_TRACE_SIZE_V1]])
+    let fixed = build_pq_masp_fixed_trace_v1(statement).map_err(map_air_error_v1)?;
+    let mut bridge = vec![F::ZERO; PQ_MASP_TRACE_SIZE_V1];
+    for row in 1..PQ_MASP_TRACE_SIZE_V1 {
+        if matches!(fixed.rows[row], PqMaspFixedRowV1::VmNext { .. }) {
+            if !matches!(fixed.rows[row - 1], PqMaspFixedRowV1::VmPrevious { .. }) {
+                return Err(ProofManagedNoteStarkErrorV1::InvalidProfile);
+            }
+            bridge[row] = base_columns[SCRATCH_VM_CARRY_AFTER][row - 1];
+        }
+    }
+    Ok(vec![bridge])
 }
 
 pub(super) fn pq_masp_base_columns_v1(
@@ -484,6 +604,10 @@ fn allowed_selector_for_column(current_fixed: &[F], column: usize) -> F {
     let nonzero = current_fixed[TYPE_NONZERO];
     let sum_io = current_fixed[TYPE_SUM_IO];
     let sum_conservation = current_fixed[TYPE_SUM_CONSERVATION];
+    let vm_program = current_fixed[TYPE_VM_PROGRAM];
+    let vm_previous = current_fixed[TYPE_VM_PREVIOUS];
+    let vm_next = current_fixed[TYPE_VM_NEXT];
+    let vm_common = vm_program.add(vm_previous).add(vm_next);
     if (SHA_SCHEDULE_OFFSET..SHA_SCHEDULE_OFFSET + PQ_MASP_SHA_SCHEDULE_WORDS_V1).contains(&column)
         || (SHA_INITIAL_STATE_OFFSET..SHA_INITIAL_STATE_OFFSET + PQ_MASP_SHA_STATE_WORDS_V1)
             .contains(&column)
@@ -516,10 +640,14 @@ fn allowed_selector_for_column(current_fixed: &[F], column: usize) -> F {
         .contains(&column)
     {
         sum_io
+    } else if (SCRATCH_VM_OPCODE_SELECT_OFFSET..SCRATCH_VM_HALTED_AFTER + 1).contains(&column) {
+        vm_common
+    } else if (SCRATCH_VM_CARRY_BEFORE..SCRATCH_VM_DIFFERENCE_BITS_OFFSET).contains(&column) {
+        vm_previous
     } else if (SCRATCH_DISTINCT_RIGHT_BITS_OFFSET..SCRATCH_DISTINCT_RIGHT_BITS_OFFSET + 8)
         .contains(&column)
     {
-        distinct
+        vm_previous.add(distinct)
     } else {
         F::ZERO
     }
@@ -549,7 +677,8 @@ fn pq_masp_profile_constraint_residues_inner_v1(
         return Err(ProofManagedNoteStarkErrorV1::InvalidTrace);
     }
     let fixed = &fixed[NOTE_COPY_FIXED_WIDTH_V1..];
-    let reserved_aux = current_aux[NOTE_COPY_AUX_WIDTH_V1 + PROFILE_AUX_RESERVED_ZERO];
+    let bridge = current_aux[NOTE_COPY_AUX_WIDTH_V1 + PROFILE_AUX_VM_CARRY_BRIDGE];
+    let next_bridge = next_aux[NOTE_COPY_AUX_WIDTH_V1 + PROFILE_AUX_VM_CARRY_BRIDGE];
     let mut residues = Vec::new();
 
     // Every base cell outside its row-family layout is exactly zero. This
@@ -1032,13 +1161,327 @@ fn pq_masp_profile_constraint_residues_inner_v1(
     // sum rows; the fixed profile still has one exact residue shape.
     residues.push(sum_selector.mul(F::ZERO));
 
-    // V0 reserves the remaining residue slots as canonical zeros and
-    // constrains its sole reserved auxiliary column to zero.
-    residues.push(reserved_aux);
-    if residues.len() > PQ_MASP_PROFILE_CONSTRAINT_COUNT_V1 {
-        return Err(ProofManagedNoteStarkErrorV1::InvalidProfile);
+    let vm_header = fixed[TYPE_VM_HEADER];
+    let vm_program = fixed[TYPE_VM_PROGRAM];
+    let vm_previous = fixed[TYPE_VM_PREVIOUS];
+    let vm_next = fixed[TYPE_VM_NEXT];
+    let vm_common = vm_program.add(vm_previous).add(vm_next);
+    let header = [b'I', b'P', b'N', b'1', 0, 1, 0, 0];
+    for (cell, expected) in header.into_iter().enumerate() {
+        push_weighted(
+            &mut residues,
+            vm_header,
+            current[COPY_OFFSET + cell].sub(F(u64::from(expected))),
+        );
     }
-    residues.resize(PQ_MASP_PROFILE_CONSTRAINT_COUNT_V1, F::ZERO);
+
+    let opcodes = &current[SCRATCH_VM_OPCODE_SELECT_OFFSET..SCRATCH_VM_OPCODE_SELECT_OFFSET + 9];
+    let destinations =
+        &current[SCRATCH_VM_DESTINATION_SELECT_OFFSET..SCRATCH_VM_DESTINATION_SELECT_OFFSET + 8];
+    let left_selectors = &current[SCRATCH_VM_LEFT_SELECT_OFFSET..SCRATCH_VM_LEFT_SELECT_OFFSET + 8];
+    let right_selectors =
+        &current[SCRATCH_VM_RIGHT_SELECT_OFFSET..SCRATCH_VM_RIGHT_SELECT_OFFSET + 8];
+    for selectors in [opcodes, destinations, left_selectors, right_selectors] {
+        for selector in selectors {
+            push_boolean(&mut residues, vm_common, *selector);
+        }
+        push_weighted(
+            &mut residues,
+            vm_common,
+            selectors.iter().copied().fold(F::ZERO, F::add).sub(F::ONE),
+        );
+    }
+    let encoded_selector = |selectors: &[F]| {
+        selectors
+            .iter()
+            .copied()
+            .enumerate()
+            .fold(F::ZERO, |sum, (index, selector)| {
+                sum.add(selector.mul(F(index as u64)))
+            })
+    };
+    push_weighted(
+        &mut residues,
+        vm_program,
+        current[COPY_OFFSET].sub(encoded_selector(opcodes)),
+    );
+    push_weighted(
+        &mut residues,
+        vm_program,
+        current[COPY_OFFSET + 1].sub(encoded_selector(destinations)),
+    );
+    push_weighted(
+        &mut residues,
+        vm_program,
+        current[COPY_OFFSET + 2].sub(encoded_selector(left_selectors)),
+    );
+    push_weighted(
+        &mut residues,
+        vm_program,
+        current[COPY_OFFSET + 3].sub(encoded_selector(right_selectors)),
+    );
+    for byte in 0..4 {
+        push_weighted(
+            &mut residues,
+            vm_program,
+            current[COPY_OFFSET + 4 + byte].sub(current[SCRATCH_VM_IMMEDIATE_OFFSET + byte]),
+        );
+    }
+
+    let destination = encoded_selector(destinations);
+    let left_register = encoded_selector(left_selectors);
+    let right_register = encoded_selector(right_selectors);
+    let immediate = &current[SCRATCH_VM_IMMEDIATE_OFFSET..SCRATCH_VM_IMMEDIATE_OFFSET + 4];
+    let immediate_zero = |residues: &mut Vec<F>, selector: F| {
+        for value in immediate {
+            push_weighted(residues, selector, *value);
+        }
+    };
+    let halt = opcodes[0];
+    let move_immediate = opcodes[1];
+    let move_register = opcodes[2];
+    let add_checked = opcodes[3];
+    let sub_checked = opcodes[4];
+    let assert_equal = opcodes[5];
+    let assert_less_equal = opcodes[6];
+    let load_action = opcodes[7];
+    let load_epoch = opcodes[8];
+    let program_halt = vm_program.mul(halt);
+    push_weighted(&mut residues, program_halt, destination);
+    push_weighted(&mut residues, program_halt, left_register);
+    push_weighted(&mut residues, program_halt, right_register);
+    immediate_zero(&mut residues, program_halt);
+    push_weighted(&mut residues, vm_program.mul(move_immediate), left_register);
+    push_weighted(
+        &mut residues,
+        vm_program.mul(move_immediate),
+        right_register,
+    );
+    push_weighted(&mut residues, vm_program.mul(move_register), right_register);
+    immediate_zero(&mut residues, vm_program.mul(move_register));
+    immediate_zero(&mut residues, vm_program.mul(add_checked.add(sub_checked)));
+    push_weighted(
+        &mut residues,
+        vm_program.mul(assert_equal.add(assert_less_equal)),
+        destination,
+    );
+    immediate_zero(
+        &mut residues,
+        vm_program.mul(assert_equal.add(assert_less_equal)),
+    );
+    push_weighted(&mut residues, vm_program.mul(load_action), left_register);
+    push_weighted(&mut residues, vm_program.mul(load_action), right_register);
+    for value in &immediate[..3] {
+        push_weighted(&mut residues, vm_program.mul(load_action), *value);
+    }
+    push_boolean(&mut residues, vm_program.mul(load_action), immediate[3]);
+    push_weighted(&mut residues, vm_program.mul(load_epoch), left_register);
+    push_weighted(&mut residues, vm_program.mul(load_epoch), right_register);
+    immediate_zero(&mut residues, vm_program.mul(load_epoch));
+
+    let halted_before = current[SCRATCH_VM_HALTED_BEFORE];
+    let halted_after = current[SCRATCH_VM_HALTED_AFTER];
+    push_boolean(&mut residues, vm_common, halted_before);
+    push_boolean(&mut residues, vm_common, halted_after);
+    push_weighted(
+        &mut residues,
+        vm_program,
+        halted_after
+            .sub(halted_before)
+            .sub(halt)
+            .add(halted_before.mul(halt)),
+    );
+    push_weighted(&mut residues, fixed[FIXED_VM_PROGRAM_FIRST], halted_before);
+    push_weighted(
+        &mut residues,
+        fixed[FIXED_VM_PROGRAM_LAST],
+        halted_after.sub(F::ONE),
+    );
+    push_weighted(
+        &mut residues,
+        vm_program,
+        halted_before.mul(F::ONE.sub(halt)),
+    );
+    for column in SCRATCH_VM_OPCODE_SELECT_OFFSET..SCRATCH_VM_HALTED_AFTER + 1 {
+        push_weighted(
+            &mut residues,
+            fixed[FIXED_VM_COMMON_TRANSITION],
+            next[column].sub(current[column]),
+        );
+    }
+    push_weighted(
+        &mut residues,
+        fixed[FIXED_VM_INSTRUCTION_TRANSITION],
+        next[SCRATCH_VM_HALTED_BEFORE].sub(halted_after),
+    );
+
+    let result = current[SCRATCH_VM_RESULT];
+    let difference = current[SCRATCH_VM_DIFFERENCE];
+    let result_bits = &current[SCRATCH_VM_RESULT_BITS_OFFSET..SCRATCH_VM_RESULT_BITS_OFFSET + 8];
+    let difference_bits =
+        &current[SCRATCH_VM_DIFFERENCE_BITS_OFFSET..SCRATCH_VM_DIFFERENCE_BITS_OFFSET + 8];
+    for bit in result_bits.iter().chain(difference_bits) {
+        push_boolean(&mut residues, vm_previous, *bit);
+    }
+    push_weighted(
+        &mut residues,
+        vm_previous,
+        pack_bits(result_bits).sub(result),
+    );
+    push_weighted(
+        &mut residues,
+        vm_previous,
+        pack_bits(difference_bits).sub(difference),
+    );
+
+    let selected_previous = |selectors: &[F]| {
+        selectors
+            .iter()
+            .copied()
+            .enumerate()
+            .fold(F::ZERO, |sum, (register, selector)| {
+                sum.add(selector.mul(current[COPY_OFFSET + register]))
+            })
+    };
+    let selected_next = |selectors: &[F]| {
+        selectors
+            .iter()
+            .copied()
+            .enumerate()
+            .fold(F::ZERO, |sum, (register, selector)| {
+                sum.add(selector.mul(next[COPY_OFFSET + register]))
+            })
+    };
+    let previous_left = selected_previous(left_selectors);
+    let previous_right = selected_previous(right_selectors);
+    let next_destination = selected_next(destinations);
+    let writes = move_immediate
+        .add(move_register)
+        .add(add_checked)
+        .add(sub_checked)
+        .add(load_action)
+        .add(load_epoch);
+    for register in 0..8 {
+        push_weighted(
+            &mut residues,
+            vm_previous,
+            F::ONE
+                .sub(writes.mul(destinations[register]))
+                .mul(next[COPY_OFFSET + register].sub(current[COPY_OFFSET + register])),
+        );
+    }
+    push_weighted(
+        &mut residues,
+        vm_previous,
+        writes.mul(next_destination.sub(result)),
+    );
+
+    let immediate_byte = fixed[FIXED_VM_BYTE_SELECTOR_OFFSET]
+        .mul(immediate[3])
+        .add(fixed[FIXED_VM_BYTE_SELECTOR_OFFSET + 1].mul(immediate[2]))
+        .add(fixed[FIXED_VM_BYTE_SELECTOR_OFFSET + 2].mul(immediate[1]))
+        .add(fixed[FIXED_VM_BYTE_SELECTOR_OFFSET + 3].mul(immediate[0]));
+    push_weighted(
+        &mut residues,
+        vm_previous.mul(move_immediate),
+        result.sub(immediate_byte),
+    );
+    push_weighted(
+        &mut residues,
+        vm_previous.mul(move_register),
+        result.sub(previous_left),
+    );
+    push_weighted(
+        &mut residues,
+        vm_previous.mul(halt.add(assert_equal).add(assert_less_equal)),
+        result,
+    );
+    let expected_action = F::ONE
+        .sub(immediate[3])
+        .mul(fixed[FIXED_VM_ACTION_LIMB_ZERO_BYTE])
+        .add(immediate[3].mul(fixed[FIXED_VM_ACTION_LIMB_ONE_BYTE]));
+    push_weighted(
+        &mut residues,
+        vm_previous.mul(load_action),
+        result.sub(expected_action),
+    );
+    push_weighted(
+        &mut residues,
+        vm_previous.mul(load_epoch),
+        result.sub(fixed[FIXED_VM_EXECUTION_EPOCH_BYTE]),
+    );
+    push_weighted(
+        &mut residues,
+        vm_previous.mul(assert_equal),
+        previous_left.sub(previous_right),
+    );
+
+    let vm_carry_before = current[SCRATCH_VM_CARRY_BEFORE];
+    let vm_carry_after = current[SCRATCH_VM_CARRY_AFTER];
+    let arithmetic = add_checked.add(sub_checked).add(assert_less_equal);
+    push_boolean(&mut residues, vm_previous.mul(arithmetic), vm_carry_before);
+    push_boolean(&mut residues, vm_previous.mul(arithmetic), vm_carry_after);
+    let non_arithmetic = F::ONE.sub(arithmetic);
+    push_weighted(
+        &mut residues,
+        vm_previous.mul(non_arithmetic),
+        vm_carry_before,
+    );
+    push_weighted(
+        &mut residues,
+        vm_previous.mul(non_arithmetic),
+        vm_carry_after,
+    );
+    push_weighted(
+        &mut residues,
+        vm_previous.mul(F::ONE.sub(assert_less_equal)),
+        difference,
+    );
+    push_weighted(
+        &mut residues,
+        vm_previous.mul(add_checked),
+        previous_left
+            .add(previous_right)
+            .add(vm_carry_before)
+            .sub(result)
+            .sub(vm_carry_after.mul(F(256))),
+    );
+    push_weighted(
+        &mut residues,
+        vm_previous.mul(sub_checked),
+        result
+            .add(previous_right)
+            .add(vm_carry_before)
+            .sub(previous_left)
+            .sub(vm_carry_after.mul(F(256))),
+    );
+    push_weighted(
+        &mut residues,
+        vm_previous.mul(assert_less_equal),
+        difference
+            .add(previous_left)
+            .add(vm_carry_before)
+            .sub(previous_right)
+            .sub(vm_carry_after.mul(F(256))),
+    );
+    let vm_byte_zero = fixed[FIXED_VM_BYTE_SELECTOR_OFFSET];
+    let vm_byte_last = fixed[FIXED_VM_BYTE_SELECTOR_OFFSET + 15];
+    push_weighted(
+        &mut residues,
+        vm_previous.mul(vm_byte_zero),
+        vm_carry_before,
+    );
+    push_weighted(&mut residues, vm_previous.mul(vm_byte_last), vm_carry_after);
+
+    residues.push(F::ONE.sub(vm_next).mul(bridge));
+    push_boolean(&mut residues, vm_next, bridge);
+    push_weighted(&mut residues, vm_previous, next_bridge.sub(vm_carry_after));
+    push_weighted(
+        &mut residues,
+        vm_next.mul(F::ONE.sub(vm_byte_last)),
+        next[SCRATCH_VM_CARRY_BEFORE].sub(bridge),
+    );
+    push_weighted(&mut residues, vm_next.mul(vm_byte_last), bridge);
 
     Ok(residues)
 }
@@ -1132,7 +1575,7 @@ impl ProofManagedNoteStarkAdapterV1 for PqMaspStarkAdapterV1<'_> {
         _copy_challenges: NoteCopyChallengesV1,
         _profile_challenges: &Self::ProfileChallenges,
     ) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
-        pq_masp_profile_aux_columns_v1(base_columns)
+        pq_masp_profile_aux_columns_v1(self.statement, base_columns)
     }
 
     fn profile_constraint_residues_v1(
@@ -1265,8 +1708,23 @@ mod tests {
         let mut aux =
             build_note_copy_aux_columns_v1(&base, &fixed, copy_challenges, PQ_MASP_TRACE_SIZE_V1)
                 .expect("copy auxiliary columns");
-        aux.extend(pq_masp_profile_aux_columns_v1(&base).expect("profile auxiliary columns"));
+        aux.extend(
+            pq_masp_profile_aux_columns_v1(statement, &base).expect("profile auxiliary columns"),
+        );
         (trace, base, aux, fixed, copy_challenges)
+    }
+
+    #[test]
+    fn reserved_vm_row_contract_pins_selector_and_sequence_mapping() {
+        validate_reserved_vm_row_contract_v1().expect("reserved VM row contract");
+        assert_eq!(reserved_vm_type_column_v1(&PqMaspFixedRowV1::Padding), None);
+        assert!(!vm_same_instruction_transition(
+            &PqMaspFixedRowV1::VmProgram { instruction: 7 },
+            &PqMaspFixedRowV1::VmPrevious {
+                instruction: 8,
+                byte: 0,
+            }
+        ));
     }
 
     #[test]
@@ -1398,15 +1856,11 @@ mod tests {
             &mut rng,
         )
         .expect("full-domain authorized PQ-MASP facade proof");
-        super::super::verify_pq_masp_v1(&statement, &binding, &limits, &authorized_proof)
-            .expect("full-domain PQ-MASP facade verification");
         let decoded = decode_pq_masp_authorization_proof_v1(&authorized_proof)
             .expect("canonical authorization wrapper");
         let proof = decoded.stark_proof.to_vec();
         assert!(!proof.is_empty());
         assert!(proof.len() <= super::super::wire::PQ_MASP_MAX_STARK_PROOF_BYTES_V1);
-        verify_pq_masp_stark_v1(&statement, &binding, &limits, &proof)
-            .expect("full-domain PQ-MASP verification");
         let proof_digest: [u8; 32] = Sha256::digest(&proof).into();
         let authorized_proof_digest: [u8; 32] = Sha256::digest(&authorized_proof).into();
         assert_eq!(
@@ -1417,6 +1871,10 @@ mod tests {
             ),
             "the deterministic inner and authorized PQ-MASP proof KATs drifted"
         );
+        super::super::verify_pq_masp_v1(&statement, &binding, &limits, &authorized_proof)
+            .expect("full-domain PQ-MASP facade verification");
+        verify_pq_masp_stark_v1(&statement, &binding, &limits, &proof)
+            .expect("full-domain PQ-MASP verification");
 
         assert!(
             verify_pq_masp_stark_v1(&statement, &binding, &limits, &vec![0; proof.len()],).is_err(),
@@ -1701,7 +2159,7 @@ mod tests {
             build_note_copy_aux_columns_v1(&base, &fixed, copy_challenges, PQ_MASP_TRACE_SIZE_V1)
                 .expect("hostile prover rebuilds copy auxiliary columns");
         aux.extend(
-            pq_masp_profile_aux_columns_v1(&base)
+            pq_masp_profile_aux_columns_v1(&target, &base)
                 .expect("hostile prover rebuilds profile auxiliary columns"),
         );
         let next = (public_row + 1) % PQ_MASP_TRACE_SIZE_V1;
@@ -1780,7 +2238,7 @@ mod tests {
                 build_note_copy_aux_columns_v1(&base, &fixed, challenges, PQ_MASP_TRACE_SIZE_V1)
                     .expect("hostile prover rebuilds copy auxiliary columns");
             aux.extend(
-                pq_masp_profile_aux_columns_v1(&base)
+                pq_masp_profile_aux_columns_v1(&statement, &base)
                     .expect("hostile prover rebuilds profile auxiliary columns"),
             );
             let next = (mutated_row + 1) % PQ_MASP_TRACE_SIZE_V1;
@@ -1909,7 +2367,7 @@ mod tests {
             base[column][mutated_row] = original;
         }
 
-        let profile_aux_column = NOTE_COPY_AUX_WIDTH_V1 + PROFILE_AUX_RESERVED_ZERO;
+        let profile_aux_column = NOTE_COPY_AUX_WIDTH_V1 + PROFILE_AUX_VM_CARRY_BRIDGE;
         let padding = row_index(&|row| matches!(row, PqMaspFixedRowV1::Padding));
         aux[profile_aux_column][padding] = F::ONE;
         assert!(

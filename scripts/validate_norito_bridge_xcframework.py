@@ -29,8 +29,8 @@ EXPECTED_SLICES = {
         "platform": "ios",
         "variant": "simulator",
     },
-    "macos-arm64": {
-        "architectures": ["arm64"],
+    "macos-arm64_x86_64": {
+        "architectures": ["arm64", "x86_64"],
         "platform": "macos",
         "variant": None,
     },

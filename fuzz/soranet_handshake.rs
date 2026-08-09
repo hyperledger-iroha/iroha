@@ -12,7 +12,8 @@ use iroha_crypto::{
     },
 };
 use libfuzzer_sys::fuzz_target;
-use rand::{SeedableRng as _, rngs::ChaCha20Rng};
+use rand::SeedableRng as _;
+use rand_chacha::ChaCha20Rng;
 
 #[derive(Debug, Arbitrary)]
 struct ByteMutation {
@@ -123,7 +124,7 @@ fn run_simulation(case: &FuzzInput) {
     apply_mutations(&mut client_caps, &case.client_mutations);
     apply_mutations(&mut relay_caps, &case.relay_mutations);
 
-    let resume_vec = case.resume_hash.map(<[u8; 32]>::to_vec);
+    let resume_vec = case.resume_hash.map(|hash| hash.to_vec());
     let resume_slice = resume_vec.as_deref();
 
     let descriptor = if case.descriptor_commit == [0u8; 32] {
@@ -164,7 +165,7 @@ fn run_runtime_handshake(case: &FuzzInput) {
     apply_mutations(&mut client_caps, &case.client_mutations);
     apply_mutations(&mut relay_caps, &case.relay_mutations);
 
-    let resume_vec = case.resume_hash.map(<[u8; 32]>::to_vec);
+    let resume_vec = case.resume_hash.map(|hash| hash.to_vec());
     let resume_slice = resume_vec.as_deref();
     let descriptor = if case.descriptor_commit == [0u8; 32] {
         DEFAULT_DESCRIPTOR_COMMIT.as_slice()
@@ -173,7 +174,7 @@ fn run_runtime_handshake(case: &FuzzInput) {
     };
 
     let runtime = RuntimeParams {
-        descriptor_commit,
+        descriptor_commit: descriptor,
         client_capabilities: &client_caps,
         relay_capabilities: &relay_caps,
         kem_id: case.kem_id % 3,

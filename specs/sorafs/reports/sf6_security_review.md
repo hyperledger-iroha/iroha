@@ -14,11 +14,16 @@ summary: Findings and follow-up items from the independent assessment of release
 - Release automation (`ci/check_sorafs_cli_release.sh`, `scripts/release_sorafs_cli.sh`)
 - Deterministic parity harness (`crates/sorafs_orchestrator/tests/sorafs_cli.rs`, `specs/sorafs/reports/orchestrator_ga.md`)
 
+> **Current qualification note (audited 2026-08-03):** This dated review is
+> historical input, not evidence that the current release tree passed its fuzz,
+> vulnerability, or deployment gates. Those gates remain open until their
+> pinned workflows execute and archive genuine results for the final source.
+
 ## Methodology
 
 1. **Threat modelling workshops** mapped attacker capabilities for developer workstations, CI systems, and Torii nodes.
 2. **Code review** focused on release-key custody, signer/verifier pinning, Norito manifest validation, provenance separation, and proof streaming back-pressure.
-3. **Dynamic testing** replayed fixture manifests and simulated failure modes (token replay, manifest tampering, truncated proof streams) using the parity harness and bespoke fuzz drives.
+3. **Dynamic testing** was recorded as replaying fixture manifests and simulating failure modes (token replay, manifest tampering, truncated proof streams) with the parity harness and bespoke fuzz drives. This historical methodology statement is not current fuzz-run evidence.
 4. **Configuration inspection** validated `iroha_config` defaults, CLI flag handling, and release scripts to ensure deterministic, auditable runs.
 5. **Process interview** confirmed remediation flow, escalation paths, and audit evidence capture with Tooling WG release owners.
 
@@ -56,14 +61,18 @@ Release managers **must** attach the following evidence when promoting a GA cand
 
 Failure to collect the artefacts above blocks GA sign-off.
 
-**Reference artefact hashes (2026-02-20 sign-off):**
+**Historical reference artefact hashes (2026-02-20 sign-off; not the digest of
+this superseding file):**
 
 - `sf6_security_review.md` — `66001d0b53d8e7ed5951a07453121c075dea931ca44c11f1fcd1571ed827342a`
 
 ## Outstanding Follow-ups
 
 - **Threat model refresh:** Repeat this review quarterly or before major CLI flag additions.
-- **Fuzzing coverage:** Proof streaming transport encodings are fuzzed via `fuzz/proof_stream_transport`, covering identity, gzip, deflate, and zstd payloads.
+- **Fuzzing coverage:** A proof-stream libFuzzer target exists in source at
+  `fuzz/proof_stream_transport.rs` for identity, gzip, deflate, and zstd. It is
+  not currently release-wired or qualified; executing the pinned target and
+  archiving its results remains outstanding.
 - **Incident rehearsal:** Schedule an operator exercise simulating token compromise and manifest rollback, ensuring documentation reflects practised procedures.
 
 ## Approval

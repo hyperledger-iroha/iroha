@@ -31,7 +31,7 @@ The source bridge surface also exposes the same reference validator through
 `sorafs_reference_validate_hedging_json`, Connect C/JNI
 `connect_norito_sorafs_reference_validate_hedging_json`, and Kotlin/JVM, Java
 Android, and Swift SDK wrappers. The bridge source and checked C header both
-declare the sole first-release ABI, version 21; packaged
+declare the sole first-release ABI, version 22; packaged
 native artifacts still need to be regenerated before SDK release consumption.
 `scripts/check_sorafs_hedging_rollout_evidence.py` now provides the SFM-5
 promotion gate for staged rollout evidence. It requires feed-collector,
@@ -348,6 +348,14 @@ tick remains inside the fixed freshness window and the projection contains a
 non-zero finalized cursor and height within the configured
 `max_finalized_lag_blocks` distance from the authenticated query head; an
 empty, lagging, or stale projection remains unready. The alert pack covers:
+
+The node-owned statement, exposure, intent, anchor, and reconciliation APIs do
+not trust that cached readiness summary. Each call holds the reconciliation
+fence, live-probes the qualified finalized-query provider, applies the same
+tick-freshness and maximum-lag bounds, and rechecks the exact observed head
+before returning. Acknowledgement additionally rechecks that exact head before
+the authoritative record and immediately before the local durable checkpoint
+store write, so an in-flight head change cannot mutate the served projection.
 
 - XOR/USD reference price and feed lag.
 - Feed divergence and exposure drift.

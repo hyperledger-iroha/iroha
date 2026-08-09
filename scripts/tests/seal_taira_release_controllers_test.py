@@ -54,10 +54,13 @@ def _attestation(
         "authority_root": str(roots["authority"]),
         "authority_uid": os.getuid(),
         "controller_gid": os.getegid(),
+        "controller_digest": "d" * 64,
         "controller_root": str(controller.CONTROLLER_ROOT),
         "handoff_root": str(handoff_root),
         "invoking_gid": os.getgid(),
         "invoking_uid": os.getuid(),
+        "host_id": "test-host-v1",
+        "installation_id": "test-installation-v1",
         "role": role,
         "runtime_gid": os.getgid(),
         "runtime_root": str(roots["runtime"]),
@@ -113,6 +116,31 @@ def test_controller_closures_are_exact_installed_operation_dependencies() -> Non
     )
     assert "--external-signer" not in controller.OPERATION_FLAGS["assemble-boi"]
     assert "--signing-public-key" not in controller.OPERATION_FLAGS["assemble-boi"]
+    assert "--qualification-external-signer" in controller.OPERATION_FLAGS[
+        "assemble-boi"
+    ]
+    assert "--qualification-signing-public-key" in controller.OPERATION_FLAGS[
+        "assemble-boi"
+    ]
+    assert "--trusted-qualification-signing-fingerprint" in (
+        controller.REQUIRED_FLAGS[("assemble-boi", None)]
+    )
+    assert "--candidate-replay-ledger" not in controller.OPERATION_FLAGS["assemble-boi"]
+    assert controller.IMMUTABLE_HANDOFF_OUTPUT_PREFIXES["assemble-boi"] == (
+        "boi-qualified-"
+    )
+    assert "--boi-qualified-handoff-root" in controller.OPERATION_FLAGS[
+        "deploy-reset"
+    ]
+    assert "--boi-qualified-handoff-root" in controller.REQUIRED_FLAGS[
+        ("deploy-reset", None)
+    ]
+    assert "--trusted-boi-qualification-public-key" in controller.REQUIRED_FLAGS[
+        ("deploy-reset", None)
+    ]
+    assert "--expected-boi-qualification-controller-digest" in (
+        controller.REQUIRED_FLAGS[("deploy-reset", None)]
+    )
     assert controller.REQUIRED_FLAGS[("assemble-boi", None)] == (
         controller.OPERATION_FLAGS["assemble-boi"]
     )
@@ -552,6 +580,13 @@ def test_immutable_composite_output_keeps_controller_identity_contract(
         attestation,
         "runtime",
     )
+    boi_output = {Path("/handoff/boi-qualified-1-1")}
+    controller._validate_successful_operation_outputs(
+        "assemble-boi",
+        boi_output,
+        attestation,
+        "authority",
+    )
     controller._validate_successful_operation_outputs(
         "extract-privacy",
         {Path("/runtime/extract")},
@@ -567,6 +602,7 @@ def test_immutable_composite_output_keeps_controller_identity_contract(
 
     assert calls == [
         (output, 0, 7),
+        (boi_output, 0, 7),
         ({Path("/runtime/extract")}, 41, 42),
     ]
 
@@ -1448,6 +1484,81 @@ def test_publisher_operation_rejects_noncanonical_candidate_root(
         controller._validate_operation_args(
             "publish-rollout", args, attestation
         )
+
+
+def test_boi_composite_keeps_ledger_and_raw_output_inside_authority_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    handoff = tmp_path / "handoff"
+    trusted = tmp_path / "trusted"
+    handoff.mkdir(mode=0o711)
+    trusted.mkdir(mode=0o700)
+    attestation = _attestation(handoff, trusted, "linux-boi-qualification")
+    final = handoff / "boi-qualified-123-1"
+    args = [
+        "--artifact-handoff-root", "/frozen/artifacts",
+        "--candidate-archive", "/frozen/candidate.tar.gz",
+        "--candidate-authority-dir", "/frozen/authority",
+        "--expected-source-commit", "1" * 40,
+        "--expected-dpn-validator-release-commit", "2" * 40,
+        "--expected-cargo-lock-sha256", "3" * 64,
+        "--expected-workspace-source-manifest-sha256", "4" * 64,
+        "--expected-receipt-id", "5" * 64,
+        "--trusted-signing-fingerprint", "6" * 64,
+        "--release-manifest-verifier", "/trusted/verifier",
+        "--trusted-release-manifest-verifier-sha256", "7" * 64,
+        "--output", str(final),
+    ]
+    calls: list[tuple[str, list[str], object]] = []
+
+    def dispatch(operation: str, child_args, run_as=None, *_unused) -> int:
+        values = list(child_args)
+        calls.append((operation, values, run_as))
+        if operation == "admit":
+            ledger = Path(values[values.index("--output") + 1])
+            ledger.write_bytes(b"{}\n")
+        else:
+            private = Path(values[values.index("--output") + 1])
+            private.mkdir(mode=0o555)
+        return 0
+
+    def inspect(root, kind, staging, uid, stage_name, controller_gid=None):
+        assert kind == "privacy-v1-boi-qualified"
+        assert root.parent.parent == Path(str(attestation["authority_root"]))
+        assert staging == handoff
+        assert uid == int(attestation["uid"])
+        output = staging / stage_name
+        output.mkdir(mode=0o555)
+        return {"staged_root": str(output)}
+
+    monkeypatch.setattr(controller, "_dispatch", dispatch)
+    monkeypatch.setattr(controller, "inspect_handoff", inspect)
+    monkeypatch.setattr(
+        controller, "_validate_operation_outputs", lambda *_args, **_kwargs: None
+    )
+
+    assert controller._dispatch_boi_composite(args, attestation) == 0
+    assert [call[0] for call in calls] == ["admit", "assemble-boi"]
+    authority_root = Path(str(attestation["authority_root"]))
+    _, assemble_args, run_as = calls[1]
+    replay = Path(
+        assemble_args[assemble_args.index("--candidate-replay-ledger") + 1]
+    )
+    private = Path(assemble_args[assemble_args.index("--output") + 1])
+    assert assemble_args[assemble_args.index("--qualification-host-id") + 1] == (
+        attestation["host_id"]
+    )
+    assert assemble_args[
+        assemble_args.index("--qualification-installation-id") + 1
+    ] == attestation["installation_id"]
+    assert assemble_args[assemble_args.index("--controller-closure-digest") + 1] == (
+        attestation["controller_digest"]
+    )
+    assert replay.parent.parent == authority_root
+    assert private.parent.parent == authority_root
+    assert run_as == (os.getuid(), os.getgid())
+    assert final.is_dir()
+    assert list(authority_root.iterdir()) == []
 
 
 def _configure_publisher_composite_attestation(

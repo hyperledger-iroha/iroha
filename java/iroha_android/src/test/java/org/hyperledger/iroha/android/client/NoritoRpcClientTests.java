@@ -37,11 +37,6 @@ public final class NoritoRpcClientTests {
   private NoritoRpcClientTests() {}
 
   public static void main(final String[] args) throws Exception {
-    if (!isHttpServerSupported()) {
-      System.out.println(
-          "[IrohaAndroid] Norito RPC client tests skipped (HTTP server cannot bind in this environment).");
-      return;
-    }
     defaultHeadersAndPayloadAreApplied();
     requestOverridesApplyHeadersMethodAndQuery();
     nonSuccessStatusRaisesException();
@@ -349,16 +344,6 @@ public final class NoritoRpcClientTests {
     @Override
     public void close() {
       server.stop(0);
-    }
-  }
-
-  private static boolean isHttpServerSupported() {
-    try {
-      final HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-      server.stop(0);
-      return true;
-    } catch (final IOException ex) {
-      return false;
     }
   }
 

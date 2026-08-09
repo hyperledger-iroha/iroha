@@ -1279,10 +1279,9 @@ object NativeAmxV2 {
         return value as Map<String, Any?>
     }
 
-    @Suppress("UNCHECKED_CAST")
     private fun array(value: Any?, path: String): List<Any?> {
         require(value is List<*>) { "$path must be a JSON array" }
-        return value as List<Any?>
+        return value
     }
 
     private fun string(value: Any?, path: String): String {

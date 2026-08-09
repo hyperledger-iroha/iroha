@@ -8,6 +8,8 @@ directories; module-controlled ``__file__`` attributes are never used to
 discover trusted files.
 """
 
+from __future__ import annotations
+
 import base64
 import csv
 import hashlib

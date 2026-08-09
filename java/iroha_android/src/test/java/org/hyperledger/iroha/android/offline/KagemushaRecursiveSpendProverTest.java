@@ -73,6 +73,16 @@ public final class KagemushaRecursiveSpendProverTest {
     offlineCapabilityRejectsBackendReadinessClaims();
   }
 
+  @org.junit.Test
+  public void secretLifecycleTransfersAndWipesOwnershipUnderJUnit() {
+    redemptionChangePreparationTransfersOpeningOwnershipExactlyOnce();
+    redemptionChangePreparationDestroysOnlyAnUntransferredOpening();
+    redemptionChangeRequestFailureDestroysTransferredOpening();
+    redemptionChangeCarriersCloseOrTransferOneOwnerExactlyOnce();
+    temporarySecretArchivesAreWipedAfterPartialConstructionAndOwnerCopy();
+    preparationConstructorFailuresDestroyStagedOpenings();
+  }
+
   private static void heavyProofPermitIsReentrantButRejectsAnotherThreadWithoutWaiting() {
     final CountDownLatch entered = new CountDownLatch(1);
     final CountDownLatch release = new CountDownLatch(1);
@@ -625,24 +635,24 @@ public final class KagemushaRecursiveSpendProverTest {
     final byte[] first = filled(0x61);
     final byte[] second = filled(0x62);
     final byte[][] partiallyConstructed = new byte[][] {first, null, second};
-    KagemushaRecursiveSpendProver.SecretArchiveWiper.wipeAll(partiallyConstructed);
+    SecretArchiveWiper.wipeAll(partiallyConstructed);
     assert allZero(first);
     assert allZero(second);
-    KagemushaRecursiveSpendProver.SecretArchiveWiper.wipeAll(null);
+    SecretArchiveWiper.wipeAll(null);
 
     final byte[] rawNativeArchive =
         archive("KagemushaRecursiveSpendRedeemLocalRequestV4", 0x63);
     final KagemushaRecursiveSpendProver.RedeemRequestV4 owner =
         KagemushaRecursiveSpendProver.decodeRedeemRequestV4(rawNativeArchive, null);
-    KagemushaRecursiveSpendProver.SecretArchiveWiper.wipe(rawNativeArchive);
+    SecretArchiveWiper.wipe(rawNativeArchive);
     assert allZero(rawNativeArchive);
     assert owner.noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
     owner.close();
-    KagemushaRecursiveSpendProver.SecretArchiveWiper.wipe(null);
+    SecretArchiveWiper.wipe(null);
 
     final List<byte[]> firstCopyObserved = new ArrayList<>();
     assertThrowsIllegalArgument(() ->
-        KagemushaRecursiveSpendProver.SecretArchiveWiper.withOpeningDigests(
+        SecretArchiveWiper.withOpeningDigests(
             filled(0x64),
             "spendKey",
             new byte[31],
@@ -656,7 +666,7 @@ public final class KagemushaRecursiveSpendProverTest {
 
     final List<byte[]> firstAndSecondCopiesObserved = new ArrayList<>();
     assertThrowsIllegalArgument(() ->
-        KagemushaRecursiveSpendProver.SecretArchiveWiper.withOpeningDigests(
+        SecretArchiveWiper.withOpeningDigests(
             filled(0x67),
             "spendKey",
             filled(0x68),
@@ -672,7 +682,7 @@ public final class KagemushaRecursiveSpendProverTest {
     final byte[] rawOpeningArchive = archive("KagemushaNoteOpeningV2", 0x69);
     final KagemushaRecursiveSpendProver.NoteOpening openingOwner =
         KagemushaRecursiveSpendProver.decodeNoteOpening(rawOpeningArchive);
-    KagemushaRecursiveSpendProver.SecretArchiveWiper.wipe(rawOpeningArchive);
+    SecretArchiveWiper.wipe(rawOpeningArchive);
     assert allZero(rawOpeningArchive);
     assert openingOwner.noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
     openingOwner.close();
@@ -681,7 +691,7 @@ public final class KagemushaRecursiveSpendProverTest {
         archive("KagemushaRecursiveSpendInitLocalRequestV4", 0x6a);
     final KagemushaRecursiveSpendProver.InitRequestV4 initOwner =
         KagemushaRecursiveSpendProver.decodeInitRequestV4(rawInitArchive);
-    KagemushaRecursiveSpendProver.SecretArchiveWiper.wipe(rawInitArchive);
+    SecretArchiveWiper.wipe(rawInitArchive);
     assert allZero(rawInitArchive);
     assert initOwner.noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
     initOwner.close();
@@ -1477,6 +1487,9 @@ public final class KagemushaRecursiveSpendProverTest {
 
     final KagemushaRecursiveSpendProver.OfflineStatus status =
         client.getOfflineCapability().join();
+    assert Arrays.stream(KagemushaRecursiveSpendProver.ToriiClient.class.getDeclaredMethods())
+        .noneMatch(method -> method.getName().equals("getReadiness"))
+        : "selector-taking offline readiness alias must remain absent";
     assert !status.mandatory();
     assert status.cashHandoffCapability().equals("cash_handoff_v1");
     assert status.requiredBridgeAbiVersion() == 22;
@@ -1487,13 +1500,6 @@ public final class KagemushaRecursiveSpendProverTest {
     assert captured.get().uri().toString()
         .equals("https://torii.example/api/v1/offline/readiness");
     assert captured.get().headers().get("Accept").equals(Arrays.asList("application/json"));
-
-    @SuppressWarnings("deprecation")
-    final KagemushaRecursiveSpendProver.OfflineStatus deprecatedStatus =
-        client.getReadiness("ignored selector").join();
-    assert deprecatedStatus.cashHandoffCapability().equals(status.cashHandoffCapability());
-    assert captured.get().uri().toString()
-        .equals("https://torii.example/api/v1/offline/readiness");
 
     final KagemushaRecursiveSpendProver.RecipientLineageQueryV2 query = construct(
         KagemushaRecursiveSpendProver.RecipientLineageQueryV2.class,

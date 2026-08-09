@@ -1996,6 +1996,53 @@ def test_replay_manifest_is_schema_closed_digest_only() -> None:
     assert "runtime-only-material" not in diagnostics
 
 
+def test_published_replay_manifest_requires_exact_valid_readback(
+    tmp_path: Path,
+) -> None:
+    snapshot = replay_input_snapshot()
+    aggregate_digest = hashlib.sha256(b"aggregate").hexdigest()
+    replay = MODULE.ReplayAggregate(
+        payload=promotion_payload(),
+        first_sha256=aggregate_digest,
+        second_sha256=aggregate_digest,
+        semantic_sha256=hashlib.sha256(b"semantic").hexdigest(),
+    )
+    manifest = MODULE.build_replay_manifest(snapshot, replay)
+    rendered = MODULE.render_checker_summary(manifest)
+    manifest_path = tmp_path / MODULE.REPLAY_MANIFEST_FILENAME
+
+    manifest_path.write_text(rendered, encoding="utf-8")
+    assert (
+        MODULE.validate_published_replay_manifest(
+            manifest_path,
+            rendered,
+            snapshot,
+            replay,
+        )
+        == []
+    )
+
+    manifest_path.write_text(rendered + " ", encoding="utf-8")
+    assert MODULE.validate_published_replay_manifest(
+        manifest_path,
+        rendered,
+        snapshot,
+        replay,
+    ) == [
+        "deterministic replay manifest readback must match the exact published bytes"
+    ]
+
+    manifest_path.write_bytes(b"{")
+    assert MODULE.validate_published_replay_manifest(
+        manifest_path,
+        rendered,
+        snapshot,
+        replay,
+    ) == [
+        "deterministic replay manifest publication failed exact bounded readback"
+    ]
+
+
 def test_deterministic_replay_hashes_before_between_and_after(
     tmp_path: Path,
     monkeypatch,
@@ -2027,7 +2074,10 @@ def test_deterministic_replay_hashes_before_between_and_after(
 
     def fake_write(path, manifest):
         written.append((path, manifest))
-        return "manifest", []
+        rendered = MODULE.render_checker_summary(manifest)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(rendered, encoding="utf-8")
+        return rendered, []
 
     monkeypatch.setattr(MODULE, "digest_production_inputs", fake_digest)
     monkeypatch.setattr(MODULE, "run_command_plan", fake_run)

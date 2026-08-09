@@ -62,6 +62,7 @@ struct CorruptedKuraRetainedBlockRecord {
     block_hash: iroha_crypto::HashOf<BlockHeader>,
     block_header: BlockHeader,
     proposal_wire_hash: Hash,
+    executed_block_wire_len: u64,
     executed_block_wire_hash: Hash,
     merge_reference: Option<CertifiedMergeLedgerReference>,
     sccp_archive: Vec<CorruptedKuraRetainedSccpMessage>,
@@ -770,6 +771,16 @@ impl StrictReplayFixture {
         artifact
             .commit_qc
             .execution_commitment
+            .executed_block_wire_len = u64::try_from(
+            block
+                .encode_wire()
+                .expect("encode forked executed block")
+                .len(),
+        )
+        .expect("forked executed block length fits u64");
+        artifact
+            .commit_qc
+            .execution_commitment
             .executed_block_wire_hash = block
             .executed_block_wire_hash()
             .expect("encode forked executed block");
@@ -796,6 +807,16 @@ impl StrictReplayFixture {
             .canonical_proposal_wire_hash()
             .expect("encode malformed-SCCP proposal");
         artifact.commit_qc.subject = artifact.subject;
+        artifact
+            .commit_qc
+            .execution_commitment
+            .executed_block_wire_len = u64::try_from(
+            block
+                .encode_wire()
+                .expect("encode malformed-SCCP executed block")
+                .len(),
+        )
+        .expect("malformed-SCCP executed block length fits u64");
         artifact
             .commit_qc
             .execution_commitment
@@ -831,6 +852,13 @@ impl StrictReplayFixture {
             proposal_wire_hash: block
                 .canonical_proposal_wire_hash()
                 .expect("encode malformed-SCCP proposal"),
+            executed_block_wire_len: u64::try_from(
+                block
+                    .encode_wire()
+                    .expect("encode malformed-SCCP executed block")
+                    .len(),
+            )
+            .expect("malformed-SCCP executed block length fits u64"),
             executed_block_wire_hash: block
                 .executed_block_wire_hash()
                 .expect("encode malformed-SCCP executed block"),
@@ -846,7 +874,7 @@ impl StrictReplayFixture {
         let finality_dir = blocks_dir.join("v2_finality");
         std::fs::create_dir_all(&finality_dir).expect("create v2-finality directory");
         let finality = CorruptedKuraV2FinalityRecord {
-            format_version: 2,
+            format_version: 3,
             block_header: block.header(),
             artifact,
         };

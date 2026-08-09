@@ -284,6 +284,14 @@ mod block {
             self.current_block.is_some()
         }
 
+        /// Return whether the staged canonical carrier has the exact height and
+        /// no ordinary transaction membership.
+        pub(crate) fn has_exact_empty_staged_block(&self, height: NonZeroUsize) -> bool {
+            self.current_block
+                .as_ref()
+                .is_some_and(|block| block.height == height && block.transactions.is_empty())
+        }
+
         /// Register transactions belonging to the block.
         ///
         /// This method **must** be called before [`commit`].

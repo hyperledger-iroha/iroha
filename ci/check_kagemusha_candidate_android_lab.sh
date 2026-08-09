@@ -20,6 +20,7 @@ paths = {
     "export": root / "kotlin/kagemusha-candidate-evidence-lab/src/androidTest/java/org/hyperledger/iroha/sdk/kagemusha/candidate/lab/KagemushaCandidateArtifactExportInstrumentedTest.kt",
     "runner": root / "scripts/run_kagemusha_candidate_android_lab.sh",
     "native_builder": root / "scripts/build_kagemusha_candidate_android_native.sh",
+    "artifact_stager": root / "scripts/stage_kagemusha_candidate_android_artifacts.py",
     "validator": root / "scripts/check_android_device_lab_slot.py",
     "compile_check": root / "ci/check_kagemusha_candidate_android_lab_compile.sh",
     "stager": root / "scripts/stage_kagemusha_candidate_android_lab.py",
@@ -51,12 +52,13 @@ legacy_stage_markers = (
     "android_candidate_stage_manifest." + "v1",
     "candidate-validation-" + "v1",
     "candidate_validation." + "v1",
+    "validate_kagemusha_candidate_stage_manifest_" + "v1",
     "exactly " + "44 entries",
     "44 non-self " + "files",
 )
 for label in (
-    "gradle", "harness", "runner", "native_builder", "validator",
-    "compile_check", "stager", "staging_spec",
+    "gradle", "harness", "runner", "native_builder", "artifact_stager",
+    "validator", "compile_check", "stager", "staging_spec",
 ):
     for marker in legacy_stage_markers:
         if marker in text[label]:
@@ -70,6 +72,13 @@ for label in ("gradle", "harness", "validator", "compile_check", "stager"):
         "self-physical-footprint-v1",
     ):
         require(label, required, f"{label} is missing V2 candidate binding {required}")
+
+for label in ("runner", "native_builder", "artifact_stager"):
+    require(
+        label,
+        "validate_kagemusha_candidate_stage_manifest_v2",
+        f"{label} is not wired to the sole V2 candidate-stage validator",
+    )
 
 marker = "KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2"
 package = "org.hyperledger.iroha.sdk.kagemusha.candidate.lab"

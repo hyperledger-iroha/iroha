@@ -22,6 +22,20 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
+def test_default_tracked_fixture_uses_repository_local_specs() -> None:
+    """The replay writer must not recreate the retired public-docs tree."""
+
+    assert MODULE.DEFAULT_TRACKED_FIXTURE == (
+        MODULE.REPO_ROOT
+        / "specs"
+        / "sdk"
+        / "android"
+        / "generated"
+        / "fixtures"
+        / "sorafs_register_pin_manifest_multi_peer_parity_v1.json"
+    )
+
+
 def test_load_json_uses_no_follow_descriptor_open(
     tmp_path: Path,
     monkeypatch,

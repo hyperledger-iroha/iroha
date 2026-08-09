@@ -24,22 +24,29 @@ if [[ -n "${output_dir}" ]]; then
   mkdir -p "${output_dir}"
 fi
 
+render_dashboard() {
+  local dashboard_script="$1"
+  local input_json="$2"
+  local output_name="$3"
+
+  if [[ -n "${output_dir}" ]]; then
+    "${swift_bin}" -module-cache-path "${module_cache}" \
+      "${repo_root}/dashboards/${dashboard_script}" "${input_json}" \
+      --output "${output_dir}/${output_name}"
+  else
+    "${swift_bin}" -module-cache-path "${module_cache}" \
+      "${repo_root}/dashboards/${dashboard_script}" "${input_json}"
+  fi
+}
+
 echo "=== Swift Norito Parity ==="
-parity_output=()
-if [[ -n "${output_dir}" ]]; then
-  parity_output=(--output "${output_dir}/mobile_parity.txt")
-fi
-"${swift_bin}" -module-cache-path "${module_cache}" "${repo_root}/dashboards/mobile_parity.swift" "${parity_json}" "${parity_output[@]}"
+render_dashboard "mobile_parity.swift" "${parity_json}" "mobile_parity.txt"
 if [[ -n "${output_dir}" ]]; then
   echo "summary written to ${output_dir}/mobile_parity.txt"
 fi
 echo
 echo "=== Swift CI Health ==="
-ci_output=()
-if [[ -n "${output_dir}" ]]; then
-  ci_output=(--output "${output_dir}/mobile_ci.txt")
-fi
-"${swift_bin}" -module-cache-path "${module_cache}" "${repo_root}/dashboards/mobile_ci.swift" "${ci_json}" "${ci_output[@]}"
+render_dashboard "mobile_ci.swift" "${ci_json}" "mobile_ci.txt"
 if [[ -n "${output_dir}" ]]; then
   echo "summary written to ${output_dir}/mobile_ci.txt"
 fi
@@ -47,11 +54,8 @@ fi
 if [[ -n "${pipeline_json}" && -f "${pipeline_json}" ]]; then
   echo
   echo "=== Swift Pipeline Metadata ==="
-  pipeline_output=()
-  if [[ -n "${output_dir}" ]]; then
-    pipeline_output=(--output "${output_dir}/mobile_pipeline_metadata.txt")
-  fi
-  "${swift_bin}" -module-cache-path "${module_cache}" "${repo_root}/dashboards/mobile_pipeline_metadata.swift" "${pipeline_json}" "${pipeline_output[@]}"
+  render_dashboard "mobile_pipeline_metadata.swift" "${pipeline_json}" \
+    "mobile_pipeline_metadata.txt"
   if [[ -n "${output_dir}" ]]; then
     echo "summary written to ${output_dir}/mobile_pipeline_metadata.txt"
   fi

@@ -139,7 +139,7 @@ into multi-second stalls.
 - `taira-irohad.service`: sample systemd unit that starts the validator from
   the shipped Taira config and genesis.
 - `taira-bootle-lantern-broker.service`: peer-1-only systemd unit for the
-  native slot-54 issuer broker. It loads exactly three encrypted systemd
+  native slot-56 issuer broker. It loads exactly three encrypted systemd
   credentials into the unit's private credential directory, publishes the
   fixed local socket as the same `iroha` UID as Torii, and does not restart
   past an uninspected crash.
@@ -246,7 +246,7 @@ into multi-second stalls.
   each child start. Any partial seal fails closed. Config files remain
   content-hashed in both modes because they are small and operator-editable.
 - `check_mcp_rollout.sh`: smoke script for the local and public `/v1/mcp`
-  checks used by the Taira Codex rollout, with wire-revision-3 reducer health read
+  checks used by the Taira Codex rollout, with wire-revision-4 reducer health read
   from `/v1/sumeragi/status` and an optional signed write canary for final
   public cutover. It verifies ordinary node/consensus health, the common `is`
   and `is2` dataspace catalog, and universal ABI-21 `cash_handoff_v1`
@@ -297,7 +297,7 @@ retirement evidence only. They have no activation row, compatibility alias,
 or fallback engine. Jindo, ZK-AMS, Vega, and the other canonical rows are the
 only release identities.
 
-Bootle/Lantern issuance uses stock local runtime-provider broker slot 54. The
+Bootle/Lantern issuance uses stock local runtime-provider broker slot 56. The
 deployment-owned broker backend supplies opaque bearer authentication and
 bounded native Falcon operations. Torii remains the sole durable one-shot
 authorization-state authority. Issuer trapdoors, bearer credentials, backend
@@ -1269,11 +1269,12 @@ quota overrides are therefore not part of the Taira storage contract.
 After every Taira reset or `irohad` rebuild, verify the manifest-registration
 ingress before retrying `yarn taira:publish`:
 
-- `curl -sSki -X POST "${PUBLIC_TORII_ROOT}/v1/sorafs/pin/register" -H 'content-type: application/json' --data '{}'`
+- `curl -sSki -X POST "${PUBLIC_TORII_ROOT}/v1/sorafs/pin/register" -H 'content-type: application/x-norito' --data-binary ''`
 
 Expected result:
 
-- `HTTP 400` with a handler-level validation error such as `missing field authority`
+- `HTTP 400` with `x-iroha-reject-code: invalid_transaction_payload` and a
+  versioned signed-transaction decode error
 
 Unexpected result:
 

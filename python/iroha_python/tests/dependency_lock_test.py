@@ -177,7 +177,7 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
     cargo_jobs = {
         "privacy_native_bridge_tests": {
             "consumer": (
-                "run: cargo test -p connect_norito_bridge privacy_ --lib "
+                "cargo test -p connect_norito_bridge privacy_ --lib "
                 "-- --test-threads=1"
             ),
             "fetch_name": "Prime privacy native Cargo dependencies",
@@ -230,7 +230,7 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
     for setup_id, expected_count in {
         "privacy-swift-python": 1,
         "privacy-jvm-python": 4,
-        "privacy-csharp-python": 2,
+        "privacy-csharp-python": 3,
         "privacy-js-python": 2,
         "privacy-python": 8,
     }.items():

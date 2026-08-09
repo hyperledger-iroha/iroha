@@ -1,0 +1,1242 @@
+use std::{borrow::Cow, num::NonZeroU32, sync::Arc};
+
+use iroha_config::{
+    base::WithOrigin,
+    kura::{FsyncMode, InitMode},
+    parameters::{
+        actual::{
+            Kura as KuraConfig, LaneConfig as RuntimeLaneConfig, Nexus, Queue as QueueConfig,
+        },
+        defaults::kura::{
+            BLOCK_SYNC_ROSTER_RETENTION, BLOCKS_IN_MEMORY, FSYNC_INTERVAL,
+            MERGE_LEDGER_CACHE_CAPACITY, ROSTER_SIDECAR_RETENTION,
+        },
+    },
+};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+use iroha_data_model::{
+    ChainId, Level,
+    block::{
+        BlockHeader,
+        consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1},
+        consensus_v2 as wire,
+    },
+    consensus::VALIDATOR_SET_HASH_VERSION_V1,
+    isi::Log,
+    nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
+    peer::PeerId,
+    transaction::{FeePaymentIntent, TransactionBuilder, signed::TransactionEntrypoint},
+};
+use iroha_primitives::time::TimeSource;
+use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+use tempfile::TempDir;
+
+use super::*;
+use crate::{
+    kura::Kura,
+    prelude::{AcceptedTransaction, World},
+    query::store::LiveQueryStore,
+    queue::{
+        LaneQueueReservationKeyV2, Queue, RoutingDecision, RoutingPlan,
+        canonical_lane_queue_reservation_group_identity_projection,
+        lane_queue_reservation_group_binding_from_ordered_keys,
+    },
+    state::State,
+    sumeragi::{
+        lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal,
+        v2_apply::LaneReservationSnapshotPlannerEvidence,
+        v2_core::{
+            IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED, IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+            ProductionInFlightFirstReleaseCarrierProjection,
+            ProductionInFlightFirstReleaseDecisionProjection,
+            ProductionInFlightFirstReleaseHistoryProjection,
+            ProductionInFlightFirstReleaseQueueProjection,
+            ProductionInFlightFirstReleaseReleaseProjection,
+            ProductionInFlightFirstReleaseSessionProjection,
+        },
+    },
+};
+
+fn lifecycle_key_pair(seed: u8) -> KeyPair {
+    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+        .expect("deterministic BLS lifecycle key")
+}
+
+fn lifecycle_lane_catalog() -> LaneCatalog {
+    let primary = ModelLaneConfig::default();
+    let autonomous = ModelLaneConfig {
+        id: LaneId::new(1),
+        alias: "lifecycle-recovery".to_owned(),
+        ..ModelLaneConfig::default()
+    };
+    LaneCatalog::new(
+        NonZeroU32::new(2).expect("non-zero lane count"),
+        vec![primary, autonomous],
+    )
+    .expect("two-lane recovery catalog")
+}
+
+fn lifecycle_runtime_lane_config() -> RuntimeLaneConfig {
+    RuntimeLaneConfig::from_catalog(&lifecycle_lane_catalog())
+}
+
+fn lifecycle_kura_config(dir: &TempDir) -> KuraConfig {
+    KuraConfig {
+        init_mode: InitMode::Strict,
+        store_dir: WithOrigin::inline(dir.path().to_path_buf()),
+        max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+        blocks_in_memory: BLOCKS_IN_MEMORY,
+        debug_output_new_blocks: false,
+        merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+        fsync_mode: FsyncMode::Batched,
+        fsync_interval: FSYNC_INTERVAL,
+        block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+        roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
+    }
+}
+
+fn lifecycle_payload(
+    signer: &KeyPair,
+    lane_incarnation: Hash,
+) -> (Hash, u64, crate::lane_consensus::LaneExecutablePayloadV1) {
+    let context = lifecycle_context(signer);
+    lifecycle_payload_for_validators(
+        signer,
+        &context,
+        vec![PeerId::new(signer.public_key().clone())],
+        lane_incarnation,
+    )
+}
+
+fn lifecycle_payload_for_validators(
+    producer_signer: &KeyPair,
+    context: &wire::HeightContext,
+    validator_set: Vec<PeerId>,
+    lane_incarnation: Hash,
+) -> (Hash, u64, crate::lane_consensus::LaneExecutablePayloadV1) {
+    lifecycle_payload_for_validators_with_count(
+        producer_signer,
+        context,
+        validator_set,
+        lane_incarnation,
+        1,
+    )
+}
+
+fn lifecycle_payload_for_validators_with_count(
+    producer_signer: &KeyPair,
+    context: &wire::HeightContext,
+    mut validator_set: Vec<PeerId>,
+    lane_incarnation: Hash,
+    transaction_count: usize,
+) -> (Hash, u64, crate::lane_consensus::LaneExecutablePayloadV1) {
+    assert!((1..=4).contains(&transaction_count));
+    validator_set.sort();
+    validator_set.dedup();
+    let producer = PeerId::new(producer_signer.public_key().clone());
+    assert!(
+        validator_set.contains(&producer),
+        "lifecycle payload producer must belong to the frozen validator set",
+    );
+    let entrypoints = (0..transaction_count)
+        .map(|index| {
+            let mut builder = TransactionBuilder::new(
+                context.network_id,
+                (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(
+                Level::INFO,
+                format!("lifecycle recovery payload {index}"),
+            )]);
+            builder.set_nonce(
+                NonZeroU32::new(u32::try_from(index + 1).expect("bounded lifecycle nonce"))
+                    .expect("lifecycle nonce is non-zero"),
+            );
+            TransactionEntrypoint::External(
+                builder.sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key()),
+            )
+        })
+        .collect::<Vec<_>>();
+    let entrypoint_hashes = entrypoints
+        .iter()
+        .map(|entrypoint| Hash::from(entrypoint.hash()))
+        .collect::<Vec<_>>();
+    let min_quorum = u32::try_from(
+        crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()).max(1),
+    )
+    .expect("lifecycle validator quorum fits u32");
+    let mut descriptor = LaneBlockDescriptorV1 {
+        lane_id: LaneId::new(1),
+        dataspace_id: DataSpaceId::UNIVERSAL,
+        lane_incarnation,
+        proposal_height: 1,
+        previous_lane_block_height: 0,
+        previous_lane_block_descriptor_hash: None,
+        lane_block_height: 1,
+        lane_block_view: 0,
+        subject_hash: Hash::new(b"lifecycle-recovery-subject"),
+        payload_ownership_hash: Hash::new(b"lifecycle-recovery-ownership"),
+        rbc_instance_hash: Hash::new(b"lifecycle-recovery-rbc"),
+        accepted_candidate_indices: (0..u64::try_from(transaction_count)
+            .expect("bounded lifecycle transaction count"))
+            .collect(),
+        accepted_transaction_hashes: entrypoint_hashes,
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set: validator_set.clone(),
+        validator_count: u32::try_from(validator_set.len())
+            .expect("lifecycle validator count fits u32"),
+        min_quorum,
+        qc_mode_tag: "permissioned:lifecycle-recovery".to_owned(),
+        descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+    };
+    descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+    let mut proposal = LaneBlockProposalV1 {
+        descriptor,
+        proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+        payload_block_hint: Some(
+            iroha_data_model::block::consensus::LaneBlockProposalPayloadHintV1 {
+                proposal_height: 1,
+                proposal_view: 0,
+                proposal_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                    b"lifecycle-recovery-global-anchor",
+                )),
+            },
+        ),
+    };
+    proposal.proposal_hash = proposal.computed_proposal_hash();
+    let routing_plan = RoutingPlan::single(RoutingDecision::new(
+        proposal.descriptor.lane_id,
+        proposal.descriptor.dataspace_id,
+    ));
+    let chain_id_hash = Hash::prehashed(*context.network_id.as_bytes());
+    let epoch = context.epoch;
+    let (reservation_owner_hash, proposal_identity_hash) =
+        autonomous_lane_reservation_identity_hashes_for_proposal(
+            chain_id_hash,
+            context.id(),
+            epoch,
+            &proposal,
+            &producer,
+        )
+        .expect("derive height-bound reservation identities");
+    let reservations = entrypoints
+        .iter()
+        .enumerate()
+        .map(|(index, entrypoint)| {
+            let accepted =
+                AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
+            LaneQueueReservationKeyV2 {
+                version: LaneQueueReservationKeyV2::VERSION,
+                signed_transaction_hash: accepted.hash(),
+                entrypoint_hash: entrypoint.hash(),
+                queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
+                    b"lifecycle-recovery-queue-plan-admission\0",
+                    &u64::try_from(index)
+                        .expect("bounded lifecycle index")
+                        .to_be_bytes(),
+                ]),
+                routing_plan_digest: routing_plan.digest(),
+                coordinator_leg: routing_plan.coordinator_leg(),
+                lane_id: proposal.descriptor.lane_id,
+                dataspace_id: proposal.descriptor.dataspace_id,
+                lane_incarnation,
+                proposal_height: proposal.descriptor.proposal_height,
+                lane_block_height: proposal.descriptor.lane_block_height,
+                lane_block_view: proposal.descriptor.lane_block_view,
+                reservation_owner_hash,
+                proposal_identity_hash,
+            }
+        })
+        .collect::<Vec<_>>();
+    let payload = crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
+        chain_id_hash,
+        epoch,
+        proposal,
+        entrypoints,
+        reservations,
+        vec![routing_plan; transaction_count],
+        vec![None; transaction_count],
+        producer,
+        producer_signer.private_key(),
+    )
+    .expect("signed lifecycle recovery payload");
+    (chain_id_hash, epoch, payload)
+}
+
+fn lifecycle_binding_and_live_state(
+    payload: &crate::lane_consensus::LaneExecutablePayloadV1,
+    local_peer: &PeerId,
+) -> (
+    AutonomousLifecycleAttemptBindingV1,
+    ProductionInFlightFirstReleaseStateProjection,
+) {
+    let reservation_group =
+        lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
+            .expect("bind lifecycle reservation group");
+    let binding = AutonomousLifecycleAttemptBindingV1::from_payload(
+        lifecycle_context_for_peer(local_peer).id(),
+        payload.origin_proposal.descriptor.lane_block_height,
+        payload,
+        reservation_group,
+        local_peer,
+    )
+    .expect("bind lifecycle attempt");
+    let validator_count = u8::try_from(binding.validator_set_identity().2)
+        .expect("lifecycle validator count fits the refinement width");
+    let validator_mask = if validator_count == 128 {
+        u128::MAX
+    } else {
+        (1_u128 << validator_count) - 1
+    };
+    let (_, local_actor) = binding.local_validator_identity();
+    let producer = binding.producer_actor_projection();
+    let live_state = ProductionInFlightFirstReleaseStateProjection {
+        validator_count,
+        producer,
+        producer_selected_owner: producer,
+        replicated_carrier_owners: validator_mask & !producer,
+        payload_binding_a: producer | local_actor,
+        binding_a: canonical_lane_queue_reservation_group_identity_projection(reservation_group),
+        queue: ProductionInFlightFirstReleaseQueueProjection {
+            plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+            selected_count: reservation_group.reservation_count,
+            reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+        },
+        carrier: ProductionInFlightFirstReleaseCarrierProjection {
+            kura_active: local_actor,
+            ..ProductionInFlightFirstReleaseCarrierProjection::default()
+        },
+        session: ProductionInFlightFirstReleaseSessionProjection {
+            bodies: producer | local_actor,
+            producer_alive: true,
+            ..ProductionInFlightFirstReleaseSessionProjection::default()
+        },
+        history: ProductionInFlightFirstReleaseHistoryProjection {
+            ever_queue_plan_v4: true,
+            ever_reservation_v5: true,
+            ..ProductionInFlightFirstReleaseHistoryProjection::default()
+        },
+        decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
+        release: ProductionInFlightFirstReleaseReleaseProjection::default(),
+    };
+    (binding, live_state)
+}
+
+fn lifecycle_context_for_peer(local_peer: &PeerId) -> wire::HeightContext {
+    let mut validators = vec![local_peer.clone()];
+    validators.extend(
+        (91_u8..=93).map(|seed| PeerId::new(lifecycle_key_pair(seed).public_key().clone())),
+    );
+    validators.sort();
+    validators.dedup();
+    assert_eq!(validators.len(), 4, "lifecycle context validator set");
+    let roster = validators
+        .into_iter()
+        .map(|validator| wire::ValidatorPower {
+            validator,
+            power: 1,
+        })
+        .collect::<Vec<_>>();
+    wire::HeightContext {
+        network_id: crate::sumeragi::synthetic_network_id("lifecycle-recovery-test"),
+        protocol_version: wire::PROTOCOL_VERSION,
+        height: 1,
+        epoch: 0,
+        epoch_end_height: u64::MAX,
+        next_epoch_snapshot: None,
+        mode: wire::ConsensusMode::Permissioned,
+        parent_commit_qc: None,
+        snapshot_bootstrap: None,
+        quorum: wire::DualQuorum::from_roster(&roster).expect("four-validator quorum"),
+        roster,
+        nexus_amx_context_hash: Hash::new(b"lifecycle-empty-nexus"),
+        execution_policy_hash: Hash::new(b"lifecycle-empty-policy"),
+        da_layout: wire::SumeragiV2GenesisContextParameters::recommended().da_layout,
+        leader_seed: [0x55; 32],
+    }
+}
+
+fn lifecycle_context(key_pair: &KeyPair) -> wire::HeightContext {
+    lifecycle_context_for_peer(&PeerId::new(key_pair.public_key().clone()))
+}
+
+fn open_lifecycle_recovery_state(
+    kura_config: &KuraConfig,
+    lane_config: &RuntimeLaneConfig,
+    context: &wire::HeightContext,
+    nexus: &Nexus,
+) -> (Arc<Kura>, State) {
+    let (kura, _) = Kura::new(kura_config, lane_config).expect("open lifecycle Kura");
+    let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+        World::default(),
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+        ChainId::from("lifecycle-recovery-test"),
+        context.network_id,
+    )
+    .expect("construct lifecycle State");
+    state.install_pre_genesis_nexus_for_testing(nexus.clone());
+    (kura, state)
+}
+
+fn open_empty_lifecycle_recovery_queue(queue_dir: &TempDir, state: &State) -> Queue {
+    let (_time_handle, time_source) = TimeSource::new_mock(core::time::Duration::ZERO);
+    let queue = Queue::test(QueueConfig::default(), &time_source);
+    queue
+        .install_plan_journal(
+            queue_dir.path().join("queue-plan.norito"),
+            1024 * 1024,
+            true,
+        )
+        .expect("install lifecycle QueuePlan journal");
+    queue
+        .install_lane_reservation_journal(
+            queue_dir.path().join("lane-reservation.norito"),
+            1024 * 1024,
+        )
+        .expect("install lifecycle reservation journal");
+    assert_eq!(
+        queue
+            .replay_plan_journal(state)
+            .expect("publish lifecycle QueuePlan replay receipt"),
+        Default::default(),
+    );
+    queue
+}
+
+#[derive(Clone, Copy, Debug)]
+enum LifecycleRecoveryPostCasBoundary {
+    Crashed,
+    PreparedRecover,
+    RecoveredLive,
+    PreparedRehydration,
+    FinalLive,
+}
+
+impl LifecycleRecoveryPostCasBoundary {
+    const fn cas_ordinal(self) -> u64 {
+        match self {
+            Self::Crashed => 1,
+            Self::PreparedRecover => 2,
+            Self::RecoveredLive => 3,
+            Self::PreparedRehydration => 4,
+            Self::FinalLive => 5,
+        }
+    }
+
+    fn assert_durable_cursor(self, cursor: &AutonomousLifecycleCursorV2, local_actor: u128) {
+        assert_eq!(cursor.sequence(), self.cas_ordinal() + 1);
+        assert_eq!(cursor.owner_generation(), 2);
+        match self {
+            Self::Crashed => {
+                assert_eq!(
+                    cursor.phase_kind(),
+                    AutonomousLifecycleCursorPhaseKindV2::Crashed
+                );
+                assert_eq!(cursor.source_generation(), Some(1));
+                let crashed = cursor
+                    .after_projection()
+                    .expect("validate durable Crashed projection")
+                    .expect("Crashed cursor has an after-state");
+                assert_eq!(crashed.session.crashed & local_actor, local_actor);
+            }
+            Self::PreparedRecover | Self::PreparedRehydration => {
+                assert_eq!(
+                    cursor.phase_kind(),
+                    AutonomousLifecycleCursorPhaseKindV2::Prepared
+                );
+                assert_eq!(cursor.source_generation(), None);
+                let transition = cursor
+                    .prepared_transition_projection()
+                    .expect("validate durable Prepared transition")
+                    .expect("Prepared cursor has a transition");
+                let expected_action = match self {
+                    Self::PreparedRecover => IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER,
+                    Self::PreparedRehydration => {
+                        IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY
+                    }
+                    Self::Crashed | Self::RecoveredLive | Self::FinalLive => unreachable!(),
+                };
+                assert_eq!(transition.action, expected_action);
+                if matches!(self, Self::PreparedRehydration) {
+                    assert_eq!(transition.before.session.bodies & local_actor, 0);
+                    assert_eq!(transition.after.session.bodies & local_actor, local_actor);
+                }
+            }
+            Self::RecoveredLive | Self::FinalLive => {
+                assert_eq!(
+                    cursor.phase_kind(),
+                    AutonomousLifecycleCursorPhaseKindV2::Live
+                );
+                assert_eq!(cursor.source_generation(), None);
+                let live = cursor
+                    .before_projection()
+                    .expect("validate interrupted Live projection");
+                assert_eq!(live.session.crashed & local_actor, 0);
+                let expected_bodies = if matches!(self, Self::FinalLive) {
+                    local_actor
+                } else {
+                    0
+                };
+                assert_eq!(live.session.bodies & local_actor, expected_bodies);
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct LifecycleCursorCasInterruption;
+
+#[test]
+fn generation_takeover_runs_crash_recover_and_rehydrate_then_stutters() {
+    let temp_dir = TempDir::new().expect("lifecycle Kura directory");
+    let queue_dir = TempDir::new().expect("lifecycle Queue journal directory");
+    let kura_config = lifecycle_kura_config(&temp_dir);
+    let lane_config = lifecycle_runtime_lane_config();
+    let signer = lifecycle_key_pair(31);
+    let local_peer = PeerId::new(signer.public_key().clone());
+    let context = lifecycle_context(&signer);
+    let producer_signer = lifecycle_key_pair(91);
+    context
+        .validate()
+        .expect("lifecycle startup context must be structurally valid");
+
+    let (kura, _) = Kura::new(&kura_config, &lane_config).expect("initial Kura");
+    let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+        World::default(),
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+        ChainId::from("lifecycle-recovery-test"),
+        context.network_id,
+    )
+    .expect("construct lifecycle State");
+    let nexus = Nexus {
+        enabled: true,
+        lane_catalog: lifecycle_lane_catalog(),
+        ..Nexus::default()
+    };
+    state.install_pre_genesis_nexus_for_testing(nexus.clone());
+    let lane_incarnation = state
+        .lane_incarnations_snapshot()
+        .get(&LaneId::new(1))
+        .copied()
+        .expect("State lifecycle lane incarnation");
+    let validator_set = context
+        .roster
+        .iter()
+        .map(|validator| validator.validator.clone())
+        .collect();
+    let (chain_id_hash, epoch, payload) = lifecycle_payload_for_validators(
+        &producer_signer,
+        &context,
+        validator_set,
+        lane_incarnation,
+    );
+    let (binding, live_state) = lifecycle_binding_and_live_state(&payload, &local_peer);
+    let local_actor = binding.local_validator_identity().1;
+    assert_ne!(
+        local_actor,
+        binding.producer_actor_projection(),
+        "empty local Queue recovery must exercise replicated observer custody",
+    );
+    kura.bind_local_peer_id(local_peer.clone())
+        .expect("bind initial local peer");
+    let generation_one = kura
+        .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+        .expect("claim first process generation");
+    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+        .expect("persist lifecycle payload before its first Live cursor");
+    let initial_live = sign_lifecycle_cursor(
+        &signer,
+        &local_peer,
+        &payload.origin_proposal.descriptor.validator_set,
+        1,
+        None,
+        binding.clone(),
+        AutonomousLifecycleCursorPhaseV2::live(generation_one.generation(), live_state)
+            .expect("construct first-generation Live cursor"),
+    )
+    .expect("sign first-generation Live cursor");
+    let (_, initial_lease) = kura
+        .read_autonomous_lifecycle_cursor(&payload, &binding, &generation_one)
+        .expect("read absent lifecycle cursor")
+        .into_parts();
+    assert_eq!(
+        kura.compare_and_swap_autonomous_lifecycle_cursor(initial_lease, initial_live.clone())
+            .expect("publish first-generation Live cursor")
+            .cursor(),
+        Some(&initial_live),
+        "first-generation publication must return its exact durable Live cursor",
+    );
+    drop(generation_one);
+    drop(state);
+    drop(kura);
+
+    let (restarted, _) = Kura::new(&kura_config, &lane_config).expect("restart Kura");
+    let mut restarted_state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+        World::default(),
+        Arc::clone(&restarted),
+        LiveQueryStore::start_test(),
+        ChainId::from("lifecycle-recovery-test"),
+        context.network_id,
+    )
+    .expect("reconstruct lifecycle State");
+    restarted_state.install_pre_genesis_nexus_for_testing(nexus);
+    assert_eq!(
+        restarted_state
+            .lane_incarnations_snapshot()
+            .get(&LaneId::new(1))
+            .copied(),
+        Some(lane_incarnation),
+    );
+    restarted
+        .bind_local_peer_id(local_peer.clone())
+        .expect("rebind restarted local peer");
+    let generation_two = restarted
+        .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+        .expect("claim second process generation");
+    assert_eq!(generation_two.generation(), 2);
+    let (_time_handle, time_source) = TimeSource::new_mock(core::time::Duration::ZERO);
+    let queue = Queue::test(QueueConfig::default(), &time_source);
+    queue
+        .install_plan_journal(
+            queue_dir.path().join("queue-plan.norito"),
+            1024 * 1024,
+            true,
+        )
+        .expect("install lifecycle QueuePlan journal");
+    queue
+        .install_lane_reservation_journal(
+            queue_dir.path().join("lane-reservation.norito"),
+            1024 * 1024,
+        )
+        .expect("install lifecycle reservation journal");
+    assert_eq!(
+        queue
+            .replay_plan_journal(&restarted_state)
+            .expect("publish lifecycle QueuePlan replay receipt"),
+        Default::default(),
+    );
+    let snapshot = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture lifecycle Queue snapshot");
+    assert!(snapshot.is_empty());
+    let planner =
+        LaneReservationSnapshotPlannerEvidence::from_parts_for_test(snapshot.clone(), Vec::new());
+    let recovered_startup = reconcile_autonomous_lifecycle_startup(
+        &restarted_state,
+        &queue,
+        restarted.as_ref(),
+        &context,
+        planner,
+        AutonomousLifecycleDeferredTerminalRecoveryHandoff::empty(),
+        Some(&generation_two),
+        &local_peer,
+        &signer,
+    )
+    .expect("reconcile stale lifecycle generation");
+    assert_eq!(recovered_startup.completed_bootstraps(), 0);
+    assert_eq!(
+        recovered_startup.recovered_attempts(),
+        1,
+        "the stale generation must publish Crash, Recover, and rehydration successors",
+    );
+    let (returned_snapshot, receipt, pending_groups) = recovered_startup.into_queue_handoff();
+    assert_eq!(returned_snapshot, snapshot);
+    assert!(pending_groups.is_empty());
+    assert!(
+        queue
+            .revalidate_lane_reservation_startup_reconciliation_receipt(&receipt, &snapshot)
+            .expect("revalidate generation-recovery Queue receipt"),
+        "generation recovery must preserve the exact combined V4/V6 receipt",
+    );
+    drop(receipt);
+
+    let read = restarted
+        .read_autonomous_lifecycle_cursor(&payload, &binding, &generation_two)
+        .expect("read recovered lifecycle cursor");
+    let cursor = read.cursor().expect("recovered cursor");
+    assert_eq!(
+        cursor.phase_kind(),
+        AutonomousLifecycleCursorPhaseKindV2::Live
+    );
+    assert_eq!(cursor.owner_generation(), 2);
+    assert_eq!(cursor.sequence(), 6);
+    let recovered = cursor
+        .before_projection()
+        .expect("validate recovered Live projection");
+    assert_eq!(recovered.session.crashed & local_actor, 0);
+    assert_eq!(recovered.session.bodies & local_actor, local_actor);
+    assert!(recovered.session.producer_alive);
+    drop(read);
+
+    let repeated_snapshot = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("recapture lifecycle Queue snapshot");
+    let repeated = reconcile_autonomous_lifecycle_startup(
+        &restarted_state,
+        &queue,
+        restarted.as_ref(),
+        &context,
+        LaneReservationSnapshotPlannerEvidence::from_parts_for_test(
+            repeated_snapshot.clone(),
+            Vec::new(),
+        ),
+        AutonomousLifecycleDeferredTerminalRecoveryHandoff::empty(),
+        Some(&generation_two),
+        &local_peer,
+        &signer,
+    )
+    .expect("repeat lifecycle recovery");
+    assert_eq!(
+        repeated.recovered_attempts(),
+        0,
+        "an exact current-generation hydrated Live cursor must stutter",
+    );
+    let (repeated_snapshot_handoff, repeated_receipt, pending_groups) =
+        repeated.into_queue_handoff();
+    assert_eq!(repeated_snapshot_handoff, repeated_snapshot);
+    assert!(pending_groups.is_empty());
+    assert!(
+        queue
+            .revalidate_lane_reservation_startup_reconciliation_receipt(
+                &repeated_receipt,
+                &repeated_snapshot,
+            )
+            .expect("revalidate repeated Queue receipt"),
+    );
+    let repeated = restarted
+        .read_autonomous_lifecycle_cursor(&payload, &binding, &generation_two)
+        .expect("read idempotent lifecycle cursor");
+    assert_eq!(repeated.cursor().expect("idempotent cursor").sequence(), 6,);
+}
+
+fn exercise_lifecycle_recovery_post_cas_interruption(boundary: LifecycleRecoveryPostCasBoundary) {
+    let kura_dir = TempDir::new().expect("lifecycle interruption Kura directory");
+    let queue_dir = TempDir::new().expect("lifecycle interruption Queue directory");
+    let kura_config = lifecycle_kura_config(&kura_dir);
+    let lane_config = lifecycle_runtime_lane_config();
+    let signer = lifecycle_key_pair(61);
+    let local_peer = PeerId::new(signer.public_key().clone());
+    let producer_signer = lifecycle_key_pair(91);
+    let context = lifecycle_context(&signer);
+    context
+        .validate()
+        .expect("interruption context must be structurally valid");
+    let nexus = Nexus {
+        enabled: true,
+        lane_catalog: lifecycle_lane_catalog(),
+        ..Nexus::default()
+    };
+
+    let (kura, state) = open_lifecycle_recovery_state(&kura_config, &lane_config, &context, &nexus);
+    let lane_incarnation = state
+        .lane_incarnations_snapshot()
+        .get(&LaneId::new(1))
+        .copied()
+        .expect("State lifecycle lane incarnation");
+    let validator_set = context
+        .roster
+        .iter()
+        .map(|validator| validator.validator.clone())
+        .collect();
+    let (chain_id_hash, epoch, payload) = lifecycle_payload_for_validators(
+        &producer_signer,
+        &context,
+        validator_set,
+        lane_incarnation,
+    );
+    let (binding, live_state) = lifecycle_binding_and_live_state(&payload, &local_peer);
+    let local_actor = binding.local_validator_identity().1;
+    assert_ne!(
+        local_actor,
+        binding.producer_actor_projection(),
+        "interruption fixture must exercise replicated observer custody",
+    );
+    kura.bind_local_peer_id(local_peer.clone())
+        .expect("bind initial interruption peer");
+    let generation_one = kura
+        .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+        .expect("claim first interruption generation");
+    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+        .expect("persist interruption payload");
+    let initial_live = sign_lifecycle_cursor(
+        &signer,
+        &local_peer,
+        &payload.origin_proposal.descriptor.validator_set,
+        1,
+        None,
+        binding.clone(),
+        AutonomousLifecycleCursorPhaseV2::live(generation_one.generation(), live_state)
+            .expect("construct initial interruption Live cursor"),
+    )
+    .expect("sign initial interruption Live cursor");
+    let (_, initial_lease) = kura
+        .read_autonomous_lifecycle_cursor(&payload, &binding, &generation_one)
+        .expect("read absent interruption cursor")
+        .into_parts();
+    assert_eq!(
+        kura.compare_and_swap_autonomous_lifecycle_cursor(initial_lease, initial_live.clone())
+            .expect("publish initial interruption Live cursor")
+            .cursor(),
+        Some(&initial_live),
+        "interruption setup must return its exact durable Live cursor",
+    );
+    drop(generation_one);
+    drop(state);
+    drop(kura);
+
+    let (restarted, restarted_state) =
+        open_lifecycle_recovery_state(&kura_config, &lane_config, &context, &nexus);
+    restarted
+        .bind_local_peer_id(local_peer.clone())
+        .expect("bind second-generation interruption peer");
+    let generation_two = restarted
+        .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+        .expect("claim second interruption generation");
+    assert_eq!(generation_two.generation(), 2);
+    let queue = open_empty_lifecycle_recovery_queue(&queue_dir, &restarted_state);
+    let snapshot_before_ownership_plan = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture pre-interruption Queue snapshot");
+    assert!(snapshot_before_ownership_plan.is_empty());
+    let quarantine_before_ownership_plan = queue.lane_reservation_startup_reconciliation_pending();
+    let receipt_before_ownership_plan = queue
+        .bind_lane_reservation_startup_reconciliation_receipt(&snapshot_before_ownership_plan)
+        .expect("bind pre-interruption Queue receipt")
+        .expect("pre-interruption Queue snapshot stays immutable");
+
+    let mut remaining_successful_cas = boundary.cas_ordinal();
+    install_post_lifecycle_cursor_cas_hook_for_test(move |cursor| {
+        remaining_successful_cas = remaining_successful_cas
+            .checked_sub(1)
+            .expect("interruption hook cannot outlive its selected CAS");
+        if remaining_successful_cas == 0 {
+            boundary.assert_durable_cursor(cursor, local_actor);
+            std::panic::panic_any(LifecycleCursorCasInterruption);
+        }
+    });
+    let interruption = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let planner = LaneReservationSnapshotPlannerEvidence::from_parts_for_test(
+            snapshot_before_ownership_plan.clone(),
+            Vec::new(),
+        );
+        let _unexpected = reconcile_autonomous_lifecycle_startup(
+            &restarted_state,
+            &queue,
+            restarted.as_ref(),
+            &context,
+            planner,
+            AutonomousLifecycleDeferredTerminalRecoveryHandoff::empty(),
+            Some(&generation_two),
+            &local_peer,
+            &signer,
+        )
+        .expect("selected post-CAS interruption must stop lifecycle reconciliation");
+    }));
+    clear_post_lifecycle_cursor_cas_hook_for_test();
+    let interruption = interruption.expect_err("post-CAS interruption hook must fire");
+    assert!(
+        interruption.is::<LifecycleCursorCasInterruption>(),
+        "{boundary:?} interrupted at an unexpected failure boundary",
+    );
+
+    let interrupted_read = restarted
+        .read_autonomous_lifecycle_cursor(&payload, &binding, &generation_two)
+        .expect("read the durably interrupted cursor");
+    boundary.assert_durable_cursor(
+        interrupted_read
+            .cursor()
+            .expect("post-CAS interruption retains its cursor"),
+        local_actor,
+    );
+    assert_eq!(
+        queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("recapture Queue snapshot before ownership-plan application"),
+        snapshot_before_ownership_plan,
+        "{boundary:?} cursor publication must not apply a Queue ownership plan",
+    );
+    assert_eq!(
+        queue.lane_reservation_startup_reconciliation_pending(),
+        quarantine_before_ownership_plan,
+        "{boundary:?} cursor publication must not change Queue quarantine",
+    );
+    assert!(
+        queue
+            .revalidate_lane_reservation_startup_reconciliation_receipt(
+                &receipt_before_ownership_plan,
+                &snapshot_before_ownership_plan,
+            )
+            .expect("revalidate the pre-ownership-plan Queue receipt"),
+        "{boundary:?} cursor publication must preserve the exact Queue receipt",
+    );
+    drop(interrupted_read);
+    drop(receipt_before_ownership_plan);
+    drop(queue);
+    drop(generation_two);
+    drop(restarted_state);
+    drop(restarted);
+
+    let (reopened, reopened_state) =
+        open_lifecycle_recovery_state(&kura_config, &lane_config, &context, &nexus);
+    reopened
+        .bind_local_peer_id(local_peer.clone())
+        .expect("bind post-interruption peer");
+    let generation_three = reopened
+        .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
+        .expect("claim post-interruption generation");
+    assert_eq!(generation_three.generation(), 3);
+    let reopened_queue = open_empty_lifecycle_recovery_queue(&queue_dir, &reopened_state);
+    let reopened_snapshot = reopened_queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture reopened Queue snapshot");
+    assert_eq!(reopened_snapshot, snapshot_before_ownership_plan);
+    let recovered = reconcile_autonomous_lifecycle_startup(
+        &reopened_state,
+        &reopened_queue,
+        reopened.as_ref(),
+        &context,
+        LaneReservationSnapshotPlannerEvidence::from_parts_for_test(
+            reopened_snapshot.clone(),
+            Vec::new(),
+        ),
+        AutonomousLifecycleDeferredTerminalRecoveryHandoff::empty(),
+        Some(&generation_three),
+        &local_peer,
+        &signer,
+    )
+    .expect("reconcile the post-interruption generation");
+    assert_eq!(recovered.completed_bootstraps(), 0);
+    assert_eq!(recovered.recovered_attempts(), 1);
+    let (returned_snapshot, recovered_receipt, pending_groups) = recovered.into_queue_handoff();
+    assert_eq!(returned_snapshot, reopened_snapshot);
+    assert!(pending_groups.is_empty());
+    assert!(
+        reopened_queue
+            .revalidate_lane_reservation_startup_reconciliation_receipt(
+                &recovered_receipt,
+                &reopened_snapshot,
+            )
+            .expect("revalidate post-interruption Queue receipt"),
+    );
+
+    let final_read = reopened
+        .read_autonomous_lifecycle_cursor(&payload, &binding, &generation_three)
+        .expect("read post-interruption Live cursor");
+    let final_cursor = final_read
+        .cursor()
+        .expect("post-interruption recovery has a cursor")
+        .clone();
+    assert_eq!(
+        final_cursor.phase_kind(),
+        AutonomousLifecycleCursorPhaseKindV2::Live
+    );
+    assert_eq!(final_cursor.owner_generation(), 3);
+    assert_eq!(final_cursor.source_generation(), None);
+    assert_eq!(final_cursor.sequence(), boundary.cas_ordinal() + 6);
+    assert_eq!(final_cursor.binding(), &binding);
+    let final_live = final_cursor
+        .before_projection()
+        .expect("validate post-interruption Live projection");
+    assert_eq!(final_live.session.crashed & local_actor, 0);
+    assert_eq!(final_live.session.bodies & local_actor, local_actor);
+    assert!(final_live.session.producer_alive);
+    drop(final_read);
+
+    let repeated_snapshot = reopened_queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("recapture post-interruption Queue snapshot");
+    assert_eq!(repeated_snapshot, reopened_snapshot);
+    let repeated = reconcile_autonomous_lifecycle_startup(
+        &reopened_state,
+        &reopened_queue,
+        reopened.as_ref(),
+        &context,
+        LaneReservationSnapshotPlannerEvidence::from_parts_for_test(
+            repeated_snapshot.clone(),
+            Vec::new(),
+        ),
+        AutonomousLifecycleDeferredTerminalRecoveryHandoff::empty(),
+        Some(&generation_three),
+        &local_peer,
+        &signer,
+    )
+    .expect("repeat post-interruption lifecycle recovery");
+    assert_eq!(
+        repeated.recovered_attempts(),
+        0,
+        "{boundary:?} must stutter after exact Live convergence",
+    );
+    let (repeated_snapshot_handoff, repeated_receipt, pending_groups) =
+        repeated.into_queue_handoff();
+    assert_eq!(repeated_snapshot_handoff, repeated_snapshot);
+    assert!(pending_groups.is_empty());
+    assert!(
+        reopened_queue
+            .revalidate_lane_reservation_startup_reconciliation_receipt(
+                &repeated_receipt,
+                &repeated_snapshot,
+            )
+            .expect("revalidate repeated post-interruption Queue receipt"),
+    );
+    let repeated_read = reopened
+        .read_autonomous_lifecycle_cursor(&payload, &binding, &generation_three)
+        .expect("read stuttered post-interruption cursor");
+    assert_eq!(
+        repeated_read.cursor().expect("stuttered cursor"),
+        &final_cursor,
+        "{boundary:?} repeat must preserve the exact current-generation Live cursor",
+    );
+}
+
+#[test]
+fn every_lifecycle_recovery_cursor_cas_boundary_survives_restart() {
+    for boundary in [
+        LifecycleRecoveryPostCasBoundary::Crashed,
+        LifecycleRecoveryPostCasBoundary::PreparedRecover,
+        LifecycleRecoveryPostCasBoundary::RecoveredLive,
+        LifecycleRecoveryPostCasBoundary::PreparedRehydration,
+        LifecycleRecoveryPostCasBoundary::FinalLive,
+    ] {
+        exercise_lifecycle_recovery_post_cas_interruption(boundary);
+    }
+}
+
+#[test]
+fn local_producer_recovery_requires_the_exact_current_queue_owner() {
+    let signer = lifecycle_key_pair(41);
+    let local_peer = PeerId::new(signer.public_key().clone());
+    let context = lifecycle_context(&signer);
+    let (_, _, payload) = lifecycle_payload_for_validators_with_count(
+        &signer,
+        &context,
+        vec![local_peer.clone()],
+        Hash::new(b"producer-custody-incarnation"),
+        2,
+    );
+    let (binding, live_state) = lifecycle_binding_and_live_state(&payload, &local_peer);
+    assert_eq!(
+        binding.local_validator_identity().1,
+        binding.producer_actor_projection(),
+        "fixture must exercise local producer custody",
+    );
+    let cursor = sign_lifecycle_cursor(
+        &signer,
+        &local_peer,
+        &payload.origin_proposal.descriptor.validator_set,
+        1,
+        None,
+        binding.clone(),
+        AutonomousLifecycleCursorPhaseV2::live(1, live_state)
+            .expect("construct local-producer Live cursor"),
+    )
+    .expect("sign local-producer Live cursor");
+
+    let no_groups = std::collections::BTreeMap::new();
+    let missing = require_local_producer_queue_owner(&payload, &cursor, &no_groups)
+        .expect_err("payload bytes alone must not replace producer Queue custody");
+    assert!(missing.contains("lost its exact current Queue reservation owner"));
+
+    let mut wrong_keys = payload.reservation_keys.clone();
+    wrong_keys[0].queue_plan_admission_binding_hash = Hash::new(b"another-admission-binding");
+    let mut conflicting_groups = std::collections::BTreeMap::new();
+    conflicting_groups.insert(binding.reservation_group_binding().identity, wrong_keys);
+    require_local_producer_queue_owner(&payload, &cursor, &conflicting_groups)
+        .expect_err("same-slot but byte-different Queue custody must fail closed");
+
+    let mut reversed_keys = payload.reservation_keys.clone();
+    reversed_keys.reverse();
+    assert_ne!(
+        lane_queue_reservation_group_binding_from_ordered_keys(reversed_keys.iter())
+            .expect("bind reversed producer Queue group"),
+        binding.reservation_group_binding(),
+    );
+    let mut reordered_groups = std::collections::BTreeMap::new();
+    reordered_groups.insert(binding.reservation_group_binding().identity, reversed_keys);
+    require_local_producer_queue_owner(&payload, &cursor, &reordered_groups)
+        .expect_err("reordered current Queue custody must fail closed");
+
+    let mut exact_groups = std::collections::BTreeMap::new();
+    exact_groups.insert(
+        binding.reservation_group_binding().identity,
+        payload.reservation_keys.clone(),
+    );
+    require_local_producer_queue_owner(&payload, &cursor, &exact_groups)
+        .expect("the byte-exact current Queue group authenticates producer recovery custody");
+}
+
+#[test]
+fn prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side() {
+    let signer = lifecycle_key_pair(41);
+    let local_peer = PeerId::new(signer.public_key().clone());
+    let (_, _, payload) = lifecycle_payload(
+        &signer,
+        Hash::new(b"lifecycle-prepared-boundary-incarnation"),
+    );
+    let (binding, live_state) = lifecycle_binding_and_live_state(&payload, &local_peer);
+    let validator_set = &payload.origin_proposal.descriptor.validator_set;
+
+    let mut before_activate = live_state;
+    before_activate.carrier.kura_active = 0;
+    let activate = crate::sumeragi::v2_core::ProductionInFlightFirstReleaseTransitionProjection {
+        action: IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA,
+        actor: 1,
+        target: 0,
+        before: before_activate,
+        after: live_state,
+    };
+    let activate_cursor = sign_lifecycle_cursor(
+        &signer,
+        &local_peer,
+        validator_set,
+        1,
+        None,
+        binding.clone(),
+        AutonomousLifecycleCursorPhaseV2::prepared(1, activate)
+            .expect("construct Prepared ActivateKura"),
+    )
+    .expect("sign Prepared ActivateKura");
+    assert_eq!(
+        prepared_recovery_state(&activate_cursor).expect("resolve Prepared ActivateKura"),
+        live_state,
+        "payload inventory proves ActivateKura reached its durable after-state",
+    );
+
+    let crash = check_production_in_flight_first_release_crash_transition(live_state, 1)
+        .expect("derive Crash")
+        .into_projection();
+    let prepared_crash = sign_lifecycle_cursor(
+        &signer,
+        &local_peer,
+        validator_set,
+        2,
+        Some(activate_cursor.cursor_hash()),
+        binding.clone(),
+        AutonomousLifecycleCursorPhaseV2::prepared(1, crash).expect("construct Prepared Crash"),
+    )
+    .expect("sign Prepared Crash");
+    assert_eq!(
+        prepared_recovery_state(&prepared_crash).expect("resolve Prepared Crash"),
+        crash.before,
+    );
+
+    let crashed = sign_lifecycle_cursor(
+        &signer,
+        &local_peer,
+        validator_set,
+        3,
+        Some(prepared_crash.cursor_hash()),
+        binding.clone(),
+        AutonomousLifecycleCursorPhaseV2::crashed(1, 2, crash.before, crash.after)
+            .expect("construct Crashed cursor"),
+    )
+    .expect("sign Crashed cursor");
+    assert_eq!(
+        cursor_recovery_state(&crashed).expect("resolve durable Crashed cursor"),
+        crash.after,
+    );
+
+    let recover = check_production_in_flight_first_release_recover_transition(crash.after, 1)
+        .expect("derive Recover")
+        .into_projection();
+    let prepared_recover = sign_lifecycle_cursor(
+        &signer,
+        &local_peer,
+        validator_set,
+        4,
+        Some(crashed.cursor_hash()),
+        binding.clone(),
+        AutonomousLifecycleCursorPhaseV2::prepared(2, recover).expect("construct Prepared Recover"),
+    )
+    .expect("sign Prepared Recover");
+    assert_eq!(
+        prepared_recovery_state(&prepared_recover).expect("resolve Prepared Recover"),
+        recover.before,
+    );
+
+    let rehydrate =
+        check_production_in_flight_first_release_rehydrate_local_kura_custody_transition(
+            recover.after,
+            1,
+        )
+        .expect("derive rehydration")
+        .into_projection();
+    let prepared_rehydrate = sign_lifecycle_cursor(
+        &signer,
+        &local_peer,
+        validator_set,
+        5,
+        Some(prepared_recover.cursor_hash()),
+        binding,
+        AutonomousLifecycleCursorPhaseV2::prepared(2, rehydrate)
+            .expect("construct Prepared rehydration"),
+    )
+    .expect("sign Prepared rehydration");
+    assert_eq!(
+        prepared_recovery_state(&prepared_rehydrate).expect("resolve Prepared rehydration"),
+        rehydrate.before,
+    );
+}
+
+#[test]
+fn empty_queue_reconciliation_returns_the_same_checked_receipt() {
+    let temp_dir = TempDir::new().expect("Queue journal directory");
+    let (_time_handle, time_source) = TimeSource::new_mock(core::time::Duration::ZERO);
+    let queue = Queue::test(QueueConfig::default(), &time_source);
+    queue
+        .install_plan_journal(temp_dir.path().join("queue-plan.norito"), 1024 * 1024, true)
+        .expect("install empty QueuePlan journal");
+    queue
+        .install_lane_reservation_journal(
+            temp_dir.path().join("lane-reservation.norito"),
+            1024 * 1024,
+        )
+        .expect("install empty reservation journal");
+    let kura = Kura::blank_kura_for_testing();
+    let state = State::new_for_testing(
+        World::default(),
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+    );
+    assert_eq!(
+        queue
+            .replay_plan_journal(&state)
+            .expect("publish empty QueuePlan replay receipt"),
+        Default::default(),
+    );
+    let snapshot = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture empty Queue snapshot");
+    assert!(snapshot.is_empty());
+    let planner =
+        LaneReservationSnapshotPlannerEvidence::from_parts_for_test(snapshot.clone(), Vec::new());
+    let signer = lifecycle_key_pair(51);
+    let local_peer = PeerId::new(signer.public_key().clone());
+    let recovered = reconcile_autonomous_lifecycle_startup(
+        &state,
+        &queue,
+        kura.as_ref(),
+        &lifecycle_context(&signer),
+        planner,
+        AutonomousLifecycleDeferredTerminalRecoveryHandoff::empty(),
+        None,
+        &local_peer,
+        &signer,
+    )
+    .expect("reconcile an empty Queue snapshot");
+    assert_eq!(recovered.completed_bootstraps(), 0);
+    assert_eq!(recovered.recovered_attempts(), 0);
+    let (returned_snapshot, receipt, pending_groups) = recovered.into_queue_handoff();
+    assert_eq!(returned_snapshot, snapshot);
+    assert!(pending_groups.is_empty());
+    assert!(
+        queue
+            .revalidate_lane_reservation_startup_reconciliation_receipt(&receipt, &snapshot,)
+            .expect("revalidate returned Queue receipt"),
+        "reconciliation must return the exact combined V4/V6 receipt it authenticated",
+    );
+}

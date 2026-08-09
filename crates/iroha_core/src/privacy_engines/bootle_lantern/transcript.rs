@@ -690,7 +690,7 @@ impl ProofTranscriptCoreV1 {
     /// # Errors
     ///
     /// Rejects an empty stage tag or a field whose length cannot be encoded.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn derive_bytes(
         &self,
         stage: &[u8],
@@ -1072,7 +1072,7 @@ pub(crate) fn challenge_eta_is_valid_v1(challenge: ProofPolynomialV1) -> bool {
 /// Rejects a zero binding digest, empty commitment wire, a commitment wire
 /// whose length cannot be represented in the canonical frame, or fixed-work
 /// candidate rejection exhaustion.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn derive_presentation_challenge_v1(
     binding: PresentationChallengeBindingV1,
     pre_challenge_commitments: &[u8],
@@ -1083,7 +1083,7 @@ pub(crate) fn derive_presentation_challenge_v1(
     derive_presentation_challenge_from_components_v1(binding, &[pre_challenge_commitments])
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 fn derive_presentation_challenge_from_components_v1(
     binding: PresentationChallengeBindingV1,
     pre_challenge_commitment_components: &[&[u8]],
@@ -1682,31 +1682,23 @@ mod tests {
 
     #[test]
     fn staged_transcript_is_framed_deterministic_and_fully_bound() {
-        let core = presentation_transcript();
+        let transcript = presentation_transcript();
         let mut first = [0_u8; 64];
         let mut second = [0_u8; 64];
-        core.derive_bytes(b"stage-a", &[b"ab".as_slice(), b"c".as_slice()], &mut first)
+        transcript
+            .derive_bytes(b"stage-a", &[b"ab", b"c"], &mut first)
             .expect("stage");
-        core.derive_bytes(
-            b"stage-a",
-            &[b"ab".as_slice(), b"c".as_slice()],
-            &mut second,
-        )
-        .expect("stage");
+        transcript
+            .derive_bytes(b"stage-a", &[b"ab", b"c"], &mut second)
+            .expect("stage");
         assert_eq!(first, second);
-        core.derive_bytes(
-            b"stage-a",
-            &[b"a".as_slice(), b"bc".as_slice()],
-            &mut second,
-        )
-        .expect("stage");
+        transcript
+            .derive_bytes(b"stage-a", &[b"a", b"bc"], &mut second)
+            .expect("stage");
         assert_ne!(first, second);
-        core.derive_bytes(
-            b"stage-b",
-            &[b"ab".as_slice(), b"c".as_slice()],
-            &mut second,
-        )
-        .expect("stage");
+        transcript
+            .derive_bytes(b"stage-b", &[b"ab", b"c"], &mut second)
+            .expect("stage");
         assert_ne!(first, second);
 
         let mut changed_binding = binding();
@@ -1739,22 +1731,23 @@ mod tests {
 
     #[test]
     fn staged_uniform_and_ternary_expansion_is_canonical_and_random_access() {
-        let core = presentation_transcript();
-        let first = core
+        let transcript = presentation_transcript();
+        let first = transcript
             .derive_ternary_row(b"projection", &[b"commitment"], 17, 1_024)
             .expect("row");
-        let second = core
+        let second = transcript
             .derive_ternary_row(b"projection", &[b"commitment"], 17, 1_024)
             .expect("row");
         assert_eq!(first, second);
         assert!(first.iter().all(|value| (-1..=1).contains(value)));
         assert_ne!(
             first,
-            core.derive_ternary_row(b"projection", &[b"commitment"], 18, 1_024)
+            transcript
+                .derive_ternary_row(b"projection", &[b"commitment"], 18, 1_024)
                 .expect("row")
         );
 
-        let polynomials = core
+        let polynomials = transcript
             .derive_uniform_polynomials(b"weights", &[b"commitment"], 4)
             .expect("uniform polynomials");
         assert_eq!(polynomials.len(), 4);
@@ -1766,11 +1759,12 @@ mod tests {
         }));
         assert_eq!(
             polynomials,
-            core.derive_uniform_polynomials(b"weights", &[b"commitment"], 4)
+            transcript
+                .derive_uniform_polynomials(b"weights", &[b"commitment"], 4)
                 .expect("uniform polynomials")
         );
 
-        let scalars = core
+        let scalars = transcript
             .derive_uniform_scalars(b"weights", &[b"commitment"], 257)
             .expect("uniform scalars");
         assert_eq!(scalars.len(), 257);
@@ -1781,7 +1775,8 @@ mod tests {
         );
         assert_eq!(
             scalars,
-            core.derive_uniform_scalars(b"weights", &[b"commitment"], 257)
+            transcript
+                .derive_uniform_scalars(b"weights", &[b"commitment"], 257)
                 .expect("uniform scalars")
         );
         assert_ne!(scalars[0], polynomials[0].coefficients()[0]);

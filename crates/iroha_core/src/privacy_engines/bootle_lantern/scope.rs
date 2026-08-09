@@ -314,7 +314,7 @@ mod tests {
                 .collect(),
         });
         let issuer_public_matrix =
-            BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(first_column)
+            BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&first_column)
                 .expect("canonical dense multiplication matrix");
         let mut policy = BootleLanternIssuerPolicyV1 {
             issuer_id: PrivacyIssuerIdV1::new(raw(7)),

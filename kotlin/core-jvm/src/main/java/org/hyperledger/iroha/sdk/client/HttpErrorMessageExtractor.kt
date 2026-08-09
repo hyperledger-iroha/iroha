@@ -48,7 +48,7 @@ internal object HttpErrorMessageExtractor {
     fun extractRejectCode(headers: Map<String, List<String>>?, headerName: String?): String? {
         if (headers.isNullOrEmpty() || headerName.isNullOrBlank()) return null
         for ((key, values) in headers) {
-            if (key == null || !key.equals(headerName, ignoreCase = true)) continue
+            if (!key.equals(headerName, ignoreCase = true)) continue
             val value = firstNonBlank(values)
             if (value != null) return value
         }

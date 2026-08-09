@@ -161,6 +161,7 @@ run_case() {
   local log="${run_dir}/${label}.log"
   local metadir="${run_dir}/${label}/states"
   local actual_status
+  local marker_count
   local primary_diagnostic_count
   mkdir -p "$metadir"
   set +e
@@ -183,7 +184,12 @@ run_case() {
     sumeragi_v2_tlc_assert_terminal "$label" "$log"
   fi
   for marker in "$@"; do
-    if [[ "$(grep -Fxc "$marker" "$log" || true)" != 1 ]]; then
+    if [[ "$marker" == "Stuttering" ]]; then
+      marker_count="$(grep -Ec '^State [1-9][0-9]*: Stuttering$' "$log" || true)"
+    else
+      marker_count="$(grep -Fxc "$marker" "$log" || true)"
+    fi
+    if [[ "$marker_count" != 1 ]]; then
       echo "${label} did not emit exactly one expected marker: ${marker}" >&2
       cat "$log" >&2
       exit 1

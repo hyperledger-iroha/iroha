@@ -889,10 +889,11 @@ mod prepare_qc_split_tests {
                     block_hash: hash_of::<BlockHeader>(subject_seed),
                     payload_hash: hash(subject_seed.wrapping_add(1)),
                 },
-                execution_commitment: ExecutionCommitment::without_topups(
+                execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
                     hash(0x30),
                     hash(0x31),
                     hash(0x32),
+                    1,
                     hash(execution_seed),
                 ),
             },
@@ -1805,16 +1806,7 @@ mod prepare_qc_split_tests {
         }
     }
 
-    #[test]
-    fn restart_scenario_uses_a_contention_tolerant_view_zero_deadline() {
-        let cadence_ms = u64::try_from(RESTART_BLOCK_CADENCE.as_millis())
-            .expect("restart cadence fits the canonical millisecond width");
-        let (base_round_timeout_ms, _) =
-            iroha_config::parameters::actual::sumeragi_v2_timing_ms(cadence_ms)
-                .expect("restart cadence derives valid v2 timing");
-
-        assert_eq!(base_round_timeout_ms, 20_000);
-    }
+    include!("sumeragi_v2_runner/restart_timing_test.rs");
 
     #[test]
     fn distinct_prepare_qc_view_zero_wait_covers_deadline_without_masking_view_one() {
@@ -5195,24 +5187,7 @@ fn optional_prepare_qc(
     Ok(Some(PrepareQcSnapshot { reference: typed }))
 }
 
-fn optional_timeout_view(object: &norito::json::Map, peer: &str) -> Result<Option<u64>> {
-    let Some(certificate) = object
-        .get("last_timeout_certificate")
-        .filter(|value| !value.is_null())
-    else {
-        return Ok(None);
-    };
-    let round = certificate
-        .as_object()
-        .and_then(|certificate| certificate.get("round"))
-        .and_then(Value::as_object)
-        .ok_or_else(|| eyre!("v2 status for {peer} has a malformed timeout-certificate round"))?;
-    let view = round
-        .get("view")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| eyre!("v2 status for {peer} has a timeout certificate without a view"))?;
-    Ok(Some(view))
-}
+include!("sumeragi_v2_runner/status_validation_helpers.rs");
 
 fn validate_v2_status_set(
     snapshots: &[V2StatusSnapshot],

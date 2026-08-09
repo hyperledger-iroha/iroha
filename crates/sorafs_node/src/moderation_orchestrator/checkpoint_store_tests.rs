@@ -5,6 +5,8 @@ struct MockCheckpointStore {
         Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>,
     >,
     latest: Mutex<Option<ModerationCheckpointStoreRecordV1>>,
+    attestation_signing_key: SigningKey,
+    attestation_calls: AtomicUsize,
     next_cas_behavior: AtomicUsize,
 }
 
@@ -14,6 +16,10 @@ impl Default for MockCheckpointStore {
             handle: CHECKPOINT_STORE_HANDLE.to_owned(),
             qualification: Mutex::new(Ok(CHECKPOINT_STORE_QUALIFICATION)),
             latest: Mutex::new(None),
+            attestation_signing_key: SigningKey::from_bytes(
+                &CHECKPOINT_STORE_ATTESTATION_SIGNING_SEED,
+            ),
+            attestation_calls: AtomicUsize::new(0),
             next_cas_behavior: AtomicUsize::new(0),
         }
     }
@@ -42,12 +48,20 @@ impl MockCheckpointStore {
             .store(behavior, AtomicOrdering::SeqCst);
     }
 
+    fn fail_cas_after_one_success(&self) {
+        self.next_cas_behavior.store(4, AtomicOrdering::SeqCst);
+    }
+
     fn latest(&self) -> ModerationCheckpointStoreRecordV1 {
         self.latest
             .lock()
             .expect("checkpoint latest")
             .clone()
             .expect("committed checkpoint")
+    }
+
+    fn attestation_calls(&self) -> usize {
+        self.attestation_calls.load(AtomicOrdering::SeqCst)
     }
 
     fn replace_latest(&self, record: ModerationCheckpointStoreRecordV1) {
@@ -69,6 +83,10 @@ impl ModerationRuntimeProviderV1 for MockCheckpointStore {
 }
 
 impl ModerationCheckpointStoreV1 for MockCheckpointStore {
+    fn attestation_public_key(&self) -> [u8; 32] {
+        self.attestation_signing_key.verifying_key().to_bytes()
+    }
+
     fn load_latest(
         &self,
     ) -> Result<Option<ModerationCheckpointStoreRecordV1>, ModerationCheckpointStoreExternalErrorV1>
@@ -93,11 +111,55 @@ impl ModerationCheckpointStoreV1 for MockCheckpointStore {
             return Err(ModerationCheckpointStoreExternalErrorV1::Rejected);
         }
         *latest = Some(next.clone());
+        if behavior == 4 {
+            // Let a caller seal its write-ahead reservation, then model an
+            // unapplied ambiguous failure at the following commit boundary.
+            self.next_cas_behavior.store(3, AtomicOrdering::SeqCst);
+        }
         if behavior == 2 {
             Err(ModerationCheckpointStoreExternalErrorV1::Ambiguous)
         } else {
             Ok(())
         }
+    }
+
+    fn attest_terminal_set(
+        &self,
+        statement: &ModerationPanelNotificationSourceAttestationV1,
+    ) -> Result<[u8; 64], ModerationCheckpointStoreExternalErrorV1> {
+        self.attestation_calls.fetch_add(1, AtomicOrdering::SeqCst);
+        let latest = self.latest.lock().expect("checkpoint latest");
+        let Some(latest) = latest.as_ref() else {
+            return Err(ModerationCheckpointStoreExternalErrorV1::Rejected);
+        };
+        let expected_chain_id = statement
+            .chain_id
+            .parse::<iroha_data_model::ChainId>()
+            .map_err(|_| ModerationCheckpointStoreExternalErrorV1::Rejected)?;
+        if statement.checkpoint_namespace_digest != latest.namespace_digest
+            || statement.checkpoint_generation != latest.checkpoint_generation
+            || statement.checkpoint_revision != latest.revision
+            || statement.checkpoint_digest != latest.checkpoint_digest
+            || statement.attestor_handle != latest.checkpoint_store_handle
+            || statement.attestor_revision != latest.checkpoint_store_revision
+            || statement.attestor_policy_digest != latest.checkpoint_store_policy_digest
+            || statement.attestor_public_key != self.attestation_public_key()
+            || validate_moderation_panel_notification_source_attestation_for_broker_v1(
+                statement,
+                &expected_chain_id,
+                CHECKPOINT_STORE_HANDLE,
+                CHECKPOINT_STORE_QUALIFICATION,
+                self.attestation_public_key(),
+                latest,
+            )
+            .is_err()
+        {
+            return Err(ModerationCheckpointStoreExternalErrorV1::Rejected);
+        }
+        Ok(self
+            .attestation_signing_key
+            .sign(&panel_notification_source_attestation_message(statement))
+            .to_bytes())
     }
 }
 

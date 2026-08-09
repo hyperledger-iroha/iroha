@@ -189,7 +189,82 @@ pub enum VegaMdlProofErrorV1 {
 }
 
 /// Exact verifier-key-derived Microsoft Vega-MC proof dimensions.
-pub type VegaMdlProofDimensionsV1 = vega_prover::vega_mc_zkp::VegaMcProofDimensions;
+///
+/// This is an owned first-party view of every sequence bound carried by the
+/// canonical proof. Keeping the dimensions in the public facade avoids making
+/// the released API depend on the implementation crate used to validate the
+/// original Microsoft vectors.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VegaMdlProofDimensionsV1 {
+    /// Number of uniform step instances.
+    pub num_steps: usize,
+    /// Padded shared-witness variables reused by every instance.
+    pub shared_variables: usize,
+    /// Padded precommitted variables in each step instance.
+    pub step_precommitted_variables: usize,
+    /// Padded remaining variables in each step instance.
+    pub step_rest_variables: usize,
+    /// Padded precommitted variables in the core instance.
+    pub core_precommitted_variables: usize,
+    /// Padded remaining variables in the core instance.
+    pub core_rest_variables: usize,
+    /// Padded constraints in the uniform step shape.
+    pub step_constraints: usize,
+    /// Padded variables in the uniform step shape.
+    pub step_variables: usize,
+    /// Padded constraints in the core shape.
+    pub core_constraints: usize,
+    /// Padded variables in the core shape.
+    pub core_variables: usize,
+    /// Points in the hoisted shared-witness commitment.
+    pub shared_commitment_points: usize,
+    /// Points in each step precommitted commitment.
+    pub step_precommitted_points: usize,
+    /// Points in each step remaining-witness commitment.
+    pub step_rest_points: usize,
+    /// Public values in each step instance.
+    pub step_public_values: usize,
+    /// Fiat--Shamir challenges in each step instance.
+    pub step_challenges: usize,
+    /// Points in the core precommitted commitment.
+    pub core_precommitted_points: usize,
+    /// Points in the core remaining-witness commitment.
+    pub core_rest_points: usize,
+    /// Public values in the core instance.
+    pub core_public_values: usize,
+    /// Fiat--Shamir challenges in the core instance.
+    pub core_challenges: usize,
+    /// Scalars in the Hyrax linear IPA response vector.
+    pub evaluation_response_scalars: usize,
+    /// Points in each verifier-circuit round commitment.
+    pub verifier_round_commitment_points: Vec<usize>,
+    /// Public values in the verifier-circuit instance.
+    pub verifier_public_values: usize,
+    /// Challenges in each verifier-circuit round.
+    pub verifier_challenges_per_round: Vec<usize>,
+    /// Points in the Nova cross-term commitment.
+    pub nova_cross_term_points: usize,
+    /// Points in the random relaxed witness commitment.
+    pub random_witness_commitment_points: usize,
+    /// Points in the random relaxed error commitment.
+    pub random_error_commitment_points: usize,
+    /// Public scalars in the random relaxed instance.
+    pub random_public_values: usize,
+    /// Padded constraints in the verifier circuit's regular shape.
+    pub verifier_constraints: usize,
+    /// Padded variables in the verifier circuit's regular shape.
+    pub verifier_variables: usize,
+    /// Rounds in the relaxed-Spartan outer sum-check.
+    pub relaxed_outer_rounds: usize,
+    /// Stored scalars per relaxed-Spartan outer-round polynomial.
+    pub relaxed_outer_coefficients: usize,
+    /// Rounds in the relaxed-Spartan inner sum-check.
+    pub relaxed_inner_rounds: usize,
+    /// Stored scalars per relaxed-Spartan inner-round polynomial.
+    pub relaxed_inner_coefficients: usize,
+    /// Scalars in each relaxed-Spartan direct opening.
+    pub relaxed_opening_scalars: usize,
+}
 
 /// Return the exact canonical MC dimensions.
 ///
@@ -219,6 +294,24 @@ pub const fn vega_mdl_compiled_profile_digest_v1() -> [u8; 32] {
 /// Fails closed if deterministic setup fails.
 pub fn vega_mdl_verifier_digest_v1() -> Result<[u8; 32], VegaMdlProofErrorV1> {
     super::canonical_mc::verifier_digest()
+}
+
+/// Validate one independent canonical Microsoft verifier-key/proof fixture.
+///
+/// This low-level conformance hook exists for release-vector tests. Production
+/// callers should use [`verify_vega_mdl_figure9_v1`] with the governed Figure
+/// 9 profile instead.
+///
+/// # Errors
+///
+/// Rejects noncanonical key or proof bytes and any failed Microsoft proof
+/// equation.
+#[doc(hidden)]
+pub fn vega_microsoft_fixture_conformance_v1(
+    verifier_key: &[u8],
+    proof: &[u8],
+) -> Result<([u8; 32], VegaMdlProofDimensionsV1, usize, usize), VegaMdlProofErrorV1> {
+    super::canonical_mc::validate_microsoft_fixture(verifier_key, proof)
 }
 
 /// Prove the Figure 9 relation with the complete pinned Vega-MC pipeline.

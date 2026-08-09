@@ -2195,10 +2195,11 @@ mod tests {
     }
 
     fn execution_commitment(seed: u8) -> wire::ExecutionCommitment {
-        wire::ExecutionCommitment::without_topups(
+        wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new([seed, 1]),
             Hash::new([seed, 2]),
             Hash::new([seed, 3]),
+            1,
             Hash::new([seed, 4]),
         )
     }
@@ -2221,6 +2222,13 @@ mod tests {
             view: 0,
         };
         let mut exact_execution_commitment = execution_commitment(0xB6);
+        exact_execution_commitment.executed_block_wire_len = u64::try_from(
+            block
+                .encode_wire()
+                .expect("canonical executed block wire")
+                .len(),
+        )
+        .expect("canonical executed block wire length fits u64");
         exact_execution_commitment.executed_block_wire_hash = block
             .executed_block_wire_hash()
             .expect("canonical executed block wire");

@@ -5132,46 +5132,44 @@ impl Read for StagedChunkPayloadReader<'_> {
         if buffer.is_empty() {
             return Ok(0);
         }
-        loop {
-            if self
-                .current_chunk
-                .as_ref()
-                .is_some_and(|chunk| chunk.remaining == 0)
-            {
-                self.finish_current_chunk()?;
-            }
-            if self.current_chunk.is_none() && !self.open_next_chunk()? {
-                return Ok(0);
-            }
-            let current = self.current_chunk.as_mut().ok_or_else(|| {
-                io::Error::other("staged chunk reader failed to retain the opened chunk")
-            })?;
-            let maximum = usize::try_from(current.remaining).unwrap_or(usize::MAX);
-            let read_limit = buffer.len().min(maximum);
-            let read = current.file.read(&mut buffer[..read_limit])?;
-            if read == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    format!(
-                        "staged chunk `{}` ended before its declared length",
-                        current.record.path.display()
-                    ),
-                ));
-            }
-            let read_u64 = u64::try_from(read).map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "staged chunk read length exceeds u64",
-                )
-            })?;
-            current.remaining = current.remaining.checked_sub(read_u64).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "staged chunk read exceeded its declared length",
-                )
-            })?;
-            return Ok(read);
+        if self
+            .current_chunk
+            .as_ref()
+            .is_some_and(|chunk| chunk.remaining == 0)
+        {
+            self.finish_current_chunk()?;
         }
+        if self.current_chunk.is_none() && !self.open_next_chunk()? {
+            return Ok(0);
+        }
+        let current = self.current_chunk.as_mut().ok_or_else(|| {
+            io::Error::other("staged chunk reader failed to retain the opened chunk")
+        })?;
+        let maximum = usize::try_from(current.remaining).unwrap_or(usize::MAX);
+        let read_limit = buffer.len().min(maximum);
+        let read = current.file.read(&mut buffer[..read_limit])?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!(
+                    "staged chunk `{}` ended before its declared length",
+                    current.record.path.display()
+                ),
+            ));
+        }
+        let read_u64 = u64::try_from(read).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "staged chunk read length exceeds u64",
+            )
+        })?;
+        current.remaining = current.remaining.checked_sub(read_u64).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "staged chunk read exceeded its declared length",
+            )
+        })?;
+        Ok(read)
     }
 }
 
@@ -6012,6 +6010,17 @@ impl PayloadSource for ManifestPayload<'_> {
     fn read_exact(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), ChunkStoreError> {
         read_into_manifest(self.manifest, offset, buf)
     }
+
+    fn ensure_exhausted(&mut self, expected_len: u64) -> Result<(), ChunkStoreError> {
+        let actual = self.manifest.content_length;
+        if actual != expected_len {
+            return Err(ChunkStoreError::LengthMismatch {
+                expected: expected_len,
+                actual,
+            });
+        }
+        Ok(())
+    }
 }
 
 fn read_into_manifest(
@@ -6624,6 +6633,8 @@ mod tests {
         );
     }
 
+    include!("store_manifest_payload_integrity_tests.rs");
+
     #[test]
     fn startup_rolls_back_uncommitted_gc_move() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -7047,46 +7058,6 @@ mod tests {
             assert!(backend.manifest(&manifest_id).is_none());
             assert!(!backend.manifests_dir.join(manifest_id).exists());
             assert_staging_empty(&backend);
-        }
-    }
-
-    #[test]
-    fn staged_car_reconstruction_rejects_short_trailing_and_corrupt_chunks() {
-        let payload = b"bounded staged CAR reconstruction";
-        let plan = single_file_plan(payload).expect("plan");
-        assert_eq!(plan.chunks.len(), 1, "fixture must use one chunk");
-        let manifest = test_manifest(payload, &plan, 0x93);
-        let planned = &plan.chunks[0];
-        let records = vec![StoredChunkRecord {
-            file_name: "chunk_00000.bin".to_owned(),
-            offset: planned.offset,
-            length: planned.length,
-            digest: planned.digest,
-            role: None,
-        }];
-
-        for (label, staged_bytes) in [
-            ("short", payload[..payload.len() - 1].to_vec()),
-            ("trailing", [payload.as_slice(), &[0xA5]].concat()),
-            ("corrupt", {
-                let mut corrupt = payload.to_vec();
-                corrupt[0] ^= 0x80;
-                corrupt
-            }),
-        ] {
-            let temp_dir = tempfile::tempdir().expect("create temp dir");
-            let chunks_dir = temp_dir.path().join("chunks");
-            fs::create_dir(&chunks_dir).expect("create staged chunk directory");
-            fs::write(chunks_dir.join("chunk_00000.bin"), staged_bytes)
-                .expect("write staged chunk");
-
-            let error = verify_staged_manifest_car_archive(&manifest, &plan, &records, &chunks_dir)
-                .expect_err("invalid staged chunk must fail closed");
-
-            assert!(
-                matches!(&error, StorageError::CarArchiveReconstruction { .. }),
-                "{label} staged chunk produced unexpected error: {error}"
-            );
         }
     }
 
@@ -9525,46 +9496,5 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn write_atomic_rejects_symlink_parent() {
-        let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let temp_path = canonical_temp_path(&temp_dir);
-        let real_dir = temp_path.join("real");
-        fs::create_dir(&real_dir).expect("create real dir");
-        let linked_dir = temp_path.join("linked");
-        std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
-        let output_path = linked_dir.join("index.norito");
-
-        let err = write_atomic(&output_path, b"replace").expect_err("reject symlink parent");
-        let message = err.to_string();
-
-        assert!(
-            message.contains("parent") && message.contains("must not be a symlink"),
-            "unexpected error: {message}"
-        );
-        assert!(
-            !real_dir.join("index.norito").exists(),
-            "symlink parent should not receive output"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn open_atomic_temp_file_rejects_preexisting_symlink() {
-        let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let temp_path = canonical_temp_path(&temp_dir);
-        let target_path = temp_path.join("target.tmp");
-        fs::write(&target_path, b"unchanged\n").expect("write target");
-        let tmp_path = temp_path.join("index.norito.tmp");
-        std::os::unix::fs::symlink(&target_path, &tmp_path).expect("create symlink");
-
-        let err = open_atomic_temp_file(&tmp_path).expect_err("reject temp symlink");
-        let message = err.to_string();
-
-        assert!(
-            message.contains("failed to create atomic temp"),
-            "unexpected error: {message}"
-        );
-        assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
-    }
+    include!("store_atomic_path_tests.rs");
 }

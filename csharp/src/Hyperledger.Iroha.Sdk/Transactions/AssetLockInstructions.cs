@@ -15,6 +15,8 @@ namespace Hyperledger.Iroha.Transactions;
 /// </summary>
 public sealed record class CancelAssetLockInstruction : TransactionInstruction
 {
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
+
     /// <summary>The native V1 instruction type and wire identifier.</summary>
     public const string NativeTypeName =
         "iroha_data_model::isi::escrow::CancelAssetLock";
@@ -203,6 +205,7 @@ public sealed record class CancelAssetLockInstruction : TransactionInstruction
                 $"CancelAssetLock JSON must contain 1..{MaximumJsonBytesV1} bytes.",
                 nameof(json));
         }
+        RequireValidJsonUtf8(json, nameof(json));
 
         try
         {
@@ -266,6 +269,7 @@ public sealed record class CancelAssetLockInstruction : TransactionInstruction
                 $"CancelAssetLock JSON must contain 1..{MaximumJsonBytesV1} bytes.",
                 nameof(json));
         }
+        RequireValidJsonUtf8(json, nameof(json));
 
         try
         {
@@ -386,6 +390,23 @@ public sealed record class CancelAssetLockInstruction : TransactionInstruction
             CommentHandling = JsonCommentHandling.Disallow,
             MaxDepth = 4,
         };
+
+    private static void RequireValidJsonUtf8(
+        ReadOnlySpan<byte> json,
+        string parameterName)
+    {
+        try
+        {
+            _ = StrictUtf8.GetCharCount(json);
+        }
+        catch (DecoderFallbackException error)
+        {
+            throw new ArgumentException(
+                "CancelAssetLock JSON must use strict UTF-8.",
+                parameterName,
+                error);
+        }
+    }
 
     private static CancelAssetLockInstruction DecodeNativePayload(
         ReadOnlySpan<byte> payload,

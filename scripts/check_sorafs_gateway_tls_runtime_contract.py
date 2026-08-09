@@ -113,7 +113,15 @@ def check_contract(root: Path) -> list[str]:
         "crates/irohad/src/main.rs",
         failures,
     )
-    if any(source is None for source in (controller, module, acme, xtask, torii, irohad)):
+    runtime_deps = _read(
+        root_identity,
+        "crates/irohad/src/main/runtime_deps.rs",
+        failures,
+    )
+    if any(
+        source is None
+        for source in (controller, module, acme, xtask, torii, irohad, runtime_deps)
+    ):
         return failures
     assert controller is not None
     assert module is not None
@@ -121,6 +129,7 @@ def check_contract(root: Path) -> list[str]:
     assert xtask is not None
     assert torii is not None
     assert irohad is not None
+    assert runtime_deps is not None
 
     test_boundary = controller.find("#[cfg(test)]")
     production_controller = (
@@ -182,18 +191,24 @@ def check_contract(root: Path) -> list[str]:
         failures.append("torii:missing-provider-binding-startup-failure")
     if "TlsAutomationHandle::try_new(" not in torii:
         failures.append("torii:missing-exact-client-qualification")
+    if 'include!("main/runtime_deps.rs");' not in irohad:
+        failures.append("irohad:missing-runtime-deps-module")
     for marker, failure in (
         (
             "pub fn with_sorafs_gateway_acme_client(",
             "irohad:missing-runtime-acme-injection",
         ),
         (
-            "runtime_deps.with_sorafs_gateway_acme_client(client)",
-            "irohad:missing-acme-forwarding",
-        ),
-        (
             "pub fn with_sorafs_gateway_compliance_feed_transport(",
             "irohad:missing-runtime-compliance-transport-injection",
+        ),
+    ):
+        if marker not in runtime_deps:
+            failures.append(failure)
+    for marker, failure in (
+        (
+            "runtime_deps.with_sorafs_gateway_acme_client(client)",
+            "irohad:missing-acme-forwarding",
         ),
         (
             "runtime_deps.with_sorafs_gateway_compliance_feed_transport(transport)",

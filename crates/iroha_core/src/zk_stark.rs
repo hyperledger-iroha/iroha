@@ -2150,7 +2150,7 @@ fn fri_round_challenge(
     challenge(params, "stark:fri:r:k", &tb)
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 fn synthesize_stark_fri_envelope_from_values(
     params: StarkFriParamsV1,
     transcript_label: String,

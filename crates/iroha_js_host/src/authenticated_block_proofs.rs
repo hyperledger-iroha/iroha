@@ -536,10 +536,18 @@ mod tests {
             .proofs_for_entry_hash(&alternate_entry_hash)
             .expect("alternate fixture block proof exists");
 
-        let execution_commitment = ExecutionCommitment::without_topups(
+        let executed_block_wire_len = u64::try_from(
+            block
+                .canonical_wire()
+                .expect("encode authenticated proof fixture block")
+                .len(),
+        )
+        .expect("fixture block wire length fits u64");
+        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"authenticated proof fixture parent state"),
             Hash::new(b"authenticated proof fixture post state"),
             Hash::new(b"authenticated proof fixture ordinary writes"),
+            executed_block_wire_len,
             block
                 .executed_block_wire_hash()
                 .expect("fixture block wire hashes"),
@@ -717,11 +725,14 @@ mod tests {
             height,
             view: 0,
         };
-        let execution_commitment = ExecutionCommitment::without_topups(
+        let executed_block_wire =
+            [b"successor block wire".as_slice(), &height.to_be_bytes()].concat();
+        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new([b"successor parent state".as_slice(), &height.to_be_bytes()].concat()),
             Hash::new([b"successor post state".as_slice(), &height.to_be_bytes()].concat()),
             Hash::new([b"successor writes".as_slice(), &height.to_be_bytes()].concat()),
-            Hash::new([b"successor block wire".as_slice(), &height.to_be_bytes()].concat()),
+            u64::try_from(executed_block_wire.len()).expect("fixture wire length fits u64"),
+            Hash::new(executed_block_wire),
         );
         let commit_qc = signed_commit_qc(&context, subject, execution_commitment, round, keys);
         let artifact = V2FinalityArtifact::new(

@@ -94,8 +94,9 @@ run_python312_clean() {
 }
 
 # Build a NoritoBridge.xcframework from the Rust connect_norito_bridge crate.
-# - Produces a static-library XCFramework for every Apple slice so Xcode links it
-#   without trying to embed/sign a framework inside simulator app bundles.
+# - Produces a static-library XCFramework with iOS device, universal iOS
+#   simulator, and universal macOS slices so Xcode links it without trying to
+#   embed/sign a framework inside simulator app bundles.
 # - Bridge packaging skips the broader Norito bindings sync gate because unrelated
 #   Kotlin/Java parity drift should not block rebuilding the Swift bridge artifact.
 # - Requires: Python 3.12, rustup + cargo, xcodebuild, lipo, and the exact
@@ -877,7 +878,8 @@ CANONICAL_MANIFEST_RELATIVE_TARGET="${FRAMEWORK_NAME}.xcframework/${FRAMEWORK_NA
 DEVICE_TRIPLE="aarch64-apple-ios"
 SIM_ARM_TRIPLE="aarch64-apple-ios-sim"
 SIM_X64_TRIPLE="x86_64-apple-ios"
-MACOS_TRIPLE="aarch64-apple-darwin"
+MACOS_ARM_TRIPLE="aarch64-apple-darwin"
+MACOS_X64_TRIPLE="x86_64-apple-darwin"
 stage_cargo_library() {
   local target_triple="$1"
   local label="$2"
@@ -959,9 +961,9 @@ run_hermetic_apple_cargo() {
 }
 
 echo "[+] Building Rust static libraries in the caller's fixed Cargo target (release)" >&2
-echo "    Targets: $DEVICE_TRIPLE, $SIM_ARM_TRIPLE, $SIM_X64_TRIPLE, $MACOS_TRIPLE" >&2
+echo "    Targets: $DEVICE_TRIPLE, $SIM_ARM_TRIPLE, $SIM_X64_TRIPLE, $MACOS_ARM_TRIPLE, $MACOS_X64_TRIPLE" >&2
 
-echo "    (Make sure you have installed targets via: rustup target add $DEVICE_TRIPLE $SIM_ARM_TRIPLE $SIM_X64_TRIPLE $MACOS_TRIPLE)" >&2
+echo "    (Make sure you have installed targets via: rustup target add $DEVICE_TRIPLE $SIM_ARM_TRIPLE $SIM_X64_TRIPLE $MACOS_ARM_TRIPLE $MACOS_X64_TRIPLE)" >&2
 
 # Rust uses IPHONEOS_DEPLOYMENT_TARGET for both iOS device and simulator targets,
 # while cc-based dependencies also honor IPHONESIMULATOR_DEPLOYMENT_TARGET.
@@ -989,14 +991,22 @@ LIB_SIM_X64=$(stage_cargo_library "$SIM_X64_TRIPLE" "x86_64 simulator")
 run_hermetic_apple_cargo \
   apple-macos "$MACOSX_SDKROOT" \
   build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
-  --target "$MACOS_TRIPLE" \
+  --target "$MACOS_ARM_TRIPLE" \
   "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
-assert_bridge_source_seal "the macOS build"
-LIB_MAC=$(stage_cargo_library "$MACOS_TRIPLE" "macOS")
+assert_bridge_source_seal "the arm64 macOS build"
+LIB_MAC_ARM=$(stage_cargo_library "$MACOS_ARM_TRIPLE" "arm64 macOS")
+run_hermetic_apple_cargo \
+  apple-macos "$MACOSX_SDKROOT" \
+  build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
+  --target "$MACOS_X64_TRIPLE" \
+  "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
+assert_bridge_source_seal "the x86_64 macOS build"
+LIB_MAC_X64=$(stage_cargo_library "$MACOS_X64_TRIPLE" "x86_64 macOS")
 
 assert_bridge_source_seal "Apple slice staging"
 
-if [[ ! -f "$LIB_DEV" || ! -f "$LIB_SIM_ARM" || ! -f "$LIB_SIM_X64" || ! -f "$LIB_MAC" ]]; then
+if [[ ! -f "$LIB_DEV" || ! -f "$LIB_SIM_ARM" || ! -f "$LIB_SIM_X64" \
+    || ! -f "$LIB_MAC_ARM" || ! -f "$LIB_MAC_X64" ]]; then
   echo "[-] Missing built libraries. Did the cargo builds succeed?" >&2
   exit 1
 fi
@@ -1018,16 +1028,32 @@ if [[ -z "$BRIDGE_BUNDLE_VERSION" ]]; then
   BRIDGE_BUNDLE_VERSION="1"
 fi
 
-echo "[+] Creating simulator universal static library" >&2
 SIM_UNI="$STAGE_DIR/${FRAMEWORK_NAME}-sim-universal.a"
-env -i \
-  HOME="$USER_HOME_DIR" \
-  PATH="${LIPO_BINARY%/*}:/usr/bin:/bin" \
-  TMPDIR="$MOBILE_TMPDIR" \
-  LANG=C.UTF-8 \
-  LC_ALL=C.UTF-8 \
-  DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
-  "$LIPO_BINARY" -create -output "$SIM_UNI" "$LIB_SIM_ARM" "$LIB_SIM_X64"
+MAC_UNI="$STAGE_DIR/${FRAMEWORK_NAME}-macos-universal.a"
+if [[ "$TEST_ONLY_PREBUILT_SLICES" == "1" ]]; then
+  cp "$LIB_SIM_ARM" "$SIM_UNI"
+  cp "$LIB_MAC_ARM" "$MAC_UNI"
+else
+  echo "[+] Creating simulator universal static library" >&2
+  env -i \
+    HOME="$USER_HOME_DIR" \
+    PATH="${LIPO_BINARY%/*}:/usr/bin:/bin" \
+    TMPDIR="$MOBILE_TMPDIR" \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
+    "$LIPO_BINARY" -create -output "$SIM_UNI" "$LIB_SIM_ARM" "$LIB_SIM_X64"
+
+  echo "[+] Creating macOS universal static library" >&2
+  env -i \
+    HOME="$USER_HOME_DIR" \
+    PATH="${LIPO_BINARY%/*}:/usr/bin:/bin" \
+    TMPDIR="$MOBILE_TMPDIR" \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
+    "$LIPO_BINARY" -create -output "$MAC_UNI" "$LIB_MAC_ARM" "$LIB_MAC_X64"
+fi
 
 echo "[+] Staging XCFramework slices" >&2
 HEADERS_DEV="$STAGE_DIR/device-headers"
@@ -1042,7 +1068,7 @@ mkdir -p "$HEADERS_DEV" "$HEADERS_SIM" "$HEADERS_MAC" "$(dirname "$LIB_DEV_STAGE
 # Package only task-owned staging copies. The caller's Cargo target remains intact.
 mv "$LIB_DEV" "$LIB_DEV_STAGED"
 mv "$SIM_UNI" "$LIB_SIM_STAGED"
-mv "$LIB_MAC" "$LIB_MAC_STAGED"
+mv "$MAC_UNI" "$LIB_MAC_STAGED"
 rm -f "$LIB_SIM_ARM" "$LIB_SIM_X64"
 
 # Copy headers for static-library slices. xcodebuild copies this directory as the
@@ -1083,10 +1109,13 @@ echo "[+] XCFramework staged: $PUBLISH_XCFRAMEWORK" >&2
 if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
   touch "$PUBLISH_XCFRAMEWORK/.privacy-production-enabled"
 fi
+if [[ "$TEST_ONLY_PREBUILT_SLICES" == "1" ]]; then
+  touch "$PUBLISH_XCFRAMEWORK/.test-only-prebuilt-slices"
+fi
 
 IOS_BIN="$PUBLISH_XCFRAMEWORK/ios-arm64/${STATIC_LIB_NAME}"
 SIM_BIN="$PUBLISH_XCFRAMEWORK/ios-arm64_x86_64-simulator/${STATIC_LIB_NAME}"
-MAC_BIN="$PUBLISH_XCFRAMEWORK/macos-arm64/${STATIC_LIB_NAME}"
+MAC_BIN="$PUBLISH_XCFRAMEWORK/macos-arm64_x86_64/${STATIC_LIB_NAME}"
 if [[ ! -f "$IOS_BIN" || ! -f "$SIM_BIN" || ! -f "$MAC_BIN" ]]; then
   echo "[-] Missing XCFramework binaries needed to emit NoritoBridge.artifacts.json" >&2
   exit 1
@@ -1138,13 +1167,18 @@ fi
 SOURCE_FINGERPRINT="$SOURCE_FINGERPRINT_START"
 PRIVACY_PRODUCTION_JSON=false
 CARGO_FEATURES_JSON='[]'
+TEST_ONLY_MANIFEST_FIELD=""
 if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
   PRIVACY_PRODUCTION_JSON=true
   CARGO_FEATURES_JSON='["privacy-production-enabled"]'
 fi
+if [[ "$TEST_ONLY_PREBUILT_SLICES" == "1" ]]; then
+  TEST_ONLY_MANIFEST_FIELD='  "test_only_prebuilt_slices": true,'
+fi
 
 cat > "$PUBLISH_MANIFEST" <<EOF
 {
+${TEST_ONLY_MANIFEST_FIELD}
   "version": "$BRIDGE_VERSION",
   "native_bridge_abi_version": $BRIDGE_ABI_VERSION,
   "privacy_production_enabled": $PRIVACY_PRODUCTION_JSON,
@@ -1477,7 +1511,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
   "hashes": {
     "ios-arm64": "$IOS_HASH",
     "ios-arm64_x86_64-simulator": "$SIM_HASH",
-    "macos-arm64": "$MAC_HASH"
+    "macos-arm64_x86_64": "$MAC_HASH"
   }
 }
 EOF
@@ -1512,7 +1546,8 @@ env -i \
 
 run_isolated_python - \
   "$PUBLISH_XCFRAMEWORK" "$PUBLISH_MANIFEST" \
-  "$PUBLISH_MANIFEST_LINK" "$CANONICAL_MANIFEST_RELATIVE_TARGET" <<'PY'
+  "$PUBLISH_MANIFEST_LINK" "$CANONICAL_MANIFEST_RELATIVE_TARGET" \
+  "$TEST_ONLY_PREBUILT_SLICES" <<'PY'
 import hashlib
 import json
 import os
@@ -1535,6 +1570,7 @@ xcframework = Path(sys.argv[1])
 manifest_path = Path(sys.argv[2])
 manifest_link = Path(sys.argv[3])
 manifest_link_target = sys.argv[4]
+test_only_prebuilt_slices = sys.argv[5] == "1"
 expected_slices = {
     "ios-arm64": {
         "architectures": ["arm64"],
@@ -1546,8 +1582,8 @@ expected_slices = {
         "platform": "ios",
         "variant": "simulator",
     },
-    "macos-arm64": {
-        "architectures": ["arm64"],
+    "macos-arm64_x86_64": {
+        "architectures": ["arm64", "x86_64"],
         "platform": "macos",
         "variant": None,
     },
@@ -1650,6 +1686,13 @@ if manifest.get("privacy_production_enabled") is True:
     expected_top_level.add(privacy_marker.name)
 elif manifest.get("privacy_production_enabled") is not False:
     raise SystemExit("staged NoritoBridge manifest has a non-boolean privacy mode")
+test_only_marker = xcframework / ".test-only-prebuilt-slices"
+if test_only_prebuilt_slices:
+    if manifest.get("test_only_prebuilt_slices") is not True:
+        raise SystemExit("test-only staged NoritoBridge is missing its manifest marker")
+    expected_top_level.add(test_only_marker.name)
+elif "test_only_prebuilt_slices" in manifest or test_only_marker.exists():
+    raise SystemExit("release staged NoritoBridge contains test-only prebuilt slices")
 if {entry.name for entry in xcframework.iterdir()} != expected_top_level:
     raise SystemExit("staged NoritoBridge has unexpected top-level artifacts")
 
@@ -1697,7 +1740,35 @@ run_isolated_python \
 
 assert_bridge_source_seal "staged artifact validation"
 
-if [[ "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
+if [[ "$TEST_ONLY_PREBUILT_SLICES" == "1" ]]; then
+  TEST_CHECKER_MARKER="${NORITO_BRIDGE_CHECKER_MARKER:-}"
+  TEST_CHECKER_EXIT="${NORITO_BRIDGE_CHECKER_EXIT:-0}"
+  if [[ "$TEST_CHECKER_MARKER" != /* \
+    || ! -d "${TEST_CHECKER_MARKER%/*}" \
+    || -e "$TEST_CHECKER_MARKER" \
+    || -L "$TEST_CHECKER_MARKER" ]]; then
+    echo "[-] fallback pytest checker marker must be a new absolute file" >&2
+    exit 1
+  fi
+  case "$TEST_CHECKER_MARKER" in
+    "$ROOT_DIR/"*)
+      echo "[-] fallback pytest checker marker must be outside the repository" >&2
+      exit 1
+      ;;
+  esac
+  if [[ ! "$TEST_CHECKER_EXIT" =~ ^(0|[1-9][0-9]{0,2})$ \
+    || "$TEST_CHECKER_EXIT" -gt 125 ]]; then
+    echo "[-] NORITO_BRIDGE_CHECKER_EXIT must be a canonical value from 0 through 125" >&2
+    exit 1
+  fi
+  if ! (set -o noclobber; printf '%s\n' "$PUBLISH_ROOT" >"$TEST_CHECKER_MARKER"); then
+    echo "[-] fallback pytest checker marker could not be created exclusively" >&2
+    exit 1
+  fi
+  if [[ "$TEST_CHECKER_EXIT" != "0" ]]; then
+    exit "$TEST_CHECKER_EXIT"
+  fi
+elif [[ "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
   MOBILE_SDK_ALLOW_DIRTY_SOURCE=1 \
     MOBILE_SDK_APPLE_ARTIFACT_DIR="$PUBLISH_ROOT" \
     MOBILE_SDK_STAGED_BUILD_VALIDATION=1 \
@@ -1732,7 +1803,7 @@ libc = ctypes.CDLL(None, use_errno=True)
 SLICE_PATHS = {
     "ios-arm64": "libNoritoBridge.a",
     "ios-arm64_x86_64-simulator": "libNoritoBridge.a",
-    "macos-arm64": "libNoritoBridge.a",
+    "macos-arm64_x86_64": "libNoritoBridge.a",
 }
 
 

@@ -2214,14 +2214,15 @@ mod tests {
         {
             Box::pin(async move {
                 let error = self.next_cas_error.lock().expect("CAS error lock").take();
-                let mut record = self.record.lock().expect("record lock");
-                if record.as_ref().map(|value| value.record_digest()) != expected {
-                    return Err(MusubiProviderAttestationClockSealErrorV1::Rejected);
+                {
+                    let mut record = self.record.lock().expect("record lock");
+                    if record.as_ref().map(|value| value.record_digest()) != expected {
+                        return Err(MusubiProviderAttestationClockSealErrorV1::Rejected);
+                    }
+                    if error != Some(MusubiProviderAttestationClockSealErrorV1::Rejected) {
+                        *record = Some(next.clone());
+                    }
                 }
-                if error != Some(MusubiProviderAttestationClockSealErrorV1::Rejected) {
-                    *record = Some(next.clone());
-                }
-                drop(record);
                 if self
                     .clock_cas_readback_unavailable
                     .swap(false, Ordering::SeqCst)
@@ -3246,7 +3247,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn advancement_rejects_forward_record_without_exact_predecessor() {
+    async fn advancement_treats_unproven_forward_record_as_unavailable() {
         let seal = Arc::new(TestSeal::new());
         let binding = seal.binding();
         let clock = MusubiProviderAttestationSealedUnixClockV1::initialize_at(
@@ -3274,7 +3275,8 @@ mod tests {
 
         assert_eq!(
             clock.now_at(102).await,
-            Err(MusubiProviderAttestationClockErrorV1::SealRejected)
+            Err(MusubiProviderAttestationClockErrorV1::SealUnavailable),
+            "an unproven forward record may be a concurrent advancement and must remain retryable"
         );
         assert_eq!(clock.durable_floor_unix_ms().await, 100);
     }
@@ -3313,11 +3315,13 @@ mod tests {
 
     #[test]
     fn public_scope_digest_revalidates_decoded_shape() {
-        let invalid = MusubiProviderAttestationClockScopeV1 {
-            chain_id: ChainId::from(""),
-            genesis_block_hash: [0; 32],
-            provider_id: ProviderId::new([0; 32]),
-        };
+        let mut raw_fixture = scope(9);
+        // Model a structurally decoded value that bypassed `try_new` without
+        // invoking the validating `ChainId` parser with deliberately bad text.
+        raw_fixture.genesis_block_hash = [0; 32];
+        let bytes = norito::encode_canonical(&raw_fixture).expect("encode raw invalid fixture");
+        let invalid = norito::decode_canonical::<MusubiProviderAttestationClockScopeV1>(&bytes)
+            .expect("decode raw invalid fixture");
         assert_eq!(
             invalid.scope_digest(),
             Err(MusubiProviderAttestationClockErrorV1::InvalidScope)

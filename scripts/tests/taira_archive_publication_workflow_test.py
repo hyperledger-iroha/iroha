@@ -300,7 +300,12 @@ def test_downloaded_artifacts_are_quarantined_staged_and_consumed_only_after_ins
             "privacy-v1-boi-artifacts",
         ),
         "linux-boi-qualification": ("candidate", "privacy-v1-boi-artifacts"),
-        "macos-deploy": ("linux-authority", "candidate", "macos-build"),
+        "macos-deploy": (
+            "linux-authority",
+            "candidate",
+            "privacy-v1-boi-qualified",
+            "macos-build",
+        ),
         "macos-publish": ("candidate",),
     }
     for job_name, kinds in consumers.items():
@@ -331,12 +336,35 @@ def test_boi_cross_run_input_is_required_content_validated_and_deploy_gating() -
         assert "staged_root" in text
     assert '--boi-artifact-handoff-dir "$boi_stage"' in source
     assert "assemble-boi --" in qualification
-    assert "admit -- init-replay-ledger" in qualification
+    assert "admit -- init-replay-ledger" not in qualification
     assert '--artifact-handoff-root "$boi_stage"' in source
-    assert '--candidate-replay-ledger "$replay_ledger"' in source
+    assert "--candidate-replay-ledger" not in qualification
+    assert "TAIRA_BOI_QUALIFICATION_STAGING_ROOT" in qualification
+    assert (
+        'boi_output="$TAIRA_BOI_QUALIFICATION_STAGING_ROOT/'
+        'boi-qualified-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"'
+    ) in source
     assert "TAIRA_RELEASE_EXTERNAL_SIGNER_PATH" not in qualification
     assert "TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH" not in qualification
+    assert "TAIRA_BOI_QUALIFICATION_EXTERNAL_SIGNER_PATH" in qualification
+    assert "TAIRA_BOI_QUALIFICATION_EXTERNAL_SIGNER_SHA256" in qualification
+    assert "TAIRA_BOI_QUALIFICATION_SIGNING_PUBLIC_KEY_PATH" in qualification
+    assert "--trusted-qualification-signing-fingerprint" in qualification
+    assert '--workflow-run-id "$GITHUB_RUN_ID"' in qualification
+    assert '--workflow-run-attempt "$GITHUB_RUN_ATTEMPT"' in qualification
     assert "linux-boi-qualification" in jobs["macos-deploy"]["needs"]
+    deploy = _job_text(jobs["macos-deploy"])
+    assert "taira-privacy-v1-boi-${{ github.run_id }}-${{ github.run_attempt }}" in deploy
+    assert "--expected-kind privacy-v1-boi-qualified" in deploy
+    assert '--boi-qualified-handoff-root "$boi_stage"' in source
+    assert "boi_stage" in deploy
+    assert "--trusted-boi-qualification-public-key" in deploy
+    assert "--trusted-boi-qualification-signing-fingerprint" in deploy
+    assert "--expected-boi-qualification-host-id" in deploy
+    assert "--expected-boi-qualification-installation-id" in deploy
+    assert "--expected-boi-qualification-controller-digest" in deploy
+    assert "--expected-workflow-run-id" in deploy
+    assert "--expected-workflow-run-attempt" in deploy
     assert "TAIRA_PRIVACY_V1_BOI_ARTIFACT_PATH" not in source
 
 

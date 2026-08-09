@@ -1,7 +1,7 @@
 //! Native Taira Bootle/Lantern issuer broker and public-policy exporter.
 //!
 //! The executable built on this module has one deliberately narrow role: it
-//! exposes slot 54 through the stock authenticated local broker while keeping
+//! exposes slot 56 through the stock authenticated local broker while keeping
 //! the Falcon trapdoor, bearer token, and stable principal seed in hardened
 //! service-credential files. Torii remains the only issuance replay-state authority.
 
@@ -299,7 +299,7 @@ impl CredentialBundleV1 {
     }
 }
 
-/// Native deployment-owned implementation of broker slot 54.
+/// Native deployment-owned implementation of broker slot 56.
 pub struct TairaBootleLanternIssuanceBrokerBackendV1 {
     config: TairaBootleLanternBrokerPublicConfigV1,
     issuer: BootleLanternIssuerKeyPairV1,
@@ -735,7 +735,7 @@ struct BrokerCliV1 {
 enum BrokerCommandV1 {
     /// Emit the complete public policy and registration instruction to stdout.
     ExportPublic(ExportPublicArgsV1),
-    /// Validate expected public digests and serve the stock slot-54 endpoint.
+    /// Validate expected public digests and serve the stock slot-56 endpoint.
     Serve(ServeArgsV1),
 }
 

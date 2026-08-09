@@ -92,13 +92,19 @@ def test_retired_routes_exist_only_as_runtime_catalog_and_openapi_negatives() ->
         for path in (REPO_ROOT / "crates").rglob("*.rs")
     }
     allowed_negative_tests = {
-        REPO_ROOT / "crates" / "iroha_torii" / "src" / "lib.rs",
+        REPO_ROOT
+        / "crates"
+        / "iroha_torii"
+        / "src"
+        / "tests"
+        / "lib_strict_request_targets.rs",
         REPO_ROOT / "crates" / "iroha_torii" / "src" / "openapi.rs",
         REPO_ROOT
         / "crates"
         / "iroha_torii_shared"
         / "src"
-        / "route_catalog.rs",
+        / "route_catalog"
+        / "tests.rs",
     }
 
     for retired_path in RETIRED_PATHS:

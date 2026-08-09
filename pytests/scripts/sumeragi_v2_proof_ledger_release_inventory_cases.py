@@ -1,12 +1,44 @@
 # Executed lexically in sumeragi_v2_proof_ledger_test.py; do not collect directly.
 
+RELEASE_RECEIPT_COMPONENT_FILES = (
+    Path("scripts/write_sumeragi_v2_release_receipt_formal_artifacts.py"),
+    Path("scripts/write_sumeragi_v2_release_receipt_corridor_log.py"),
+)
+
+
+def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[Path, ...]:
+    """Expand reviewed Rust parents to their exact include-component closure."""
+
+    reviewed_paths = [
+        Path("ci/run_native_amx_v2_grouped_sdk_parity.sh"),
+        Path("ci/run_sumeragi_v2_sdk_diagnostics.sh"),
+        Path("ci/check_sumeragi_v2_multilane_release_inventory.sh"),
+        Path("javascript/iroha_js/test/sumeragiDiagnosticsContract.test.js"),
+        Path("javascript/iroha_js/test/toriiClient.test.js"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner_tests.rs"),
+        *paths,
+    ]
+    expanded: list[Path] = []
+    for relative in reviewed_paths:
+        expanded.append(relative)
+        expanded.extend(
+            relative.parent / component
+            for component in module._REVIEWED_RUST_INCLUDE_MANIFESTS.get(
+                relative.as_posix(), ()
+            )
+        )
+        if relative == Path("scripts/write_sumeragi_v2_release_receipt.py"):
+            expanded.extend(RELEASE_RECEIPT_COMPONENT_FILES)
+    return tuple(dict.fromkeys(expanded))
+
+
 @pytest.mark.parametrize(
     ("old", "new", "expected_error"),
     (
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 829 tests",
+            "must contain exactly 837 tests",
         ),
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
@@ -36,9 +68,9 @@
             )
         ),
         (
-            "readonly expected_production_liveness_test_count=829",
-            "readonly expected_production_liveness_test_count=828",
-            "production liveness source count must be sealed as 829",
+            "readonly expected_production_liveness_test_count=837",
+            "readonly expected_production_liveness_test_count=836",
+            "production liveness source count must be sealed as 837",
         ),
         (
             "readonly expected_typed_rollover_formal_mutation_count=45",
@@ -57,26 +89,41 @@
             "45-mutation typed rollover contract fragment",
         ),
         (
-            "readonly expected_multilane_focus_test_count=309",
-            "readonly expected_multilane_focus_test_count=308",
-            "multilane G-UNIT source count must be sealed as 309",
+            "readonly expected_multilane_focus_test_count=524",
+            "readonly expected_multilane_focus_test_count=519",
+            "multilane G-UNIT source count must be sealed as 524",
         ),
         (
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-            """'[:space:]')" != 310 ]]; then""",
+                """'[:space:]')" != 525 ]]; then""",
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-            """'[:space:]')" != 309 ]]; then""",
-            "G-UNIT TSV guard must require one header plus exactly 309 focus rows",
+                """'[:space:]')" != 524 ]]; then""",
+            "G-UNIT TSV guard must require one header plus exactly 524 focus rows",
         ),
         (
-            "The canonical 309-row TSV is",
-            "The canonical 308-row TSV is",
-            "G-UNIT inventory comment must seal 309 rows",
+            "The canonical 524-row TSV is",
+            "The canonical 519-row TSV is",
+            "G-UNIT inventory comment must seal 524 rows",
         ),
         (
-            "including exact 309/309 G-UNIT,",
-            "including exact 308/309 G-UNIT,",
-            "terminal success text must seal exact 309/309 G-UNIT",
+            "including exact 524/524 G-UNIT,",
+            "including exact 523/524 G-UNIT,",
+            "terminal success text must seal exact 524/524 G-UNIT",
+        ),
+        (
+            "  kura::tests::native_amx_prevote_byte_budget_is_exact_per_route_and_finality_width_stable\n",
+            "  kura::tests::native_amx_prevote_byte_budget_is_exact_per_route_and_finality_width_stable_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  kura::tests::native_amx_prevote_pair_geometry_rejects_empty_hard_cap_and_overflow\n",
+            "  kura::tests::native_amx_prevote_pair_geometry_rejects_empty_hard_cap_and_overflow_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  sumeragi::v2_apply::tests::native_amx_prevote_byte_failures_have_precommit_error_classification\n",
+            "  sumeragi::v2_apply::tests::native_amx_prevote_byte_failures_have_precommit_error_classification_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
         ),
         (
             "  sumeragi::v2_core::refinement::tests::"
@@ -142,10 +189,52 @@
             "canonical G-UNIT leg/crate/test inventory SHA-256",
         ),
         (
+            "  queue::reservation_journal::tests::"
+            "snapshot_replay_seal_covers_empty_and_live_owner_replays\n",
+            "  queue::reservation_journal::tests::"
+            "snapshot_replay_seal_covers_empty_and_live_owner_replays_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  queue::reservation_journal::tests::"
+            "snapshot_replay_seal_rejects_changed_journal_before_publication\n",
+            "  queue::reservation_journal::tests::"
+            "snapshot_replay_seal_rejects_changed_journal_before_publication_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  queue::reservation_journal::tests::"
+            "snapshot_replay_receipt_rejects_same_count_owner_identity_drift\n",
+            "  queue::reservation_journal::tests::"
+            "snapshot_replay_receipt_rejects_same_count_owner_identity_drift_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
             "  native_amx::tests::signing_guard_durably_binds_full_source_session_and_participant_incarnation\n"
             "  native_amx::tests::signing_guard_is_restart_safe_idempotent_and_rejects_body_equivocation\n",
             "  native_amx::tests::signing_guard_is_restart_safe_idempotent_and_rejects_body_equivocation\n"
             "  native_amx::tests::signing_guard_durably_binds_full_source_session_and_participant_incarnation\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  block::tests::historical_native_amx_source_bundle_"
+            "authenticates_every_evidence_layer\n",
+            "  block::tests::historical_native_amx_source_bundle_"
+            "authenticates_every_evidence_layer_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  kura::tests::native_amx_all_manifest_barrier_"
+            "does_not_promote_another_routes_receipt_temp\n",
+            "  kura::tests::native_amx_all_manifest_barrier_"
+            "does_not_promote_another_routes_receipt_temp_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  sumeragi::v2_apply::tests::historical_autonomous_recovery_"
+            "reaches_exactly_once_canonical_merge_application\n",
+            "  sumeragi::v2_apply::tests::historical_autonomous_recovery_"
+            "reaches_exactly_once_canonical_merge_application_mutant\n",
             "canonical G-UNIT leg/crate/test inventory SHA-256",
         ),
         (
@@ -195,21 +284,23 @@ def test_production_release_inventory_rejects_name_count_and_feature_mutants(
     expected_error: str,
 ) -> None:
     module = load_checker()
-    for relative in (
-        Path("scripts/run_sumeragi_v2_release_gates.sh"),
-        Path("ci/check_sumeragi_v2_multilane_release_inventory.sh"),
-        Path("scripts/write_sumeragi_v2_release_receipt.py"),
-        Path("scripts/bootstrap_sumeragi_v2_release.py"),
-        Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
-        Path("formal/sumeragi_v2/README.md"),
-        Path("formal/sumeragi_v2/PROOF.md"),
-        Path("specs/sumeragi_v2_liveness.md"),
-        Path("scripts/bootstrap_sumeragi_v2_release.py"),
-        Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
-        Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
-        Path("integration_tests/tests/sumeragi_v2_runner.rs"),
-        Path("crates/iroha_core/src/sumeragi/v2.rs"),
-        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+    for relative in _release_inventory_fixture_paths(
+        module,
+        (
+            Path("scripts/run_sumeragi_v2_release_gates.sh"),
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            Path("scripts/bootstrap_sumeragi_v2_release.py"),
+            Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
+            Path("formal/sumeragi_v2/README.md"),
+            Path("formal/sumeragi_v2/PROOF.md"),
+            Path("specs/sumeragi_v2_liveness.md"),
+            Path("scripts/bootstrap_sumeragi_v2_release.py"),
+            Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
+            Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
+            Path("integration_tests/tests/sumeragi_v2_runner.rs"),
+            Path("crates/iroha_core/src/sumeragi/v2.rs"),
+            Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        ),
     ):
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -219,6 +310,163 @@ def test_production_release_inventory_rejects_name_count_and_feature_mutants(
     source = release_path.read_text(encoding="utf-8")
     assert source.count(old) == 1, old
     release_path.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+    errors = module._production_liveness_release_inventory_errors(tmp_path)
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("relative", "old", "new", "expected_error"),
+    (
+        (
+            Path("scripts/run_sumeragi_v2_release_gates.sh"),
+            "  native_amx_grouped_parity_test_counts=(\n"
+            "    7\n"
+            "    62\n"
+            "    59\n",
+            "  native_amx_grouped_parity_test_counts=(\n"
+            "    7\n"
+            "    61\n"
+            "    59\n",
+            "grouped Native AMX SDK runner suite inventory must equal",
+        ),
+        (
+            Path("ci/run_native_amx_v2_grouped_sdk_parity.sh"),
+            "  python)\n    observed_test_count=62\n",
+            "  python)\n    observed_test_count=61\n",
+            "grouped Native AMX SDK harness suite inventory must equal",
+        ),
+        (
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            '    ("python", 62),\n',
+            '    ("python", 61),\n',
+            "grouped Native AMX SDK receipt suite inventory must equal",
+        ),
+    ),
+)
+def test_production_release_inventory_rejects_grouped_sdk_count_drift(
+    tmp_path: Path,
+    relative: Path,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    module = load_checker()
+    fixture_paths = _release_inventory_fixture_paths(
+        module,
+        (
+            Path("scripts/run_sumeragi_v2_release_gates.sh"),
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            Path("scripts/bootstrap_sumeragi_v2_release.py"),
+            Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
+            Path("formal/sumeragi_v2/README.md"),
+            Path("formal/sumeragi_v2/PROOF.md"),
+            Path("specs/sumeragi_v2_liveness.md"),
+            Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
+            Path("integration_tests/tests/sumeragi_v2_runner.rs"),
+            Path("crates/iroha_core/src/sumeragi/v2.rs"),
+            Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+            Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
+            Path("ci/run_native_amx_v2_grouped_sdk_parity.sh"),
+        ),
+    )
+    for fixture_relative in fixture_paths:
+        destination = tmp_path / fixture_relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / fixture_relative, destination)
+
+    baseline_errors = module._production_liveness_release_inventory_errors(tmp_path)
+    assert baseline_errors == [], baseline_errors
+    target = tmp_path / relative
+    source = target.read_text(encoding="utf-8")
+    assert source.count(old) == 1, old
+    target.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+    errors = module._production_liveness_release_inventory_errors(tmp_path)
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("relative", "old", "new", "expected_error"),
+    (
+        (
+            Path("scripts/run_sumeragi_v2_release_gates.sh"),
+            "  sumeragi_v2_sdk_diagnostics_test_counts=(\n"
+            "    114\n"
+            "    88\n",
+            "  sumeragi_v2_sdk_diagnostics_test_counts=(\n"
+            "    113\n"
+            "    88\n",
+            "Sumeragi SDK diagnostics runner suite inventory must equal",
+        ),
+        (
+            Path("ci/run_sumeragi_v2_sdk_diagnostics.sh"),
+            "  python)\n    observed_test_count=114\n",
+            "  python)\n    observed_test_count=113\n",
+            "Sumeragi SDK diagnostics harness suite inventory must equal",
+        ),
+        (
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            '    ("python", 114),\n',
+            '    ("python", 113),\n',
+            "Sumeragi SDK diagnostics receipt suite inventory must equal",
+        ),
+        (
+            Path("javascript/iroha_js/test/sumeragiDiagnosticsContract.test.js"),
+            '  "typed Sumeragi endpoints reject swapped status and diagnostics payloads",\n',
+            "",
+            "dedicated JavaScript Sumeragi diagnostics inventory must contain exactly 44",
+        ),
+        (
+            Path("ci/run_sumeragi_v2_sdk_diagnostics.sh"),
+            '    "# skipped": 0,\n',
+            '    "# skipped": 1,\n',
+            "no-skip selector lacks exact fragment",
+        ),
+        (
+            Path("scripts/run_sumeragi_v2_release_gates.sh"),
+            "# Execute every maintained consumer of the Rust-owned grouped Native AMX V2\n",
+            "# --test-name-pattern is retired; execute every maintained consumer.\n",
+            "retains retired ordinal/partial selector '--test-name-pattern'",
+        ),
+    ),
+)
+def test_production_release_inventory_rejects_sdk_diagnostics_drift(
+    tmp_path: Path,
+    relative: Path,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    module = load_checker()
+    fixture_paths = _release_inventory_fixture_paths(
+        module,
+        (
+            Path("scripts/run_sumeragi_v2_release_gates.sh"),
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            Path("scripts/bootstrap_sumeragi_v2_release.py"),
+            Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
+            Path("formal/sumeragi_v2/README.md"),
+            Path("formal/sumeragi_v2/PROOF.md"),
+            Path("specs/sumeragi_v2_liveness.md"),
+            Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
+            Path("integration_tests/tests/sumeragi_v2_runner.rs"),
+            Path("crates/iroha_core/src/sumeragi/v2.rs"),
+            Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+            Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
+        ),
+    )
+    for fixture_relative in fixture_paths:
+        destination = tmp_path / fixture_relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / fixture_relative, destination)
+
+    baseline_errors = module._production_liveness_release_inventory_errors(tmp_path)
+    assert baseline_errors == [], baseline_errors
+    target = tmp_path / relative
+    source = target.read_text(encoding="utf-8")
+    assert source.count(old) == 1, old
+    target.write_text(source.replace(old, new, 1), encoding="utf-8")
 
     errors = module._production_liveness_release_inventory_errors(tmp_path)
     assert any(expected_error in error for error in errors), errors
@@ -245,12 +493,14 @@ def test_production_release_inventory_seals_later_genesis_proposal_origin(
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
     )
+    required_paths = _release_inventory_fixture_paths(module, required_paths)
     for relative in required_paths:
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT_DIR / relative, destination)
 
-    assert module._production_liveness_release_inventory_errors(tmp_path) == []
+    errors = module._production_liveness_release_inventory_errors(tmp_path)
+    assert errors == [], errors
 
     finality_path = (
         tmp_path
@@ -298,6 +548,7 @@ def test_production_release_inventory_seals_contention_tolerant_restart_deadline
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
     )
+    required_paths = _release_inventory_fixture_paths(module, required_paths)
     for relative in required_paths:
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -305,7 +556,13 @@ def test_production_release_inventory_seals_contention_tolerant_restart_deadline
 
     assert module._production_liveness_release_inventory_errors(tmp_path) == []
 
-    runner_path = tmp_path / "integration_tests" / "tests" / "sumeragi_v2_runner.rs"
+    runner_path = (
+        tmp_path
+        / "integration_tests"
+        / "tests"
+        / "sumeragi_v2_runner"
+        / "restart_timing_test.rs"
+    )
     source = runner_path.read_text(encoding="utf-8")
     exact_assertion = "assert_eq!(base_round_timeout_ms, 20_000);"
     assert source.count(exact_assertion) == 1
@@ -347,27 +604,30 @@ def test_production_release_inventory_seals_successor_parent_binding(
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
     )
+    required_paths = _release_inventory_fixture_paths(module, required_paths)
     for relative in required_paths:
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT_DIR / relative, destination)
 
-    assert module._production_liveness_release_inventory_errors(tmp_path) == []
+    errors = module._production_liveness_release_inventory_errors(tmp_path)
+    assert errors == [], errors
 
-    adapter_path = tmp_path / "crates" / "iroha_core" / "src" / "sumeragi" / "v2.rs"
-    canonical_source = adapter_path.read_text(encoding="utf-8")
     mutations = (
         (
+            Path("crates/iroha_core/src/sumeragi/tests/v2_adapter_activation_context.rs"),
             "successor_core_context_preserves_the_parent_certificate_binding",
             "assert_ne!(core_parent.context_id(), context_id(successor_id));",
             "assert_eq!(core_parent.context_id(), context_id(successor_id));",
         ),
         (
+            Path("crates/iroha_core/src/sumeragi/v2.rs"),
             "successor_context_requires_the_durable_cryptographic_parent",
             "let admitted = adapter\n            .receive_authenticated(authenticated)",
             "let admitted = adapter\n            .receive_authenticated(proposal)",
         ),
         (
+            Path("crates/iroha_core/src/sumeragi/v2.rs"),
             "authentication_rejects_valid_commitment_conflicts_without_mutating_adapter",
             "adapter.authenticate(conflicting_proposal_message),\n"
             "            Err(AdapterError::ConflictingExecutionCommitment)",
@@ -375,9 +635,11 @@ def test_production_release_inventory_seals_successor_parent_binding(
             "            Err(AdapterError::MissingExecutionCommitment)",
         ),
     )
-    for test_name, old, new in mutations:
+    for relative, test_name, old, new in mutations:
+        source_path = tmp_path / relative
+        canonical_source = source_path.read_text(encoding="utf-8")
         assert canonical_source.count(old) == 1, old
-        adapter_path.write_text(
+        source_path.write_text(
             canonical_source.replace(old, new, 1),
             encoding="utf-8",
         )
@@ -387,7 +649,7 @@ def test_production_release_inventory_seals_successor_parent_binding(
             f"{test_name} must match exact reviewed token digest" in error
             for error in errors
         ), errors
-        adapter_path.write_text(canonical_source, encoding="utf-8")
+        source_path.write_text(canonical_source, encoding="utf-8")
 
     semantic_mutations = (
         (
@@ -449,6 +711,7 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
     )
+    required_paths = _release_inventory_fixture_paths(module, required_paths)
     for relative in required_paths:
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -457,16 +720,16 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
     assert module._production_liveness_release_inventory_errors(tmp_path) == []
 
     runner_path = (
-        tmp_path / "crates" / "iroha_core" / "src" / "sumeragi" / "v2_runner.rs"
+        tmp_path
+        / "crates"
+        / "iroha_core"
+        / "src"
+        / "sumeragi"
+        / "tests"
+        / "v2_runner_unsealed_01.rs"
     )
     source = runner_path.read_text(encoding="utf-8")
-    exact_retry_split = (
-        "        let error = "
-        "apply_certified_merge_sidecar_closed_prefixes_with(&mut adapter, "
-        "|prefix| {\n"
-        "            calls = calls.saturating_add(1);\n"
-        "            if calls == 2 {\n"
-    )
+    exact_retry_split = "        if calls == 2 {"
     assert source.count(exact_retry_split) == 1
     runner_path.write_text(
         source.replace(
@@ -490,28 +753,28 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
     (
         (
             Path("formal/sumeragi_v2/README.md"),
-            "current inventory to 829 tests across 38 modules.\n"
+            "current inventory to 837 tests across 39 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
-            "corridor contains 81 legs.",
-            "current inventory to 829 tests across 38 modules.\n"
+            "corridor contains 86 legs.",
+            "current inventory to 837 tests across 39 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
-            "corridor contains 80 legs.",
+            "corridor contains 85 legs.",
         ),
         (
             Path("formal/sumeragi_v2/PROOF.md"),
-            "current 829-test,\n38-module inventory. The complete source-sealed\n"
+            "current 837-test,\n39-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
-            "contains 81 legs",
-            "current 829-test,\n38-module inventory. The complete source-sealed\n"
+            "contains 86 legs",
+            "current 837-test,\n39-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
-            "contains 80 legs",
+            "contains 85 legs",
         ),
         (
             Path("specs/sumeragi_v2_liveness.md"),
-            "current source-bound inventory to 829 exact tests "
-            "across\n38 modules and 81 pre-network legs.",
-            "current source-bound inventory to 829 exact tests "
-            "across\n38 modules and 80 pre-network legs.",
+            "current source-bound inventory to 837 exact tests across\n"
+            "39 modules and 86 pre-network legs.",
+            "current source-bound inventory to 837 exact tests across\n"
+            "39 modules and 85 pre-network legs.",
         ),
     ),
 )
@@ -522,19 +785,21 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     new: str,
 ) -> None:
     module = load_checker()
-    for fixture_relative in (
-        Path("scripts/run_sumeragi_v2_release_gates.sh"),
-        Path("ci/check_sumeragi_v2_multilane_release_inventory.sh"),
-        Path("scripts/write_sumeragi_v2_release_receipt.py"),
-        Path("formal/sumeragi_v2/README.md"),
-        Path("formal/sumeragi_v2/PROOF.md"),
-        Path("specs/sumeragi_v2_liveness.md"),
-        Path("scripts/bootstrap_sumeragi_v2_release.py"),
-        Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
-        Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
-        Path("integration_tests/tests/sumeragi_v2_runner.rs"),
-        Path("crates/iroha_core/src/sumeragi/v2.rs"),
-        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+    for fixture_relative in _release_inventory_fixture_paths(
+        module,
+        (
+            Path("scripts/run_sumeragi_v2_release_gates.sh"),
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            Path("formal/sumeragi_v2/README.md"),
+            Path("formal/sumeragi_v2/PROOF.md"),
+            Path("specs/sumeragi_v2_liveness.md"),
+            Path("scripts/bootstrap_sumeragi_v2_release.py"),
+            Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
+            Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
+            Path("integration_tests/tests/sumeragi_v2_runner.rs"),
+            Path("crates/iroha_core/src/sumeragi/v2.rs"),
+            Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        ),
     ):
         destination = tmp_path / fixture_relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -561,9 +826,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            "_PRODUCTION_TEST_COUNT = 829",
-            "_PRODUCTION_TEST_COUNT = 828",
-            "production test count must equal the exact shell inventory count 829",
+            "_PRODUCTION_TEST_COUNT = 837",
+            "_PRODUCTION_TEST_COUNT = 836",
+            "production test count must equal the exact shell inventory count 837",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
@@ -613,8 +878,8 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            '("production-v2-runner", "sumeragi::v2_runner::tests", 34),',
-            '("production-v2-runner", "sumeragi::v2_runner::tests", 33),',
+            '("production-v2-runner", "sumeragi::v2_runner::tests", 37),',
+            '("production-v2-runner", "sumeragi::v2_runner::tests", 36),',
             "production module receipt tuple must equal the exact shell",
         ),
         (
@@ -631,9 +896,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
-            "  readonly expected_corridor_leg_count=81",
-            "  readonly expected_corridor_leg_count=80",
-            "sealed at 81 legs",
+            "  readonly expected_corridor_leg_count=86",
+            "  readonly expected_corridor_leg_count=85",
+            "sealed at 86 legs",
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
@@ -669,6 +934,7 @@ def test_production_release_inventory_rejects_receipt_and_command_drift(
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
     )
+    required_paths = _release_inventory_fixture_paths(module, required_paths)
     for required in required_paths:
         destination = tmp_path / required
         destination.parent.mkdir(parents=True, exist_ok=True)

@@ -296,6 +296,14 @@ private func validateApplicationEvidenceFixture(_ document: [String: Any]) throw
         try fixtureUInt(execution, "native_amx_application_manifest_version") == 1,
         "manifest version"
     )
+    let parsedExecution = try JSONDecoder().decode(
+        ToriiSumeragiV2ExecutionCommitment.self,
+        from: JSONSerialization.data(withJSONObject: execution)
+    )
+    try require(
+        parsedExecution.mergeCarrier != nil,
+        "merge carrier"
+    )
     try require(
         try fixtureUInt(execution, "native_amx_application_manifest_count")
             == UInt64(artifacts.count) && artifacts.count == 1,
@@ -344,6 +352,10 @@ private func validateApplicationEvidenceFixture(_ document: [String: Any]) throw
             execution["executed_block_wire_hash"]
         ),
         "executed wire"
+    )
+    try require(
+        try fixtureUInt(execution, "executed_block_wire_len") == 49,
+        "executed wire length"
     )
     try require(
         try fixtureUInt(leaf, "predecessor_height") + 1
@@ -549,6 +561,30 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
             diagnostics.nativeAmxParticipantApplications.first?.sourceCount,
             2
         )
+
+        var diagnosticsWithUnknownApplicationField = try XCTUnwrap(
+            expected as? [String: Any]
+        )
+        var applicationRows = try XCTUnwrap(
+            diagnosticsWithUnknownApplicationField[
+                "native_amx_participant_applications"
+            ] as? [[String: Any]]
+        )
+        var applicationRow = try XCTUnwrap(applicationRows.first)
+        applicationRow["unexpected_application_field"] = true
+        applicationRows[0] = applicationRow
+        diagnosticsWithUnknownApplicationField[
+            "native_amx_participant_applications"
+        ] = applicationRows
+        let diagnosticsWithUnknownApplicationFieldData = try JSONSerialization.data(
+            withJSONObject: diagnosticsWithUnknownApplicationField
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiSumeragiDiagnosticsSnapshot.self,
+                from: diagnosticsWithUnknownApplicationFieldData
+            )
+        )
         try validateApplicationEvidenceFixture(document)
     }
 
@@ -700,8 +736,12 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
                 "coherent_stale_descriptor_hash",
                 "coherent_stale_proposal_hash",
                 "coherent_stale_settlement_hash",
+                "coherent_duplicate_validator_set",
+                "coherent_over_quorum_requirement",
                 "manifest_leaf_hash_tampering",
                 "non_canonical_validator_peer_id",
+                "execution_commitment_merge_carrier_wrong_version",
+                "execution_commitment_missing_merge_carrier_field",
             ]).isSubset(of: identifiers)
         )
 

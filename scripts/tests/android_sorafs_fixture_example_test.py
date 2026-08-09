@@ -17,6 +17,8 @@ REGISTER_PIN_EXAMPLE = (
     / "sorafs_register_pin_manifest_multi_peer_parity_v1.json"
 )
 FIXTURE_DIR = REPO_ROOT / "fixtures" / "sorafs_orchestrator" / "multi_peer_parity_v1"
+
+
 def load_json(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
@@ -54,3 +56,27 @@ def test_fixture_example_matches_metadata() -> None:
     assert manifest_report_path.startswith(
         "target-codex/android_codegen/sorafs_manifest/"
     )
+
+
+def test_fixture_example_uses_the_repository_local_specs_source() -> None:
+    """Keep the replay guard on the implementation-coupled SDK fixture."""
+
+    assert REGISTER_PIN_EXAMPLE == (
+        REPO_ROOT
+        / "specs"
+        / "sdk"
+        / "android"
+        / "generated"
+        / "fixtures"
+        / "sorafs_register_pin_manifest_multi_peer_parity_v1.json"
+    )
+    assert not (
+        REPO_ROOT
+        / "docs"
+        / "source"
+        / "sdk"
+        / "android"
+        / "generated"
+        / "fixtures"
+        / REGISTER_PIN_EXAMPLE.name
+    ).exists()

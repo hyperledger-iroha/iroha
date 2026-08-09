@@ -838,7 +838,7 @@ class HttpClientTransport(
      * Prepares an unsigned contract-call transaction for local signing.
      *
      * Private signing material is never accepted by or sent to Torii. Sign the
-     * returned transaction scaffold locally and submit the resulting signed
+     * returned canonical transaction payload locally and submit the resulting signed
      * transaction through [submitTransaction].
      */
     fun prepareContractCall(
@@ -1660,11 +1660,8 @@ class HttpClientTransport(
             check(receipt.entrypoint == response.entrypoint && receipt.txHashHex == null) {
                 "contract call draft receipt is inconsistent"
             }
-            check(
-                response.transactionScaffoldB64 != null &&
-                    response.transactionScaffoldB64 == response.signedTransactionB64,
-            ) {
-                "contract call draft must contain one exact transaction scaffold"
+            check(response.transactionPayloadB64 != null) {
+                "contract call draft must contain one exact canonical transaction payload"
             }
             val signingMessageB64 = response.signingMessageB64
             check(signingMessageB64 != null) {
@@ -1672,6 +1669,9 @@ class HttpClientTransport(
             }
             check(Base64.getDecoder().decode(signingMessageB64).size == 32) {
                 "contract call draft signing message must be 32 bytes"
+            }
+            check(response.entrypointHashHex == null && receipt.entrypointHashHex == null) {
+                "contract call draft must not claim a final entrypoint hash"
             }
             request["contract_address"]?.let { expected ->
                 check(response.contractAddress == expected && receipt.contractAddress == expected) {

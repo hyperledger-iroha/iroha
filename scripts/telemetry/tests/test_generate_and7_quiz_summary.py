@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from scripts.telemetry.generate_and7_quiz_summary import (
+    build_arg_parser,
     load_responses,
     render_markdown,
     summarize_responses,
@@ -14,6 +15,22 @@ def write_csv(path: Path, rows: list[tuple[str, str, str, str]]) -> None:
     for row in rows:
         lines.append(",".join(row))
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def test_default_responses_use_repository_local_specs() -> None:
+    """The default must not recreate the retired public-docs source tree."""
+
+    repository_root = Path(__file__).resolve().parents[3]
+    args = build_arg_parser().parse_args([])
+    assert args.responses_dir == (
+        repository_root
+        / "specs"
+        / "sdk"
+        / "android"
+        / "readiness"
+        / "forms"
+        / "responses"
+    )
 
 
 def test_load_and_summarize(tmp_path: Path) -> None:

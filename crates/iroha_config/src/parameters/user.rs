@@ -424,7 +424,10 @@ use url::Url;
 use crate::{
     kura::{FsyncMode as KuraFsyncMode, InitMode as KuraInitMode},
     logger::{Directives, Format as LoggerFormat},
-    parameters::{actual, defaults, is_production_runtime_handle},
+    parameters::{
+        actual, defaults, is_production_runtime_handle, validate_webauthn_origin_v1,
+        validate_webauthn_rp_id_v1,
+    },
     snapshot::Mode as SnapshotMode,
 };
 
@@ -1068,6 +1071,9 @@ pub enum ParseError {
     /// Concurrency configuration contained invalid values.
     #[error("Invalid concurrency configuration")]
     InvalidConcurrencyConfig,
+    /// Kura storage parameters contained invalid or unrepresentable replica-advert geometry.
+    #[error("Invalid Kura configuration")]
+    InvalidKuraConfig,
     /// Torii configuration contained invalid or incomplete values.
     #[error("Invalid Torii configuration")]
     InvalidToriiConfig,
@@ -1369,7 +1375,7 @@ impl Root {
 
         let genesis = self.genesis.parse(&mut emitter);
 
-        let kura = self.kura.parse();
+        let kura = self.kura.parse(&mut emitter);
 
         let logger = self.logger;
         let queue = self.queue;
@@ -1765,7 +1771,7 @@ pub struct SorafsPinPolicyConstraints {
     pub max_retention_epoch: Option<u64>,
     /// Allowed storage classes (case-insensitive). `None` permits any class.
     pub allowed_storage_classes: Option<AlgorithmListConfig>,
-    /// Require council signatures on pin manifests. Public SoraFS pins are permissionless by default.
+    /// Require council signatures on pin manifests. Public paid pin submissions require an authenticated account.
     #[config(
         default = "crate::parameters::defaults::governance::sorafs_pin_policy::REQUIRE_COUNCIL_SIGNATURES"
     )]
@@ -4361,8 +4367,11 @@ impl Zk {
 )]
 pub struct Sccp {
     /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
-    #[config(default = "defaults::zk::sccp::MAX_PENDING_OUTBOUND_MESSAGES")]
-    pub max_pending_outbound_messages: NonZeroU64,
+    #[config(
+        default = "defaults::zk::sccp::MAX_PENDING_OUTBOUND_MESSAGES",
+        key = "max_pending_outbound_messages"
+    )]
+    pub pending_outbound_messages: NonZeroU64,
     /// Maximum canonical outbound payload bytes awaiting destination proof acceptance.
     #[config(default = "defaults::zk::sccp::MAX_PENDING_OUTBOUND_PAYLOAD_BYTES")]
     pub max_pending_outbound_payload_bytes: NonZeroU64,
@@ -4428,7 +4437,7 @@ pub struct Sccp {
 impl Default for Sccp {
     fn default() -> Self {
         Self {
-            max_pending_outbound_messages: defaults::zk::sccp::MAX_PENDING_OUTBOUND_MESSAGES,
+            pending_outbound_messages: defaults::zk::sccp::MAX_PENDING_OUTBOUND_MESSAGES,
             max_pending_outbound_payload_bytes:
                 defaults::zk::sccp::MAX_PENDING_OUTBOUND_PAYLOAD_BYTES,
             max_proofs_per_transaction: defaults::zk::sccp::MAX_PROOFS_PER_TRANSACTION,
@@ -4489,7 +4498,7 @@ impl Sccp {
         }
 
         require_json_safe(
-            self.max_pending_outbound_messages,
+            self.pending_outbound_messages,
             "max_pending_outbound_messages",
         );
         require_json_safe(
@@ -4571,7 +4580,7 @@ impl Sccp {
         );
 
         actual::Sccp {
-            max_pending_outbound_messages: self.max_pending_outbound_messages,
+            max_pending_outbound_messages: self.pending_outbound_messages,
             max_pending_outbound_payload_bytes: self.max_pending_outbound_payload_bytes,
             max_proofs_per_transaction: self.max_proofs_per_transaction,
             max_proofs_per_block: self.max_proofs_per_block,
@@ -4601,7 +4610,32 @@ impl Sccp {
 
 #[cfg(test)]
 mod sccp_limit_tests {
+    use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+
     use super::*;
+
+    #[test]
+    fn canonical_pending_outbound_key_is_required() {
+        let canonical: toml::Table =
+            toml::from_str("max_pending_outbound_messages = 17").expect("parse canonical SCCP key");
+        let decoded = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(canonical))
+            .read_and_complete::<Sccp>()
+            .expect("read canonical SCCP key");
+        assert_eq!(decoded.pending_outbound_messages.get(), 17);
+
+        let rust_field_name: toml::Table = toml::from_str("pending_outbound_messages = 17")
+            .expect("parse noncanonical Rust field name");
+        let diagnostic = format!(
+            "{:?}",
+            ConfigReader::new()
+                .with_toml_source(TomlSource::inline(rust_field_name))
+                .read_and_complete::<Sccp>()
+                .expect_err("Rust field name must not become a configuration alias")
+        );
+        assert!(diagnostic.contains("pending_outbound_messages"));
+        assert!(diagnostic.contains("unknown parameter"));
+    }
 
     #[test]
     fn defaults_are_nonzero_ordered_and_preserved() {
@@ -4637,7 +4671,7 @@ mod sccp_limit_tests {
         let exact = NonZeroU64::new(maximum).expect("JSON-safe maximum is nonzero");
         let over = NonZeroU64::new(maximum + 1).expect("one above maximum is nonzero");
         let mut boundary = Sccp::default();
-        boundary.max_pending_outbound_messages = exact;
+        boundary.pending_outbound_messages = exact;
         boundary.max_pending_outbound_payload_bytes = exact;
         boundary.max_proof_bytes_per_proof = exact;
         boundary.max_proof_bytes_per_transaction = exact;
@@ -4647,7 +4681,7 @@ mod sccp_limit_tests {
         let _ = boundary.parse();
 
         let mutations: [fn(&mut Sccp, NonZeroU64); 7] = [
-            |value, limit| value.max_pending_outbound_messages = limit,
+            |value, limit| value.pending_outbound_messages = limit,
             |value, limit| value.max_pending_outbound_payload_bytes = limit,
             |value, limit| value.max_proof_bytes_per_proof = limit,
             |value, limit| value.max_proof_bytes_per_transaction = limit,
@@ -5953,111 +5987,7 @@ impl Genesis {
     }
 }
 
-/// User-level configuration container for `Kura`.
-#[derive(Debug, ReadConfig)]
-pub struct Kura {
-    /// Initialisation mode controlling whether to reuse or reset existing storage.
-    #[config(env = "KURA_INIT_MODE", default)]
-    pub init_mode: KuraInitMode,
-    /// Directory where Kura stores blocks and auxiliary indices.
-    #[config(
-        env = "KURA_STORE_DIR",
-        default = "PathBuf::from(defaults::kura::STORE_DIR)"
-    )]
-    pub store_dir: WithOrigin<PathBuf>,
-    /// Maximum on-disk footprint for Kura (bytes, 0 = unlimited).
-    #[config(
-        env = "KURA_MAX_DISK_USAGE_BYTES",
-        default = "defaults::kura::MAX_DISK_USAGE_BYTES"
-    )]
-    pub max_disk_usage_bytes: Bytes<u64>,
-    /// Number of most-recent blocks kept in memory for fast access.
-    #[config(
-        env = "KURA_BLOCKS_IN_MEMORY",
-        default = "defaults::kura::BLOCKS_IN_MEMORY"
-    )]
-    pub blocks_in_memory: NonZeroUsize,
-    /// Number of recent committed non-genesis roster records retained for block-sync validation.
-    /// Genesis is pinned separately, and one additional row is reserved for an authenticated
-    /// pre-Kura successor.
-    #[config(
-        env = "KURA_BLOCK_SYNC_ROSTER_RETENTION",
-        default = "defaults::kura::BLOCK_SYNC_ROSTER_RETENTION"
-    )]
-    pub block_sync_roster_retention: NonZeroUsize,
-    /// Number of recent roster sidecars retained alongside the block store.
-    #[config(
-        env = "KURA_ROSTER_SIDECAR_RETENTION",
-        default = "defaults::kura::ROSTER_SIDECAR_RETENTION"
-    )]
-    pub roster_sidecar_retention: NonZeroUsize,
-    /// Distinct remote peers that must advertise a canonical block before local body eviction.
-    #[config(
-        env = "KURA_EVICTION_REQUIRED_REPLICAS",
-        default = "defaults::kura::EVICTION_REQUIRED_REPLICAS"
-    )]
-    pub eviction_required_replicas: NonZeroUsize,
-    /// Capacity of the merge-ledger cache used during compaction.
-    #[config(
-        env = "KURA_MERGE_LEDGER_CACHE_CAPACITY",
-        default = "defaults::kura::MERGE_LEDGER_CACHE_CAPACITY"
-    )]
-    pub merge_ledger_cache_capacity: usize,
-    /// Fsync policy for block persistence.
-    #[config(env = "KURA_FSYNC_MODE", default = "defaults::kura::FSYNC_MODE")]
-    pub fsync_mode: KuraFsyncMode,
-    /// Interval for batched fsync operations.
-    #[config(
-        env = "KURA_FSYNC_INTERVAL_MS",
-        default = "defaults::kura::FSYNC_INTERVAL.into()"
-    )]
-    pub fsync_interval_ms: DurationMs,
-    /// Debug controls for development/testing scenarios.
-    #[config(nested)]
-    pub debug: KuraDebug,
-}
-
-impl Kura {
-    fn parse(self) -> actual::Kura {
-        let Self {
-            init_mode,
-            store_dir,
-            max_disk_usage_bytes,
-            blocks_in_memory,
-            block_sync_roster_retention,
-            roster_sidecar_retention,
-            eviction_required_replicas,
-            merge_ledger_cache_capacity,
-            fsync_mode,
-            fsync_interval_ms,
-            debug:
-                KuraDebug {
-                    output_new_blocks: debug_output_new_blocks,
-                },
-        } = self;
-
-        actual::Kura {
-            init_mode,
-            store_dir,
-            max_disk_usage_bytes,
-            blocks_in_memory,
-            block_sync_roster_retention,
-            roster_sidecar_retention,
-            eviction_required_replicas,
-            debug_output_new_blocks,
-            merge_ledger_cache_capacity,
-            fsync_mode,
-            fsync_interval: fsync_interval_ms.0,
-        }
-    }
-}
-
-/// User-level configuration container for `KuraDebug`.
-#[derive(Debug, Clone, Copy, ReadConfig)]
-pub struct KuraDebug {
-    #[config(env = "KURA_DEBUG_OUTPUT_NEW_BLOCKS", default)]
-    output_new_blocks: bool,
-}
+include!("user/kura.rs");
 
 /// User-level finite candidate block limits.
 #[derive(Debug, Clone, Copy, ReadConfig)]
@@ -8309,6 +8239,7 @@ pub struct Settlement {
 }
 
 /// User-level optional Kagemusha proof-release cache configuration.
+#[allow(clippy::struct_field_names)]
 #[derive(Debug, ReadConfig, Clone)]
 #[allow(
     clippy::struct_field_names,
@@ -16107,17 +16038,29 @@ impl ToriiOperatorWebAuthn {
         let rp_id = self.rp_id.unwrap_or_else(|| {
             panic!("torii.operator_auth.webauthn.rp_id must be set when WebAuthn is enabled");
         });
-        let rp_id = rp_id.trim();
-        if rp_id.is_empty() {
-            panic!("torii.operator_auth.webauthn.rp_id must not be empty");
-        }
+        validate_webauthn_rp_id_v1(&rp_id).unwrap_or_else(|error| {
+            panic!(
+                "torii.operator_auth.webauthn.rp_id must be a canonical V1 DNS relying-party id: {error:?}"
+            )
+        });
         if self.origins.is_empty() {
             panic!("torii.operator_auth.webauthn.origins must not be empty");
         }
+        let mut unique_origins = BTreeSet::new();
         let origins = self
             .origins
             .into_iter()
             .map(|origin| {
+                if !unique_origins.insert(origin.clone()) {
+                    panic!(
+                        "torii.operator_auth.webauthn.origins must not contain duplicate origins"
+                    );
+                }
+                validate_webauthn_origin_v1(&origin, &rp_id).unwrap_or_else(|error| {
+                    panic!(
+                        "invalid torii.operator_auth.webauthn.origins entry `{origin}`: {error:?}"
+                    )
+                });
                 url::Url::parse(&origin).unwrap_or_else(|err| {
                     panic!("invalid torii.operator_auth.webauthn.origins entry `{origin}`: {err}")
                 })
@@ -16133,7 +16076,7 @@ impl ToriiOperatorWebAuthn {
             .map(|label| parse_operator_webauthn_algorithm(&label))
             .collect();
         Some(actual::OperatorWebAuthnConfig {
-            rp_id: rp_id.to_string(),
+            rp_id,
             rp_name: self.rp_name,
             origins,
             user_id,
@@ -16144,6 +16087,79 @@ impl ToriiOperatorWebAuthn {
             require_user_verification: self.require_user_verification,
             allowed_algorithms: algorithms,
         })
+    }
+}
+
+#[cfg(test)]
+mod torii_operator_webauthn_tests {
+    use super::*;
+
+    fn valid_config() -> ToriiOperatorWebAuthn {
+        ToriiOperatorWebAuthn {
+            enabled: true,
+            rp_id: Some("review.example".to_owned()),
+            rp_name: "Iroha operator".to_owned(),
+            origins: vec![
+                "https://review.example".to_owned(),
+                "https://login.review.example:8443".to_owned(),
+            ],
+            user_id: "iroha-operator".to_owned(),
+            user_name: "operator".to_owned(),
+            user_display_name: "Iroha operator".to_owned(),
+            challenge_ttl_secs: 60,
+            session_ttl_secs: 300,
+            require_user_verification: true,
+            allowed_algorithms: vec!["es256".to_owned()],
+        }
+    }
+
+    #[test]
+    fn operator_webauthn_accepts_exact_rp_and_subdomain_origins() {
+        let parsed = valid_config().parse().expect("enabled WebAuthn policy");
+        assert_eq!(parsed.rp_id, "review.example");
+        assert_eq!(
+            parsed.origins.iter().map(Url::as_str).collect::<Vec<_>>(),
+            [
+                "https://review.example/",
+                "https://login.review.example:8443/"
+            ]
+        );
+    }
+
+    #[test]
+    fn operator_webauthn_rejects_noncanonical_rp_ids_and_origins() {
+        for rp_id in ["Review.example", "localhost", "127.0.0.1"] {
+            let mut config = valid_config();
+            config.rp_id = Some(rp_id.to_owned());
+            assert!(
+                std::panic::catch_unwind(|| config.parse()).is_err(),
+                "{rp_id:?} must fail closed"
+            );
+        }
+
+        for origin in [
+            "http://review.example",
+            "https://operator:secret@review.example",
+            "https://review.example/path",
+            "https://review.example?challenge=1",
+            "https://review.example#fragment",
+            "https://review.example:443",
+            "https://foreign.example",
+        ] {
+            let mut config = valid_config();
+            config.origins = vec![origin.to_owned()];
+            assert!(
+                std::panic::catch_unwind(|| config.parse()).is_err(),
+                "{origin:?} must fail closed"
+            );
+        }
+
+        let mut duplicate = valid_config();
+        duplicate.origins = vec![
+            "https://review.example".to_owned(),
+            "https://review.example".to_owned(),
+        ];
+        assert!(std::panic::catch_unwind(|| duplicate.parse()).is_err());
     }
 }
 
@@ -19820,12 +19836,13 @@ impl SorafsAppealSettlementRule {
 
 impl SorafsAppealFinanceSettlement {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsAppealFinanceSettlement {
-        const MAX_SIGNERS: usize = 128;
         const MAX_ENTRIES: usize = 1_000_000;
         const MAX_RETRY_ATTEMPTS: u32 = 1_024;
         const MAX_SCAN_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
-        const MIN_CHECKPOINT_BYTES: u64 = 4 * 1024;
-        const MAX_CHECKPOINT_BYTES: u64 = 512 * 1024 * 1024;
+        const MIN_CHECKPOINT_BYTES: u64 =
+            defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MIN_BYTES_V1;
+        const MAX_CHECKPOINT_BYTES: u64 =
+            defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MAX_BYTES_LIMIT_V1;
 
         let emit = |emitter: &mut Emitter<ParseError>, message: String| {
             emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message));
@@ -19861,11 +19878,12 @@ impl SorafsAppealFinanceSettlement {
             );
         }
         let configured_submitters = !self.submitter_signers.is_empty();
-        if self.submitter_signers.len() > MAX_SIGNERS {
+        if self.submitter_signers.len() > super::SORAFS_APPEAL_FINANCE_MAX_SUBMITTER_SIGNERS_V1 {
             emit(
                 emitter,
                 format!(
-                    "sorafs.appeal_finance_settlement.submitter_signers must contain at most {MAX_SIGNERS} entries"
+                    "sorafs.appeal_finance_settlement.submitter_signers must contain at most {} entries",
+                    super::SORAFS_APPEAL_FINANCE_MAX_SUBMITTER_SIGNERS_V1
                 ),
             );
         }
@@ -20156,6 +20174,10 @@ pub struct SorafsPopCredentialService {
     pub enrollment_recipient_key_id: Option<String>,
     /// Digest of the exact hybrid enrollment-recipient public key as lowercase hexadecimal.
     pub enrollment_recipient_public_key_digest_hex: Option<String>,
+    /// Non-secret runtime hybrid wallet-recipient key handle.
+    pub wallet_recipient_key_id: Option<String>,
+    /// Digest of the exact hybrid wallet-recipient public key as lowercase hexadecimal.
+    pub wallet_recipient_public_key_digest_hex: Option<String>,
     /// Non-secret runtime wallet wrapping-key handle.
     pub wallet_wrapping_key_id: Option<String>,
     /// Non-secret deployment runtime-provider registry handle.
@@ -20205,6 +20227,8 @@ impl Default for SorafsPopCredentialService {
             issuer_public_key_hex: None,
             enrollment_recipient_key_id: None,
             enrollment_recipient_public_key_digest_hex: None,
+            wallet_recipient_key_id: None,
+            wallet_recipient_public_key_digest_hex: None,
             wallet_wrapping_key_id: None,
             runtime_provider_registry_handle: None,
             runtime_provider_registry_revision: None,
@@ -20282,6 +20306,8 @@ impl SorafsPopCredentialService {
             || self.issuer_public_key_hex.is_some()
             || self.enrollment_recipient_key_id.is_some()
             || self.enrollment_recipient_public_key_digest_hex.is_some()
+            || self.wallet_recipient_key_id.is_some()
+            || self.wallet_recipient_public_key_digest_hex.is_some()
             || self.wallet_wrapping_key_id.is_some()
             || self.runtime_provider_registry_handle.is_some()
             || self.runtime_provider_registry_revision.is_some()
@@ -20329,6 +20355,11 @@ impl SorafsPopCredentialService {
             "sorafs.storage.pop_credentials.enrollment_recipient_public_key_digest_hex",
             self.enrollment_recipient_public_key_digest_hex.as_deref(),
         );
+        let wallet_recipient_public_key_digest = parse_digest(
+            emitter,
+            "sorafs.storage.pop_credentials.wallet_recipient_public_key_digest_hex",
+            self.wallet_recipient_public_key_digest_hex.as_deref(),
+        );
         let runtime_provider_registry_policy_digest = parse_digest(
             emitter,
             "sorafs.storage.pop_credentials.runtime_provider_registry_policy_digest_hex",
@@ -20343,6 +20374,10 @@ impl SorafsPopCredentialService {
             (
                 "sorafs.storage.pop_credentials.enrollment_recipient_key_id",
                 self.enrollment_recipient_key_id.as_deref(),
+            ),
+            (
+                "sorafs.storage.pop_credentials.wallet_recipient_key_id",
+                self.wallet_recipient_key_id.as_deref(),
             ),
             (
                 "sorafs.storage.pop_credentials.wallet_wrapping_key_id",
@@ -20495,6 +20530,8 @@ impl SorafsPopCredentialService {
             issuer_public_key: issuer_public_key?,
             enrollment_recipient_key_id: self.enrollment_recipient_key_id?,
             enrollment_recipient_public_key_digest: enrollment_recipient_public_key_digest?,
+            wallet_recipient_key_id: self.wallet_recipient_key_id?,
+            wallet_recipient_public_key_digest: wallet_recipient_public_key_digest?,
             wallet_wrapping_key_id: self.wallet_wrapping_key_id?,
             runtime_provider_registry_handle: self.runtime_provider_registry_handle?,
             runtime_provider_registry_revision: self.runtime_provider_registry_revision?,
@@ -20527,6 +20564,9 @@ pub struct SorafsModerationOrchestrator {
     pub checkpoint_store_revision: Option<u64>,
     /// Exact checkpoint-store public-policy digest as lowercase hexadecimal.
     pub checkpoint_store_policy_digest_hex: Option<String>,
+    /// Archive-lifetime-stable Ed25519 checkpoint attestation trust anchor as lowercase hexadecimal.
+    /// HSM-internal rotation must preserve this public identity in V1.
+    pub checkpoint_store_attestation_public_key_hex: Option<String>,
     /// Canonical governance account used for deadline maintenance.
     pub maintenance_authority: Option<String>,
     /// Identity-pinned runtime-only moderation transaction signer handle.
@@ -20559,6 +20599,24 @@ pub struct SorafsModerationOrchestrator {
     pub panel_notification_revision: Option<u64>,
     /// Exact panel-notification adapter public-policy digest as lowercase hexadecimal.
     pub panel_notification_policy_digest_hex: Option<String>,
+    /// Identity-pinned immutable panel-notification receipt archive handle.
+    pub panel_notification_archive_handle: Option<String>,
+    /// Exact non-zero receipt archive adapter revision.
+    pub panel_notification_archive_revision: Option<u64>,
+    /// Exact receipt archive adapter public-policy digest as lowercase hexadecimal.
+    pub panel_notification_archive_policy_digest_hex: Option<String>,
+    /// Stable non-secret receipt archive namespace identity as lowercase hexadecimal.
+    pub panel_notification_archive_id_hex: Option<String>,
+    /// Bootstrap Ed25519 archive signer as lowercase hexadecimal.
+    pub panel_notification_archive_bootstrap_public_key_hex: Option<String>,
+    /// Exact Ed25519 archive readback public key as lowercase hexadecimal.
+    pub panel_notification_archive_public_key_hex: Option<String>,
+    /// Inclusive final generation authorized for the predecessor signer.
+    pub panel_notification_archive_predecessor_revocation_generation: Option<u64>,
+    /// Prior-signer transition authorization as lowercase hexadecimal.
+    pub panel_notification_archive_predecessor_authorization_signature_hex: Option<String>,
+    /// New-signer proof of possession as lowercase hexadecimal.
+    pub panel_notification_archive_new_key_possession_signature_hex: Option<String>,
     /// Maximum appeals and activated cases in a complete finalized snapshot.
     #[config(default = "defaults::sorafs::storage::moderation_orchestrator::MAX_CASES")]
     pub max_cases: u32,
@@ -20582,6 +20640,11 @@ pub struct SorafsModerationOrchestrator {
     /// Maximum canonical checkpoint size.
     #[config(default = "defaults::sorafs::storage::moderation_orchestrator::CHECKPOINT_MAX_BYTES")]
     pub checkpoint_max_bytes: Bytes<u64>,
+    /// Maximum canonical panel-notification archive artifact size.
+    #[config(
+        default = "defaults::sorafs::storage::moderation_orchestrator::PANEL_NOTIFICATION_ARCHIVE_MAX_BYTES"
+    )]
+    pub panel_notification_archive_max_bytes: Bytes<u64>,
     /// Finalized reconciliation and maintenance cadence.
     #[config(default = "defaults::sorafs::storage::moderation_orchestrator::WORKER_INTERVAL_MS")]
     pub worker_interval_ms: u64,
@@ -20600,6 +20663,7 @@ impl Default for SorafsModerationOrchestrator {
             checkpoint_store_handle: None,
             checkpoint_store_revision: None,
             checkpoint_store_policy_digest_hex: None,
+            checkpoint_store_attestation_public_key_hex: None,
             maintenance_authority: None,
             transaction_signer_handle: None,
             transaction_signer_revision: None,
@@ -20616,6 +20680,15 @@ impl Default for SorafsModerationOrchestrator {
             panel_notification_handle: None,
             panel_notification_revision: None,
             panel_notification_policy_digest_hex: None,
+            panel_notification_archive_handle: None,
+            panel_notification_archive_revision: None,
+            panel_notification_archive_policy_digest_hex: None,
+            panel_notification_archive_id_hex: None,
+            panel_notification_archive_bootstrap_public_key_hex: None,
+            panel_notification_archive_public_key_hex: None,
+            panel_notification_archive_predecessor_revocation_generation: None,
+            panel_notification_archive_predecessor_authorization_signature_hex: None,
+            panel_notification_archive_new_key_possession_signature_hex: None,
             max_cases: defaults::sorafs::storage::moderation_orchestrator::MAX_CASES,
             max_events: defaults::sorafs::storage::moderation_orchestrator::MAX_EVENTS,
             max_outbox_entries:
@@ -20627,6 +20700,8 @@ impl Default for SorafsModerationOrchestrator {
                 defaults::sorafs::storage::moderation_orchestrator::MAX_SUBMIT_ATTEMPTS,
             checkpoint_max_bytes:
                 defaults::sorafs::storage::moderation_orchestrator::CHECKPOINT_MAX_BYTES,
+            panel_notification_archive_max_bytes:
+                defaults::sorafs::storage::moderation_orchestrator::PANEL_NOTIFICATION_ARCHIVE_MAX_BYTES,
             worker_interval_ms:
                 defaults::sorafs::storage::moderation_orchestrator::WORKER_INTERVAL_MS,
             maintenance_batch_limit:
@@ -20643,6 +20718,10 @@ impl SorafsModerationOrchestrator {
     ) -> Option<actual::SorafsModerationOrchestrator> {
         const MAX_COLLECTION: u32 = 1_000_000;
         const MAX_CHECKPOINT_BYTES: u64 = 32 * 1024 * 1024;
+        const ARCHIVE_WRAPPER_MIN_BYTES: u64 = defaults::sorafs::storage::moderation_orchestrator::
+            PANEL_NOTIFICATION_ARCHIVE_MIN_BYTES_V1;
+        const MAX_ARCHIVE_BYTES: u64 = defaults::sorafs::storage::moderation_orchestrator::
+            PANEL_NOTIFICATION_ARCHIVE_MAX_BYTES_LIMIT_V1;
         const MAX_WORKER_INTERVAL_MS: u64 = 60 * 60 * 1_000;
 
         fn emit(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
@@ -20711,11 +20790,86 @@ impl SorafsModerationOrchestrator {
             Some((revision?, policy_digest?))
         }
 
+        fn nonzero_32_byte_hex(
+            field: &str,
+            value: Option<String>,
+            emitter: &mut Emitter<ParseError>,
+        ) -> Option<[u8; 32]> {
+            let Some(value) = value else {
+                emit(
+                    emitter,
+                    format!(
+                        "sorafs.storage.moderation_orchestrator.{field} is required when enabled"
+                    ),
+                );
+                return None;
+            };
+            if value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            {
+                emit(
+                    emitter,
+                    format!(
+                        "sorafs.storage.moderation_orchestrator.{field} must be exactly 64 lowercase hexadecimal characters"
+                    ),
+                );
+                return None;
+            }
+            let mut decoded = [0_u8; 32];
+            hex::decode_to_slice(value, &mut decoded)
+                .expect("validated lowercase 32-byte hexadecimal");
+            if decoded == [0; 32] {
+                emit(
+                    emitter,
+                    format!("sorafs.storage.moderation_orchestrator.{field} must be nonzero"),
+                );
+                None
+            } else {
+                Some(decoded)
+            }
+        }
+
+        fn optional_nonzero_64_byte_hex(
+            field: &str,
+            value: Option<String>,
+            emitter: &mut Emitter<ParseError>,
+        ) -> Option<[u8; 64]> {
+            let value = value?;
+            if value.len() != 128
+                || !value
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            {
+                emit(
+                    emitter,
+                    format!(
+                        "sorafs.storage.moderation_orchestrator.{field} must be exactly 128 lowercase hexadecimal characters"
+                    ),
+                );
+                return None;
+            }
+            let mut decoded = [0_u8; 64];
+            hex::decode_to_slice(value, &mut decoded)
+                .expect("validated lowercase 64-byte hexadecimal");
+            if decoded == [0; 64] {
+                emit(
+                    emitter,
+                    format!("sorafs.storage.moderation_orchestrator.{field} must be nonzero"),
+                );
+                None
+            } else {
+                Some(decoded)
+            }
+        }
+
         if !self.enabled {
             if [
                 self.checkpoint_store_handle.is_some(),
                 self.checkpoint_store_revision.is_some(),
                 self.checkpoint_store_policy_digest_hex.is_some(),
+                self.checkpoint_store_attestation_public_key_hex.is_some(),
                 self.maintenance_authority.is_some(),
                 self.transaction_signer_handle.is_some(),
                 self.transaction_signer_revision.is_some(),
@@ -20732,6 +20886,19 @@ impl SorafsModerationOrchestrator {
                 self.panel_notification_handle.is_some(),
                 self.panel_notification_revision.is_some(),
                 self.panel_notification_policy_digest_hex.is_some(),
+                self.panel_notification_archive_handle.is_some(),
+                self.panel_notification_archive_revision.is_some(),
+                self.panel_notification_archive_policy_digest_hex.is_some(),
+                self.panel_notification_archive_id_hex.is_some(),
+                self.panel_notification_archive_bootstrap_public_key_hex
+                    .is_some(),
+                self.panel_notification_archive_public_key_hex.is_some(),
+                self.panel_notification_archive_predecessor_revocation_generation
+                    .is_some(),
+                self.panel_notification_archive_predecessor_authorization_signature_hex
+                    .is_some(),
+                self.panel_notification_archive_new_key_possession_signature_hex
+                    .is_some(),
             ]
             .into_iter()
             .any(|present| present)
@@ -20791,6 +20958,16 @@ impl SorafsModerationOrchestrator {
                 emitter,
                 format!(
                     "sorafs.storage.moderation_orchestrator.checkpoint_max_bytes must be within 1..={MAX_CHECKPOINT_BYTES}"
+                ),
+            );
+        }
+        if self.panel_notification_archive_max_bytes.0 < ARCHIVE_WRAPPER_MIN_BYTES
+            || self.panel_notification_archive_max_bytes.0 > MAX_ARCHIVE_BYTES
+        {
+            emit(
+                emitter,
+                format!(
+                    "sorafs.storage.moderation_orchestrator.panel_notification_archive_max_bytes must be within {ARCHIVE_WRAPPER_MIN_BYTES}..={MAX_ARCHIVE_BYTES}"
                 ),
             );
         }
@@ -20861,10 +21038,19 @@ impl SorafsModerationOrchestrator {
         );
         let panel_notification_handle =
             runtime_handle("panel_notification_handle", self.panel_notification_handle);
+        let panel_notification_archive_handle = runtime_handle(
+            "panel_notification_archive_handle",
+            self.panel_notification_archive_handle,
+        );
         let checkpoint_store_qualification = runtime_qualification(
             "checkpoint_store",
             self.checkpoint_store_revision,
             self.checkpoint_store_policy_digest_hex,
+            emitter,
+        );
+        let checkpoint_store_attestation_public_key = nonzero_32_byte_hex(
+            "checkpoint_store_attestation_public_key_hex",
+            self.checkpoint_store_attestation_public_key_hex,
             emitter,
         );
         let transaction_signer_qualification = runtime_qualification(
@@ -20897,6 +21083,124 @@ impl SorafsModerationOrchestrator {
             self.panel_notification_policy_digest_hex,
             emitter,
         );
+        let panel_notification_archive_qualification = runtime_qualification(
+            "panel_notification_archive",
+            self.panel_notification_archive_revision,
+            self.panel_notification_archive_policy_digest_hex,
+            emitter,
+        );
+        let panel_notification_archive_id = nonzero_32_byte_hex(
+            "panel_notification_archive_id_hex",
+            self.panel_notification_archive_id_hex,
+            emitter,
+        );
+        let panel_notification_archive_bootstrap_public_key = nonzero_32_byte_hex(
+            "panel_notification_archive_bootstrap_public_key_hex",
+            self.panel_notification_archive_bootstrap_public_key_hex,
+            emitter,
+        );
+        let panel_notification_archive_public_key = nonzero_32_byte_hex(
+            "panel_notification_archive_public_key_hex",
+            self.panel_notification_archive_public_key_hex,
+            emitter,
+        );
+        for (field, public_key) in [
+            (
+                "checkpoint_store_attestation_public_key_hex",
+                checkpoint_store_attestation_public_key,
+            ),
+            (
+                "panel_notification_archive_bootstrap_public_key_hex",
+                panel_notification_archive_bootstrap_public_key,
+            ),
+            (
+                "panel_notification_archive_public_key_hex",
+                panel_notification_archive_public_key,
+            ),
+        ] {
+            if public_key.is_some_and(|public_key| {
+                PublicKey::from_bytes(Algorithm::Ed25519, &public_key).is_err()
+            }) {
+                emit(
+                    emitter,
+                    format!(
+                        "sorafs.storage.moderation_orchestrator.{field} must encode one Ed25519 public key"
+                    ),
+                );
+            }
+        }
+        let mut has_identity_collision = false;
+        if matches!(
+            (
+                checkpoint_store_handle.as_deref(),
+                panel_notification_archive_handle.as_deref(),
+            ),
+            (Some(checkpoint_store), Some(notification_archive))
+                if checkpoint_store == notification_archive
+        ) {
+            emit(
+                emitter,
+                "sorafs.storage.moderation_orchestrator.checkpoint_store_handle must differ from panel_notification_archive_handle",
+            );
+            has_identity_collision = true;
+        }
+        if matches!(
+            (
+                checkpoint_store_attestation_public_key,
+                panel_notification_archive_bootstrap_public_key,
+            ),
+            (Some(checkpoint_key), Some(archive_key)) if checkpoint_key == archive_key
+        ) {
+            emit(
+                emitter,
+                "sorafs.storage.moderation_orchestrator.checkpoint_store_attestation_public_key_hex must differ from panel_notification_archive_bootstrap_public_key_hex",
+            );
+            has_identity_collision = true;
+        }
+        if matches!(
+            (
+                checkpoint_store_attestation_public_key,
+                panel_notification_archive_public_key,
+            ),
+            (Some(checkpoint_key), Some(archive_key)) if checkpoint_key == archive_key
+        ) {
+            emit(
+                emitter,
+                "sorafs.storage.moderation_orchestrator.checkpoint_store_attestation_public_key_hex must differ from panel_notification_archive_public_key_hex",
+            );
+            has_identity_collision = true;
+        }
+        if has_identity_collision {
+            return None;
+        }
+        let rotation_presence = (
+            self.panel_notification_archive_predecessor_revocation_generation
+                .is_some(),
+            self.panel_notification_archive_predecessor_authorization_signature_hex
+                .is_some(),
+            self.panel_notification_archive_new_key_possession_signature_hex
+                .is_some(),
+        );
+        if !matches!(
+            rotation_presence,
+            (false, false, false) | (true, true, true)
+        ) {
+            emit(
+                emitter,
+                "sorafs.storage.moderation_orchestrator archive signer rotation requires cutoff, predecessor authorization, and new-key proof together",
+            );
+        }
+        let panel_notification_archive_predecessor_authorization_signature =
+            optional_nonzero_64_byte_hex(
+                "panel_notification_archive_predecessor_authorization_signature_hex",
+                self.panel_notification_archive_predecessor_authorization_signature_hex,
+                emitter,
+            );
+        let panel_notification_archive_new_key_possession_signature = optional_nonzero_64_byte_hex(
+            "panel_notification_archive_new_key_possession_signature_hex",
+            self.panel_notification_archive_new_key_possession_signature_hex,
+            emitter,
+        );
         let (checkpoint_store_revision, checkpoint_store_policy_digest) =
             checkpoint_store_qualification?;
         let (transaction_signer_revision, transaction_signer_policy_digest) =
@@ -20908,12 +21212,15 @@ impl SorafsModerationOrchestrator {
             publication_handoff_qualification?;
         let (panel_notification_revision, panel_notification_policy_digest) =
             panel_notification_qualification?;
+        let (panel_notification_archive_revision, panel_notification_archive_policy_digest) =
+            panel_notification_archive_qualification?;
 
         Some(actual::SorafsModerationOrchestrator {
             checkpoint_path: self.checkpoint_path,
             checkpoint_store_handle: checkpoint_store_handle?,
             checkpoint_store_revision,
             checkpoint_store_policy_digest,
+            checkpoint_store_attestation_public_key: checkpoint_store_attestation_public_key?,
             maintenance_authority,
             transaction_signer_handle: transaction_signer_handle?,
             transaction_signer_revision,
@@ -20930,6 +21237,17 @@ impl SorafsModerationOrchestrator {
             panel_notification_handle: panel_notification_handle?,
             panel_notification_revision,
             panel_notification_policy_digest,
+            panel_notification_archive_handle: panel_notification_archive_handle?,
+            panel_notification_archive_revision,
+            panel_notification_archive_policy_digest,
+            panel_notification_archive_id: panel_notification_archive_id?,
+            panel_notification_archive_bootstrap_public_key:
+                panel_notification_archive_bootstrap_public_key?,
+            panel_notification_archive_public_key: panel_notification_archive_public_key?,
+            panel_notification_archive_predecessor_revocation_generation: self
+                .panel_notification_archive_predecessor_revocation_generation,
+            panel_notification_archive_predecessor_authorization_signature,
+            panel_notification_archive_new_key_possession_signature,
             max_cases: usize::try_from(self.max_cases).unwrap_or(usize::MAX),
             max_events: usize::try_from(self.max_events).unwrap_or(usize::MAX),
             max_outbox_entries: usize::try_from(self.max_outbox_entries).unwrap_or(usize::MAX),
@@ -20938,6 +21256,7 @@ impl SorafsModerationOrchestrator {
             max_handoffs: usize::try_from(self.max_handoffs).unwrap_or(usize::MAX),
             max_submit_attempts: u32::from(self.max_submit_attempts),
             checkpoint_max_bytes: self.checkpoint_max_bytes,
+            panel_notification_archive_max_bytes: self.panel_notification_archive_max_bytes,
             worker_interval: Duration::from_millis(self.worker_interval_ms),
             maintenance_batch_limit: usize::try_from(self.maintenance_batch_limit)
                 .unwrap_or(usize::MAX),
@@ -21298,7 +21617,7 @@ impl SorafsEvidenceViewerConfig {
         }
 
         let webauthn_rp_id = self.webauthn_rp_id.and_then(|rp_id| {
-            if is_canonical_webauthn_rp_id(&rp_id) {
+            if validate_webauthn_rp_id_v1(&rp_id).is_ok() {
                 Some(rp_id)
             } else {
                 emit(
@@ -21324,7 +21643,7 @@ impl SorafsEvidenceViewerConfig {
             || webauthn_rp_id.as_ref().is_some_and(|rp_id| {
                 origins
                     .iter()
-                    .any(|origin| !is_canonical_webauthn_origin(origin, rp_id))
+                    .any(|origin| validate_webauthn_origin_v1(origin, rp_id).is_err())
             })
         {
             emit(
@@ -22525,14 +22844,16 @@ impl SorafsProviderIngestRuntimeConfig {
     ) -> Option<actual::SorafsProviderIngestRuntime> {
         use defaults::sorafs::storage::provider_ingest_runtime::outbox as outbox_defaults;
 
-        const MILLISECONDS_PER_DAY: u64 = 24 * 60 * 60 * 1_000;
+        const MILLISECONDS_PER_DAY: u64 = defaults::sorafs::storage::provider_ingest_runtime::
+            SOURCE_OPERATION_TIMEOUT_MS_LIMIT_V1;
         const MIN_SCAN_INTERVAL_MS: u64 = 100;
         const MAX_PAGE_ROWS: usize = 1_000;
         const MAX_PAGES_PER_TICK: usize = 4_096;
         const MAX_SOURCE_JOBS_PER_TICK: usize = 4_096;
         // V1 protocol ceiling from
         // `sorafs_manifest::capacity::MAX_REPLICATION_ORDER_ASSIGNMENTS`.
-        const MAX_SOURCE_PROVIDERS: usize = 1_024;
+        const MAX_SOURCE_PROVIDERS: usize =
+            defaults::sorafs::storage::provider_ingest_runtime::MAX_SOURCE_PROVIDERS;
         const MAX_OUTBOX_ENTRIES: usize = 65_536;
         const MAX_ATTEMPTS: u32 = 64;
         const MAX_TERMINAL_RETENTION_BLOCKS: u64 = 10_000_000;
@@ -24398,6 +24719,203 @@ impl SorafsReputationRuntimeConfig {
     }
 }
 
+/// User policy for the restart-safe finalized reserve transparency scanner.
+///
+/// The only deployment binding is the same credential-free immutable query
+/// handle used by the committed reputation archive. No credentials or private
+/// signing material are accepted here.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsReserveTransparencyRuntimeConfig {
+    /// Enable finalized reserve-event ingestion into the transparency index.
+    #[config(default = "defaults::sorafs::storage::reserve_transparency_runtime::ENABLED")]
+    pub enabled: bool,
+    /// Private directory containing the canonical monotonic scanner cursor.
+    #[config(default = "defaults::sorafs::storage::reserve_transparency_runtime::state_dir()")]
+    pub state_dir: PathBuf,
+    /// Exact immutable finalized-query handle shared with reputation.
+    pub finalized_query_handle: Option<String>,
+    /// Normal scan cadence in milliseconds.
+    #[config(
+        default = "defaults::sorafs::storage::reserve_transparency_runtime::POLL_INTERVAL_MS"
+    )]
+    pub poll_interval_ms: u64,
+    /// Maximum bounded retry delay in milliseconds.
+    #[config(
+        default = "defaults::sorafs::storage::reserve_transparency_runtime::RETRY_MAX_INTERVAL_MS"
+    )]
+    pub retry_max_interval_ms: u64,
+    /// Maximum events requested from one exact-anchor reserve page.
+    #[config(default = "defaults::sorafs::storage::reserve_transparency_runtime::PAGE_ITEMS")]
+    pub page_items: u32,
+    /// Maximum exact-anchor pages consumed by one tick.
+    #[config(
+        default = "defaults::sorafs::storage::reserve_transparency_runtime::MAX_PAGES_PER_TICK"
+    )]
+    pub max_pages_per_tick: u32,
+    /// Maximum canonical scanner-checkpoint bytes.
+    #[config(
+        default = "defaults::sorafs::storage::reserve_transparency_runtime::CHECKPOINT_MAX_BYTES"
+    )]
+    pub checkpoint_max_bytes: Bytes<u64>,
+}
+
+impl Default for SorafsReserveTransparencyRuntimeConfig {
+    fn default() -> Self {
+        use defaults::sorafs::storage::reserve_transparency_runtime as runtime;
+
+        Self {
+            enabled: runtime::ENABLED,
+            state_dir: runtime::state_dir(),
+            finalized_query_handle: None,
+            poll_interval_ms: runtime::POLL_INTERVAL_MS,
+            retry_max_interval_ms: runtime::RETRY_MAX_INTERVAL_MS,
+            page_items: runtime::PAGE_ITEMS,
+            max_pages_per_tick: runtime::MAX_PAGES_PER_TICK,
+            checkpoint_max_bytes: runtime::CHECKPOINT_MAX_BYTES,
+        }
+    }
+}
+
+impl SorafsReserveTransparencyRuntimeConfig {
+    fn parse(
+        self,
+        storage_enabled: bool,
+        reputation_runtime: Option<&actual::SorafsReputationRuntime>,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::SorafsReserveTransparencyRuntime> {
+        const MIN_POLL_INTERVAL_MS: u64 = 100;
+        const MAX_POLL_INTERVAL_MS: u64 = 60_000;
+        const MAX_RETRY_INTERVAL_MS: u64 = 300_000;
+        const MAX_PAGE_ITEMS: u32 = 64;
+        const MAX_PAGES_PER_TICK: u32 = 4_096;
+        const MIN_CHECKPOINT_BYTES: u64 = 4 * 1024;
+        const MAX_CHECKPOINT_BYTES: u64 = 1024 * 1024;
+
+        let emit = |emitter: &mut Emitter<ParseError>, message: &str| {
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message.to_owned()));
+        };
+        let policy_is_default = self.state_dir
+            == defaults::sorafs::storage::reserve_transparency_runtime::state_dir()
+            && self.poll_interval_ms
+                == defaults::sorafs::storage::reserve_transparency_runtime::POLL_INTERVAL_MS
+            && self.retry_max_interval_ms
+                == defaults::sorafs::storage::reserve_transparency_runtime::RETRY_MAX_INTERVAL_MS
+            && self.page_items
+                == defaults::sorafs::storage::reserve_transparency_runtime::PAGE_ITEMS
+            && self.max_pages_per_tick
+                == defaults::sorafs::storage::reserve_transparency_runtime::MAX_PAGES_PER_TICK
+            && self.checkpoint_max_bytes.0
+                == defaults::sorafs::storage::reserve_transparency_runtime::CHECKPOINT_MAX_BYTES.0;
+        if !self.enabled {
+            if self.finalized_query_handle.is_some() || !policy_is_default {
+                emit(
+                    emitter,
+                    "sorafs.storage.reserve_transparency_runtime bindings and policy must be absent or default when disabled",
+                );
+            }
+            return None;
+        }
+        if !storage_enabled {
+            emit(
+                emitter,
+                "sorafs.storage.reserve_transparency_runtime.enabled requires storage.enabled",
+            );
+        }
+        let Some(reputation_runtime) = reputation_runtime else {
+            emit(
+                emitter,
+                "sorafs.storage.reserve_transparency_runtime.enabled requires the committed reputation runtime and immutable finalized archive",
+            );
+            return None;
+        };
+        let state_dir_valid = self.state_dir.is_absolute()
+            && self.state_dir.file_name().is_some()
+            && !self.state_dir.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::CurDir | std::path::Component::ParentDir
+                )
+            });
+        if !state_dir_valid {
+            emit(
+                emitter,
+                "sorafs.storage.reserve_transparency_runtime.state_dir must be an absolute private directory without dot components",
+            );
+        }
+        let finalized_query_handle = match self.finalized_query_handle {
+            Some(handle) if is_production_runtime_handle(&handle) => {
+                if handle == reputation_runtime.finalized_query_handle {
+                    Some(handle)
+                } else {
+                    emit(
+                        emitter,
+                        "sorafs.storage.reserve_transparency_runtime.finalized_query_handle must exactly match reputation_runtime.finalized_query_handle",
+                    );
+                    None
+                }
+            }
+            Some(_) => {
+                emit(
+                    emitter,
+                    "sorafs.storage.reserve_transparency_runtime.finalized_query_handle must be a canonical credential-free production runtime handle",
+                );
+                None
+            }
+            None => {
+                emit(
+                    emitter,
+                    "sorafs.storage.reserve_transparency_runtime.finalized_query_handle is required when enabled",
+                );
+                None
+            }
+        };
+        if !(MIN_POLL_INTERVAL_MS..=MAX_POLL_INTERVAL_MS).contains(&self.poll_interval_ms) {
+            emit(
+                emitter,
+                "sorafs.storage.reserve_transparency_runtime.poll_interval_ms must be within 100..=60000",
+            );
+        }
+        if self.retry_max_interval_ms < self.poll_interval_ms
+            || self.retry_max_interval_ms > MAX_RETRY_INTERVAL_MS
+        {
+            emit(
+                emitter,
+                "sorafs.storage.reserve_transparency_runtime.retry_max_interval_ms must be at least poll_interval_ms and at most 300000",
+            );
+        }
+        if self.page_items == 0 || self.page_items > MAX_PAGE_ITEMS {
+            emit(
+                emitter,
+                "sorafs.storage.reserve_transparency_runtime.page_items must be within 1..=64",
+            );
+        }
+        if self.max_pages_per_tick == 0 || self.max_pages_per_tick > MAX_PAGES_PER_TICK {
+            emit(
+                emitter,
+                "sorafs.storage.reserve_transparency_runtime.max_pages_per_tick must be within 1..=4096",
+            );
+        }
+        if !(MIN_CHECKPOINT_BYTES..=MAX_CHECKPOINT_BYTES).contains(&self.checkpoint_max_bytes.0) {
+            emit(
+                emitter,
+                "sorafs.storage.reserve_transparency_runtime.checkpoint_max_bytes must be within 4096..=1048576",
+            );
+        }
+
+        state_dir_valid.then_some(())?;
+        let finalized_query_handle = finalized_query_handle?;
+        Some(actual::SorafsReserveTransparencyRuntime {
+            state_dir: self.state_dir,
+            finalized_query_handle,
+            poll_interval: Duration::from_millis(self.poll_interval_ms),
+            retry_max_interval: Duration::from_millis(self.retry_max_interval_ms),
+            page_items: self.page_items,
+            max_pages_per_tick: self.max_pages_per_tick,
+            checkpoint_max_bytes: self.checkpoint_max_bytes,
+        })
+    }
+}
+
 #[cfg(test)]
 mod sorafs_moderation_orchestrator_tests {
     use super::*;
@@ -24406,6 +24924,18 @@ mod sorafs_moderation_orchestrator_tests {
         let keypair =
             KeyPair::try_from_seed(vec![0x6D; 32], Algorithm::Ed25519).expect("test keypair");
         AccountId::new(keypair.public_key().clone()).to_string()
+    }
+
+    fn archive_public_key_hex() -> String {
+        let keypair =
+            KeyPair::try_from_seed(vec![0x7A; 32], Algorithm::Ed25519).expect("archive keypair");
+        hex::encode(keypair.public_key().to_bytes().1)
+    }
+
+    fn checkpoint_attestation_public_key_hex() -> String {
+        let keypair = KeyPair::try_from_seed(vec![0x7B; 32], Algorithm::Ed25519)
+            .expect("checkpoint attestation keypair");
+        hex::encode(keypair.public_key().to_bytes().1)
     }
 
     fn valid_config() -> SorafsModerationOrchestrator {
@@ -24417,6 +24947,9 @@ mod sorafs_moderation_orchestrator_tests {
             ),
             checkpoint_store_revision: Some(10),
             checkpoint_store_policy_digest_hex: Some("a0".repeat(32)),
+            checkpoint_store_attestation_public_key_hex: Some(
+                checkpoint_attestation_public_key_hex(),
+            ),
             maintenance_authority: Some(maintenance_authority()),
             transaction_signer_handle: Some("hsm.sorafs.moderation-transaction.primary".to_owned()),
             transaction_signer_revision: Some(11),
@@ -24439,6 +24972,14 @@ mod sorafs_moderation_orchestrator_tests {
             ),
             panel_notification_revision: Some(15),
             panel_notification_policy_digest_hex: Some("a5".repeat(32)),
+            panel_notification_archive_handle: Some(
+                "object-lock.sorafs.moderation-receipts.primary".to_owned(),
+            ),
+            panel_notification_archive_revision: Some(16),
+            panel_notification_archive_policy_digest_hex: Some("a6".repeat(32)),
+            panel_notification_archive_id_hex: Some("a7".repeat(32)),
+            panel_notification_archive_bootstrap_public_key_hex: Some(archive_public_key_hex()),
+            panel_notification_archive_public_key_hex: Some(archive_public_key_hex()),
             ..SorafsModerationOrchestrator::default()
         }
     }
@@ -24464,6 +25005,9 @@ mod sorafs_moderation_orchestrator_tests {
         assert!(parsed.checkpoint_path.is_absolute());
         assert_eq!(parsed.checkpoint_store_revision, 10);
         assert_eq!(parsed.checkpoint_store_policy_digest, [0xa0; 32]);
+        assert_eq!(parsed.panel_notification_archive_revision, 16);
+        assert_eq!(parsed.panel_notification_archive_policy_digest, [0xa6; 32]);
+        assert_eq!(parsed.panel_notification_archive_id, [0xa7; 32]);
         assert_eq!(
             parsed.maintenance_authority.to_string(),
             maintenance_authority()
@@ -24492,6 +25036,117 @@ mod sorafs_moderation_orchestrator_tests {
             defaults::sorafs::storage::moderation_orchestrator::CHECKPOINT_MAX_BYTES.0
         );
         assert_eq!(parsed.worker_interval, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn enabled_policy_accepts_distinct_checkpoint_and_archive_identities() {
+        let mut emitter = Emitter::new();
+        let parsed = valid_config()
+            .parse(true, &mut emitter)
+            .expect("distinct checkpoint and archive identities must parse");
+        emitter
+            .into_result()
+            .expect("distinct checkpoint and archive identities must not emit diagnostics");
+
+        assert_ne!(
+            parsed.checkpoint_store_handle,
+            parsed.panel_notification_archive_handle
+        );
+        assert_ne!(
+            parsed.checkpoint_store_attestation_public_key,
+            parsed.panel_notification_archive_bootstrap_public_key
+        );
+        assert_ne!(
+            parsed.checkpoint_store_attestation_public_key,
+            parsed.panel_notification_archive_public_key
+        );
+    }
+
+    #[test]
+    fn enabled_policy_rejects_checkpoint_archive_handle_collision() {
+        let mut config = valid_config();
+        let colliding_handle = config
+            .checkpoint_store_handle
+            .clone()
+            .expect("valid checkpoint store handle");
+        config.panel_notification_archive_handle = Some(colliding_handle.clone());
+
+        let mut emitter = Emitter::new();
+        assert!(config.parse(true, &mut emitter).is_none());
+        let diagnostic = format!(
+            "{:?}",
+            emitter
+                .into_result()
+                .expect_err("colliding runtime handles must fail")
+        );
+        assert!(
+            diagnostic.contains(
+                "checkpoint_store_handle must differ from panel_notification_archive_handle"
+            ),
+            "unexpected diagnostic: {diagnostic}"
+        );
+        assert!(
+            !diagnostic.contains(&colliding_handle),
+            "runtime handles must not be echoed"
+        );
+    }
+
+    #[test]
+    fn enabled_policy_rejects_checkpoint_archive_bootstrap_key_collision() {
+        let mut config = valid_config();
+        let colliding_key = config
+            .checkpoint_store_attestation_public_key_hex
+            .clone()
+            .expect("valid checkpoint attestation key");
+        config.panel_notification_archive_bootstrap_public_key_hex = Some(colliding_key.clone());
+
+        let mut emitter = Emitter::new();
+        assert!(config.parse(true, &mut emitter).is_none());
+        let diagnostic = format!(
+            "{:?}",
+            emitter
+                .into_result()
+                .expect_err("colliding checkpoint and archive bootstrap keys must fail")
+        );
+        assert!(
+            diagnostic.contains(
+                "checkpoint_store_attestation_public_key_hex must differ from panel_notification_archive_bootstrap_public_key_hex"
+            ),
+            "unexpected diagnostic: {diagnostic}"
+        );
+        assert!(
+            !diagnostic.contains(&colliding_key),
+            "public-key values must not be echoed"
+        );
+    }
+
+    #[test]
+    fn enabled_policy_rejects_checkpoint_archive_current_key_collision() {
+        let mut config = valid_config();
+        let colliding_key = config
+            .checkpoint_store_attestation_public_key_hex
+            .clone()
+            .expect("valid checkpoint attestation key");
+        config.panel_notification_archive_public_key_hex = Some(colliding_key.clone());
+
+        let mut emitter = Emitter::new();
+        assert!(config.parse(true, &mut emitter).is_none());
+        let diagnostic = format!(
+            "{:?}",
+            emitter
+                .into_result()
+                .expect_err("colliding checkpoint and current archive keys must fail")
+        );
+        assert!(
+            diagnostic.contains(
+                "checkpoint_store_attestation_public_key_hex must differ from panel_notification_archive_public_key_hex"
+            ),
+            "unexpected diagnostic: {diagnostic}"
+        );
+        assert!(
+            !diagnostic.contains(&colliding_key),
+            "public-key values must not be echoed"
+        );
     }
 
     #[test]
@@ -24547,750 +25202,8 @@ mod sorafs_moderation_orchestrator_tests {
 }
 
 #[cfg(test)]
-mod sorafs_provider_ingest_runtime_config_tests {
-    use super::*;
-
-    fn provider_id() -> ProviderId {
-        ProviderId::new([0x51; 32])
-    }
-
-    fn completion_signer_public_key_hex() -> String {
-        let key = KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519)
-            .expect("completion signer key");
-        hex::encode(key.public_key().to_bytes().1)
-    }
-
-    fn valid_config() -> SorafsProviderIngestRuntimeConfig {
-        SorafsProviderIngestRuntimeConfig {
-            enabled: true,
-            authenticated_source_fetch_handle: Some("https-pinned-source-pool:eu-1".to_owned()),
-            authenticated_source_fetch_revision: Some(5),
-            authenticated_source_fetch_policy_digest_hex: Some("b1".repeat(32)),
-            completion_signer_resolver_handle: Some(
-                "hsm://sorafs/provider-ingest/resolver-primary".to_owned(),
-            ),
-            completion_signer_resolver_revision: Some(6),
-            completion_signer_resolver_policy_digest_hex: Some("b2".repeat(32)),
-            completion_signer_handle: Some("hsm://sorafs/provider-ingest/key-primary".to_owned()),
-            completion_signer_adapter_revision: Some(3),
-            completion_signer_policy_id_hex: Some("a1".repeat(32)),
-            completion_signer_policy_revision: Some(1),
-            completion_signer_policy_predecessor_digest_hex: None,
-            completion_signer_policy_digest_hex: Some("a2".repeat(32)),
-            completion_signer_algorithm: Some(Algorithm::Ed25519),
-            completion_signer_public_key_hex: Some(completion_signer_public_key_hex()),
-            checkpoint_store_handle: Some(
-                "sealed://sorafs/provider-ingest/checkpoint-primary".to_owned(),
-            ),
-            checkpoint_store_revision: Some(7),
-            checkpoint_store_policy_digest_hex: Some("a7".repeat(32)),
-            ..SorafsProviderIngestRuntimeConfig::default()
-        }
-    }
-
-    fn enable_attestation_journal(config: &mut SorafsProviderAttestationJournalConfig) {
-        config.enabled = true;
-        config.clock_seal_handle =
-            Some("sealed://sorafs/provider-attestation/clock-primary".to_owned());
-        config.clock_seal_revision = Some(11);
-        config.clock_seal_policy_digest_hex = Some("c1".repeat(32));
-        config.approval_signer_handle =
-            Some("hsm://sorafs/provider-attestation/approval-primary".to_owned());
-        config.approval_signer_revision = Some(12);
-        config.approval_signer_policy_digest_hex = Some("c2".repeat(32));
-        config.inventory_handle =
-            Some("coordinator://sorafs/provider-attestation/inventory-primary".to_owned());
-        config.inventory_revision = Some(13);
-        config.inventory_policy_digest_hex = Some("c3".repeat(32));
-    }
-
-    fn large_valid_outbox_config() -> SorafsProviderIngestRuntimeConfig {
-        use defaults::sorafs::storage::provider_ingest_runtime::outbox;
-
-        let mut config = valid_config();
-        config.max_source_jobs_per_tick = 1;
-        config.outbox.max_active_entries = 1;
-        config.outbox.max_terminal_entries = 1;
-        config.outbox.checkpoint_max_bytes = Bytes(outbox::CHECKPOINT_MAX_BYTES_LIMIT);
-        config.outbox.max_signed_transaction_bytes =
-            Bytes(outbox::MAX_SIGNED_TRANSACTION_BYTES_LIMIT);
-        config
-    }
-
-    #[test]
-    fn disabled_default_is_inert() {
-        let config = SorafsProviderIngestRuntimeConfig::default();
-        let journal = &config.provider_attestation_journal;
-        assert!(!journal.enabled);
-        assert!(journal.clock_seal_handle.is_none());
-        assert!(journal.clock_seal_revision.is_none());
-        assert!(journal.clock_seal_policy_digest_hex.is_none());
-        assert!(journal.approval_signer_handle.is_none());
-        assert!(journal.approval_signer_revision.is_none());
-        assert!(journal.approval_signer_policy_digest_hex.is_none());
-        assert!(journal.inventory_handle.is_none());
-        assert!(journal.inventory_revision.is_none());
-        assert!(journal.inventory_policy_digest_hex.is_none());
-        let mut emitter = Emitter::new();
-        assert!(config.parse(false, None, &mut emitter).is_none());
-        assert!(emitter.into_result().is_ok());
-    }
-
-    #[test]
-    fn enabled_policy_parses_without_credentials() {
-        let provider_id = provider_id();
-        let mut emitter = Emitter::new();
-        let parsed = valid_config()
-            .parse(true, Some(&provider_id), &mut emitter)
-            .expect("enabled provider-ingest policy");
-        assert!(emitter.into_result().is_ok());
-        assert_eq!(parsed.scan_interval_ms, 1_000);
-        assert_eq!(parsed.max_page_rows, 64);
-        assert_eq!(parsed.max_pages_per_tick, 4);
-        assert_eq!(parsed.max_source_providers, 1_024);
-        assert_eq!(parsed.authenticated_source_fetch_revision, 5);
-        assert_eq!(parsed.authenticated_source_fetch_policy_digest, [0xB1; 32]);
-        assert_eq!(parsed.completion_signer_resolver_revision, 6);
-        assert_eq!(parsed.completion_signer_resolver_policy_digest, [0xB2; 32]);
-        assert_eq!(
-            parsed.finalized_archive.relative_root,
-            PathBuf::from("provider-ingest-finalized-archive-v1")
-        );
-        assert_eq!(parsed.finalized_archive.max_record_bytes, 128 * 1024 * 1024);
-        assert_eq!(parsed.finalized_archive.max_archive_entries, 1_000_000);
-        assert_eq!(
-            parsed.finalized_archive.max_total_bytes,
-            64 * 1024 * 1024 * 1024
-        );
-        assert_eq!(parsed.finalized_archive.max_providers_per_anchor, 1_024);
-        assert_eq!(parsed.finalized_archive.max_orders_per_provider, 256);
-        assert_eq!(parsed.finalized_archive.max_total_orders_per_anchor, 256);
-        assert_eq!(parsed.finalized_archive.max_page_rows, 64);
-        assert_eq!(parsed.finalized_archive.max_kura_tip_lag_blocks, 2);
-        assert_eq!(parsed.completion_signer_adapter_revision, 3);
-        assert_eq!(
-            parsed.completion_signer_policy,
-            ProviderIngestCompletionSignerPolicyV1 {
-                policy_id: [0xA1; 32],
-                revision: 1,
-                predecessor_digest: None,
-                policy_digest: [0xA2; 32],
-            }
-        );
-        assert_eq!(parsed.completion_signer_algorithm, Algorithm::Ed25519);
-        assert_eq!(
-            hex::encode(parsed.completion_signer_public_key.to_bytes().1),
-            completion_signer_public_key_hex()
-        );
-        assert_eq!(parsed.checkpoint_store_revision, 7);
-        assert_eq!(parsed.checkpoint_store_policy_digest, [0xA7; 32]);
-        assert_eq!(parsed.outbox.max_status_page_size, 256);
-        assert_eq!(parsed.outbox.max_active_entries, 128);
-        assert_eq!(parsed.outbox.checkpoint_max_bytes.0, 160 * 1024 * 1024);
-        assert_eq!(parsed.outbox.checkpoint_operation_timeout_ms, 30_000);
-        assert!(parsed.provider_attestation_journal.is_none());
-    }
-
-    #[test]
-    fn enabled_attestation_journal_projects_exact_policy_and_bindings() {
-        use defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal as journal;
-
-        let mut config = valid_config();
-        enable_attestation_journal(&mut config.provider_attestation_journal);
-        let mut emitter = Emitter::new();
-        let parsed = config
-            .parse(true, Some(&provider_id()), &mut emitter)
-            .expect("enabled provider-ingest policy with capture journal");
-        assert!(emitter.into_result().is_ok());
-        assert_eq!(
-            parsed.provider_attestation_journal,
-            Some(actual::SorafsProviderAttestationJournal {
-                clock_seal: actual::SorafsProviderAttestationRuntimeBinding {
-                    handle: "sealed://sorafs/provider-attestation/clock-primary".to_owned(),
-                    revision: 11,
-                    policy_digest: [0xC1; 32],
-                },
-                approval_signer: actual::SorafsProviderAttestationRuntimeBinding {
-                    handle: "hsm://sorafs/provider-attestation/approval-primary".to_owned(),
-                    revision: 12,
-                    policy_digest: [0xC2; 32],
-                },
-                inventory: actual::SorafsProviderAttestationRuntimeBinding {
-                    handle: "coordinator://sorafs/provider-attestation/inventory-primary"
-                        .to_owned(),
-                    revision: 13,
-                    policy_digest: [0xC3; 32],
-                },
-                max_entries: journal::MAX_ENTRIES,
-                max_attempts: journal::MAX_ATTEMPTS,
-                lease_ttl_ms: journal::LEASE_TTL_MS,
-                approval_timeout_ms: journal::APPROVAL_TIMEOUT_MS,
-                handoff_timeout_ms: journal::HANDOFF_TIMEOUT_MS,
-                retry_delay_ms: journal::RETRY_DELAY_MS,
-                checkpoint_max_bytes: usize::try_from(journal::CHECKPOINT_MAX_BYTES.0)
-                    .expect("default checkpoint bound fits usize"),
-                max_cas_retries: journal::MAX_CAS_RETRIES,
-            })
-        );
-    }
-
-    #[test]
-    fn disabled_attestation_journal_rejects_every_binding_field() {
-        let mutations: [fn(&mut SorafsProviderAttestationJournalConfig); 9] = [
-            |config| config.clock_seal_handle = Some("sealed://clock/primary".to_owned()),
-            |config| config.clock_seal_revision = Some(1),
-            |config| config.clock_seal_policy_digest_hex = Some("c1".repeat(32)),
-            |config| config.approval_signer_handle = Some("hsm://approval/primary".to_owned()),
-            |config| config.approval_signer_revision = Some(1),
-            |config| config.approval_signer_policy_digest_hex = Some("c2".repeat(32)),
-            |config| config.inventory_handle = Some("coordinator://inventory/primary".to_owned()),
-            |config| config.inventory_revision = Some(1),
-            |config| config.inventory_policy_digest_hex = Some("c3".repeat(32)),
-        ];
-
-        for mutate in mutations {
-            let mut config = SorafsProviderIngestRuntimeConfig::default();
-            mutate(&mut config.provider_attestation_journal);
-            let mut emitter = Emitter::new();
-            assert!(config.parse(false, None, &mut emitter).is_none());
-            assert!(emitter.into_result().is_err());
-        }
-    }
-
-    #[test]
-    fn enabled_attestation_journal_requires_all_three_binding_roles() {
-        for present_roles in 0_u8..0b111 {
-            let mut config = valid_config();
-            enable_attestation_journal(&mut config.provider_attestation_journal);
-            if present_roles & 0b001 == 0 {
-                config.provider_attestation_journal.clock_seal_handle = None;
-                config.provider_attestation_journal.clock_seal_revision = None;
-                config
-                    .provider_attestation_journal
-                    .clock_seal_policy_digest_hex = None;
-            }
-            if present_roles & 0b010 == 0 {
-                config.provider_attestation_journal.approval_signer_handle = None;
-                config.provider_attestation_journal.approval_signer_revision = None;
-                config
-                    .provider_attestation_journal
-                    .approval_signer_policy_digest_hex = None;
-            }
-            if present_roles & 0b100 == 0 {
-                config.provider_attestation_journal.inventory_handle = None;
-                config.provider_attestation_journal.inventory_revision = None;
-                config
-                    .provider_attestation_journal
-                    .inventory_policy_digest_hex = None;
-            }
-
-            let mut emitter = Emitter::new();
-            assert!(
-                config
-                    .parse(true, Some(&provider_id()), &mut emitter)
-                    .is_none(),
-                "role mask {present_roles:03b} must fail closed"
-            );
-            assert!(emitter.into_result().is_err());
-        }
-    }
-
-    #[test]
-    fn enabled_attestation_journal_rejects_partial_binding_triplets() {
-        for present_fields in 0b001_u8..0b111 {
-            let mut config = valid_config();
-            enable_attestation_journal(&mut config.provider_attestation_journal);
-            config.provider_attestation_journal.clock_seal_handle =
-                (present_fields & 0b001 != 0).then(|| "sealed://clock/primary".to_owned());
-            config.provider_attestation_journal.clock_seal_revision =
-                (present_fields & 0b010 != 0).then_some(11);
-            config
-                .provider_attestation_journal
-                .clock_seal_policy_digest_hex =
-                (present_fields & 0b100 != 0).then(|| "c1".repeat(32));
-
-            let mut emitter = Emitter::new();
-            assert!(
-                config
-                    .parse(true, Some(&provider_id()), &mut emitter)
-                    .is_none(),
-                "field mask {present_fields:03b} must fail closed"
-            );
-            assert!(emitter.into_result().is_err());
-        }
-    }
-
-    #[test]
-    fn enabled_attestation_journal_rejects_unqualified_bindings() {
-        let mutations: [fn(&mut SorafsProviderAttestationJournalConfig); 12] = [
-            |config| config.clock_seal_handle = Some("sealed://clock/test".to_owned()),
-            |config| config.approval_signer_handle = Some("hsm://approval/dev".to_owned()),
-            |config| config.inventory_handle = Some("coordinator://inventory/mock".to_owned()),
-            |config| config.clock_seal_revision = Some(0),
-            |config| config.approval_signer_revision = Some(0),
-            |config| config.inventory_revision = Some(0),
-            |config| config.clock_seal_policy_digest_hex = Some("00".repeat(32)),
-            |config| config.approval_signer_policy_digest_hex = Some("00".repeat(32)),
-            |config| config.inventory_policy_digest_hex = Some("00".repeat(32)),
-            |config| config.clock_seal_policy_digest_hex = Some("C1".repeat(32)),
-            |config| config.approval_signer_policy_digest_hex = Some("gg".repeat(32)),
-            |config| config.inventory_policy_digest_hex = Some("c3".repeat(31)),
-        ];
-
-        for mutate in mutations {
-            let mut config = valid_config();
-            enable_attestation_journal(&mut config.provider_attestation_journal);
-            mutate(&mut config.provider_attestation_journal);
-            let mut emitter = Emitter::new();
-            assert!(
-                config
-                    .parse(true, Some(&provider_id()), &mut emitter)
-                    .is_none()
-            );
-            assert!(emitter.into_result().is_err());
-        }
-    }
-
-    #[test]
-    fn attestation_journal_requires_enabled_provider_ingest_parent() {
-        let mut config = SorafsProviderIngestRuntimeConfig::default();
-        enable_attestation_journal(&mut config.provider_attestation_journal);
-        let mut emitter = Emitter::new();
-        assert!(config.parse(false, None, &mut emitter).is_none());
-        let error = format!("{:?}", emitter.into_result().expect_err("parent gate"));
-        assert!(
-            error.contains(
-                "provider_attestation_journal.enabled requires provider_ingest_runtime.enabled"
-            ),
-            "unexpected diagnostic: {error}"
-        );
-    }
-
-    #[test]
-    fn attestation_journal_rejects_zero_below_minimum_and_above_limit_bounds() {
-        use defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal as journal;
-
-        let mutations: [fn(&mut SorafsProviderAttestationJournalConfig); 17] = [
-            |config| config.max_entries = 0,
-            |config| config.max_entries = journal::MAX_ENTRIES_LIMIT + 1,
-            |config| config.max_attempts = 0,
-            |config| config.max_attempts = journal::MAX_ATTEMPTS_LIMIT + 1,
-            |config| config.lease_ttl_ms = 0,
-            |config| config.lease_ttl_ms = journal::LEASE_TTL_MAX_MS + 1,
-            |config| config.approval_timeout_ms = 0,
-            |config| config.approval_timeout_ms = journal::EXTERNAL_TIMEOUT_MAX_MS + 1,
-            |config| config.handoff_timeout_ms = 0,
-            |config| config.handoff_timeout_ms = journal::EXTERNAL_TIMEOUT_MAX_MS + 1,
-            |config| config.retry_delay_ms = 0,
-            |config| config.retry_delay_ms = journal::RETRY_DELAY_MAX_MS + 1,
-            |config| config.checkpoint_max_bytes = Bytes(0),
-            |config| {
-                config.checkpoint_max_bytes = Bytes(
-                    u64::try_from(journal::CHECKPOINT_MIN_BYTES)
-                        .expect("checkpoint minimum fits u64")
-                        - 1,
-                );
-            },
-            |config| {
-                config.checkpoint_max_bytes = Bytes(
-                    u64::try_from(journal::CHECKPOINT_MAX_BYTES_LIMIT)
-                        .expect("checkpoint limit fits u64")
-                        + 1,
-                );
-            },
-            |config| config.max_cas_retries = 0,
-            |config| config.max_cas_retries = journal::MAX_CAS_RETRIES_LIMIT + 1,
-        ];
-
-        for mutate in mutations {
-            let mut config = valid_config();
-            enable_attestation_journal(&mut config.provider_attestation_journal);
-            mutate(&mut config.provider_attestation_journal);
-            let mut emitter = Emitter::new();
-            assert!(
-                config
-                    .parse(true, Some(&provider_id()), &mut emitter)
-                    .is_none()
-            );
-            assert!(emitter.into_result().is_err());
-        }
-    }
-
-    #[test]
-    fn attestation_journal_accepts_exact_checkpoint_minimum() {
-        use defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal as journal;
-
-        let mut config = valid_config();
-        enable_attestation_journal(&mut config.provider_attestation_journal);
-        config.provider_attestation_journal.checkpoint_max_bytes = Bytes(
-            u64::try_from(journal::CHECKPOINT_MIN_BYTES).expect("checkpoint minimum fits u64"),
-        );
-        let mut emitter = Emitter::new();
-        let parsed = config
-            .parse(true, Some(&provider_id()), &mut emitter)
-            .expect("exact checkpoint minimum is valid");
-        assert!(emitter.into_result().is_ok());
-        assert_eq!(
-            parsed
-                .provider_attestation_journal
-                .expect("enabled journal")
-                .checkpoint_max_bytes,
-            journal::CHECKPOINT_MIN_BYTES
-        );
-    }
-
-    #[test]
-    fn attestation_journal_stage_timeouts_must_fit_the_claim_lease() {
-        let mutations: [fn(&mut SorafsProviderAttestationJournalConfig); 2] = [
-            |config: &mut SorafsProviderAttestationJournalConfig| {
-                config.approval_timeout_ms = config.lease_ttl_ms;
-            },
-            |config: &mut SorafsProviderAttestationJournalConfig| {
-                config.handoff_timeout_ms = config.lease_ttl_ms;
-            },
-        ];
-        for select_timeout in mutations {
-            let mut config = valid_config();
-            enable_attestation_journal(&mut config.provider_attestation_journal);
-            select_timeout(&mut config.provider_attestation_journal);
-            let mut emitter = Emitter::new();
-            assert!(
-                config
-                    .parse(true, Some(&provider_id()), &mut emitter)
-                    .is_none()
-            );
-            assert!(emitter.into_result().is_err());
-        }
-    }
-
-    #[test]
-    fn defaults_and_actual_projection_respect_provider_broker_limits() {
-        use defaults::sorafs::storage::provider_ingest_runtime::outbox;
-
-        assert_eq!(outbox::CHECKPOINT_MAX_BYTES_LIMIT, 192 * 1024 * 1024);
-        assert_eq!(outbox::MAX_SIGNED_TRANSACTION_BYTES_LIMIT, 64 * 1024 * 1024);
-        assert_eq!(outbox::MAX_SIGNED_TRANSACTION_BYTES_MIN, 64 * 1024);
-        assert!(
-            outbox::MAX_SIGNED_TRANSACTION_BYTES_MIN
-                > outbox::SIGNED_TRANSACTION_ENVELOPE_RESERVE_BYTES_V1
-        );
-        assert!(outbox::CHECKPOINT_MAX_BYTES.0 <= outbox::CHECKPOINT_MAX_BYTES_LIMIT);
-        assert!(outbox::MAX_SIGNED_TRANSACTION_BYTES.0 >= outbox::MAX_SIGNED_TRANSACTION_BYTES_MIN);
-        assert!(
-            outbox::MAX_SIGNED_TRANSACTION_BYTES.0 <= outbox::MAX_SIGNED_TRANSACTION_BYTES_LIMIT
-        );
-
-        let mut emitter = Emitter::new();
-        let parsed = large_valid_outbox_config()
-            .parse(true, Some(&provider_id()), &mut emitter)
-            .expect("large but checkpoint-compatible policy must project");
-        assert!(emitter.into_result().is_ok());
-        assert_eq!(
-            parsed.outbox.checkpoint_max_bytes.0,
-            outbox::CHECKPOINT_MAX_BYTES_LIMIT
-        );
-        assert_eq!(
-            parsed.outbox.max_signed_transaction_bytes.0,
-            outbox::MAX_SIGNED_TRANSACTION_BYTES_LIMIT
-        );
-    }
-
-    #[test]
-    fn broker_incompatible_outbox_limits_fail_closed() {
-        use defaults::sorafs::storage::provider_ingest_runtime::outbox;
-
-        let mut oversized_checkpoint = large_valid_outbox_config();
-        oversized_checkpoint.outbox.checkpoint_max_bytes =
-            Bytes(outbox::CHECKPOINT_MAX_BYTES_LIMIT + 1);
-        let mut emitter = Emitter::new();
-        let _projected = oversized_checkpoint.parse(true, Some(&provider_id()), &mut emitter);
-        assert!(
-            emitter.into_result().is_err(),
-            "checkpoint bytes above the stock broker ceiling must fail"
-        );
-
-        let mut oversized_transaction = large_valid_outbox_config();
-        oversized_transaction.outbox.max_signed_transaction_bytes =
-            Bytes(outbox::MAX_SIGNED_TRANSACTION_BYTES_LIMIT + 1);
-        let mut emitter = Emitter::new();
-        let _projected = oversized_transaction.parse(true, Some(&provider_id()), &mut emitter);
-        assert!(
-            emitter.into_result().is_err(),
-            "signed transaction bytes above the stock broker ceiling must fail"
-        );
-
-        let mut below_envelope_reserve = large_valid_outbox_config();
-        below_envelope_reserve.outbox.max_signed_transaction_bytes =
-            Bytes(outbox::MAX_SIGNED_TRANSACTION_BYTES_MIN - 1);
-        let mut emitter = Emitter::new();
-        let _projected = below_envelope_reserve.parse(true, Some(&provider_id()), &mut emitter);
-        assert!(
-            emitter.into_result().is_err(),
-            "a signed transaction limit without room beyond the envelope reserve must fail"
-        );
-
-        let mut exact_minimum = large_valid_outbox_config();
-        exact_minimum.outbox.max_active_entries = 1;
-        exact_minimum.outbox.max_terminal_entries = 1;
-        exact_minimum.outbox.max_signed_transaction_bytes =
-            Bytes(outbox::MAX_SIGNED_TRANSACTION_BYTES_MIN);
-        let mut emitter = Emitter::new();
-        let projected = exact_minimum
-            .parse(true, Some(&provider_id()), &mut emitter)
-            .expect("exact signed-transaction minimum must project");
-        assert!(emitter.into_result().is_ok());
-        assert_eq!(
-            projected.outbox.max_signed_transaction_bytes.0,
-            outbox::MAX_SIGNED_TRANSACTION_BYTES_MIN
-        );
-
-        let mut legacy_128_mib_ceiling = large_valid_outbox_config();
-        legacy_128_mib_ceiling.outbox.max_signed_transaction_bytes = Bytes(128 * 1024 * 1024);
-        let mut emitter = Emitter::new();
-        let _projected = legacy_128_mib_ceiling.parse(true, Some(&provider_id()), &mut emitter);
-        assert!(
-            emitter.into_result().is_err(),
-            "one retained expected payload plus one signed transaction at the 128 MiB ceiling cannot fit the 192 MiB checkpoint ceiling"
-        );
-    }
-
-    #[test]
-    fn enabled_policy_requires_storage_provider_and_production_handles() {
-        let mut config = valid_config();
-        config.authenticated_source_fetch_handle = Some("mock-source.test".to_owned());
-        config.authenticated_source_fetch_revision = Some(0);
-        config.authenticated_source_fetch_policy_digest_hex = Some("00".repeat(32));
-        config.completion_signer_resolver_handle = None;
-        config.completion_signer_resolver_revision = None;
-        config.completion_signer_resolver_policy_digest_hex = Some("B2".repeat(32));
-        config.checkpoint_store_handle = Some("sealed.sorafs.test".to_owned());
-        config.checkpoint_store_revision = Some(0);
-        config.checkpoint_store_policy_digest_hex = Some("A7".repeat(32));
-
-        let mut emitter = Emitter::new();
-        assert!(config.parse(false, None, &mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn enabled_policy_rejects_credential_or_uri_parameter_handles() {
-        for rejected in [
-            "https://operator:secret@host",
-            "https://host/source?token=secret",
-            "https://host/source#fragment",
-            "https://host/%73ource",
-            "hsm://sorafs/provider-ingest/dummy",
-        ] {
-            let mut config = valid_config();
-            config.authenticated_source_fetch_handle = Some(rejected.to_owned());
-            let mut emitter = Emitter::new();
-            assert!(
-                config
-                    .parse(true, Some(&provider_id()), &mut emitter)
-                    .is_none(),
-                "{rejected:?} must not reach the actual configuration"
-            );
-            assert!(emitter.into_result().is_err());
-        }
-    }
-
-    #[test]
-    fn enabled_policy_rejects_stale_or_noncanonical_completion_signer_binding() {
-        let mut config = valid_config();
-        config.completion_signer_handle = Some("pkcs11.sorafs.test".to_owned());
-        config.completion_signer_adapter_revision = Some(0);
-        config.completion_signer_policy_id_hex = Some("00".repeat(32));
-        config.completion_signer_policy_revision = Some(2);
-        config.completion_signer_policy_predecessor_digest_hex = None;
-        config.completion_signer_policy_digest_hex = Some("A2".repeat(32));
-        config.completion_signer_algorithm = Some(Algorithm::Secp256k1);
-        config.completion_signer_public_key_hex =
-            Some(completion_signer_public_key_hex().to_uppercase());
-
-        let mut emitter = Emitter::new();
-        assert!(
-            config
-                .parse(true, Some(&provider_id()), &mut emitter)
-                .is_none()
-        );
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn enabled_policy_rejects_zero_provider_identity() {
-        let zero_provider_id = ProviderId::new([0; 32]);
-        let mut emitter = Emitter::new();
-        assert!(
-            valid_config()
-                .parse(true, Some(&zero_provider_id), &mut emitter)
-                .is_some()
-        );
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn unsafe_resource_timing_and_capacity_bounds_fail_closed() {
-        use defaults::sorafs::storage::provider_ingest_runtime::outbox;
-
-        let provider_id = provider_id();
-        let mut config = valid_config();
-        config.scan_interval_ms = 0;
-        config.max_page_rows = 1_001;
-        config.max_pages_per_tick = 4_097;
-        config.max_source_jobs_per_tick = 4_097;
-        config.max_source_providers = 1_025;
-        config.source_operation_timeout_ms = 24 * 60 * 60 * 1_000 + 1;
-        config.source_lease_renew_interval_ms = 60_000;
-        config.signer_timeout_ms = 0;
-        config.ingress_timeout_ms = 0;
-        config.completion_transaction_ttl_ms = 0;
-        config.finalized_archive.relative_root = PathBuf::from("../archive");
-        config.finalized_archive.max_record_bytes = Bytes(1024 * 1024 * 1024 + 1);
-        config.finalized_archive.max_archive_entries = 1_000_001;
-        config.finalized_archive.max_total_bytes = Bytes(1024 * 1024 * 1024 * 1024 + 1);
-        config.finalized_archive.max_providers_per_anchor = 1_025;
-        config.finalized_archive.max_orders_per_provider = 65_537;
-        config.finalized_archive.max_total_orders_per_anchor = 65_537;
-        config.finalized_archive.max_page_rows = 1_001;
-        config.finalized_archive.max_kura_tip_lag_blocks = 10_001;
-        config.outbox.max_active_entries = 0;
-        config.outbox.max_terminal_entries = 65_537;
-        config.outbox.max_attempts = 65;
-        config.outbox.checkpoint_max_bytes = Bytes(outbox::CHECKPOINT_MAX_BYTES_LIMIT + 1);
-        config.outbox.checkpoint_operation_timeout_ms = 24 * 60 * 60 * 1_000 + 1;
-        config.outbox.source_lease_ttl_ms = 60_000;
-        config.outbox.retry_base_delay_ms = 2_000;
-        config.outbox.retry_max_delay_ms = 1_000;
-        config.outbox.terminal_retention_blocks = 10_000_001;
-        config.outbox.max_signed_transaction_bytes =
-            Bytes(outbox::MAX_SIGNED_TRANSACTION_BYTES_LIMIT + 1);
-        config.outbox.max_status_page_size = 1_001;
-
-        let mut emitter = Emitter::new();
-        assert!(
-            config
-                .parse(true, Some(&provider_id), &mut emitter)
-                .is_none()
-        );
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn checkpoint_operation_deadline_must_be_nonzero_and_bounded() {
-        for invalid_timeout_ms in [0, 24 * 60 * 60 * 1_000 + 1] {
-            let mut config = valid_config();
-            config.outbox.checkpoint_operation_timeout_ms = invalid_timeout_ms;
-            let mut emitter = Emitter::new();
-            let _actual = config.parse(true, Some(&provider_id()), &mut emitter);
-            assert!(
-                emitter.into_result().is_err(),
-                "{invalid_timeout_ms}ms must not reach a runnable configuration"
-            );
-        }
-    }
-
-    #[test]
-    fn checked_aggregate_capacities_fail_closed() {
-        let provider_id = provider_id();
-        let mut config = valid_config();
-        config.max_page_rows = 1_000;
-        config.max_pages_per_tick = 4_096;
-        config.finalized_archive.max_page_rows = 1_000;
-        config.finalized_archive.max_record_bytes = Bytes(1);
-        config.max_source_jobs_per_tick = 16;
-        config.outbox.max_active_entries = 1;
-        config.outbox.max_terminal_entries = 1;
-        config.outbox.checkpoint_max_bytes = Bytes(1);
-        config.outbox.max_signed_transaction_bytes = Bytes(1);
-
-        let mut emitter = Emitter::new();
-        assert!(
-            config
-                .parse(true, Some(&provider_id), &mut emitter)
-                .is_none()
-        );
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn archive_policy_allows_zero_lag_but_rejects_absolute_or_dot_roots() {
-        let provider_id = provider_id();
-        let mut zero_lag = valid_config();
-        zero_lag.finalized_archive.max_kura_tip_lag_blocks = 0;
-        let mut emitter = Emitter::new();
-        let parsed = zero_lag
-            .parse(true, Some(&provider_id), &mut emitter)
-            .expect("zero-lag archive policy");
-        assert_eq!(parsed.finalized_archive.max_kura_tip_lag_blocks, 0);
-        assert!(emitter.into_result().is_ok());
-
-        for relative_root in [
-            PathBuf::from("."),
-            PathBuf::from("archive/../substituted"),
-            std::env::current_dir()
-                .expect("current directory")
-                .join("absolute-archive"),
-        ] {
-            let mut config = valid_config();
-            config.finalized_archive.relative_root = relative_root;
-            let mut emitter = Emitter::new();
-            assert!(
-                config
-                    .parse(true, Some(&provider_id), &mut emitter)
-                    .is_none()
-            );
-            assert!(emitter.into_result().is_err());
-        }
-    }
-
-    #[test]
-    fn worst_case_outbox_transactions_must_fit_checkpoint() {
-        let provider_id = provider_id();
-        let mut config = valid_config();
-        config.outbox.max_active_entries = 4_096;
-
-        let mut emitter = Emitter::new();
-        assert!(
-            config
-                .parse(true, Some(&provider_id), &mut emitter)
-                .is_some()
-        );
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn disabled_policy_rejects_stale_runtime_bindings() {
-        let mut config = SorafsProviderIngestRuntimeConfig::default();
-        config.authenticated_source_fetch_handle =
-            Some("network.sorafs.authenticated-source.primary".to_owned());
-        config.completion_signer_resolver_policy_digest_hex = Some("b2".repeat(32));
-        config.checkpoint_store_revision = Some(1);
-        let mut emitter = Emitter::new();
-        assert!(config.parse(false, None, &mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn disabled_policy_rejects_each_top_level_provider_qualification_field() {
-        let mutations: [fn(&mut SorafsProviderIngestRuntimeConfig); 4] = [
-            |config| config.authenticated_source_fetch_revision = Some(5),
-            |config| {
-                config.authenticated_source_fetch_policy_digest_hex = Some("b1".repeat(32));
-            },
-            |config| config.completion_signer_resolver_revision = Some(6),
-            |config| {
-                config.completion_signer_resolver_policy_digest_hex = Some("b2".repeat(32));
-            },
-        ];
-        for mutate in mutations {
-            let mut config = SorafsProviderIngestRuntimeConfig::default();
-            mutate(&mut config);
-            let mut emitter = Emitter::new();
-            assert!(config.parse(false, None, &mut emitter).is_none());
-            assert!(emitter.into_result().is_err());
-        }
-    }
-}
+#[path = "user/sorafs_provider_ingest_runtime_config_tests.rs"]
+mod sorafs_provider_ingest_runtime_config_tests;
 
 #[cfg(test)]
 mod sorafs_evidence_viewer_config_tests {
@@ -25399,6 +25312,45 @@ mod sorafs_evidence_viewer_config_tests {
             hex::encode(parsed.transparency_publisher_public_key),
             transparency_publisher_public_key_hex()
         );
+    }
+
+    #[test]
+    fn enabled_policy_rejects_noncanonical_webauthn_rp_ids_and_origins() {
+        for rp_id in ["Review.example", "localhost", "127.0.0.1"] {
+            let mut config = valid_config();
+            config.webauthn_rp_id = Some(rp_id.to_owned());
+            let mut emitter = Emitter::new();
+            assert!(
+                config.parse(true, &mut emitter).is_none(),
+                "{rp_id:?} must fail closed"
+            );
+            assert!(emitter.into_result().is_err());
+        }
+
+        for origin in [
+            "http://review.example",
+            "https://operator:secret@review.example",
+            "https://review.example/path",
+            "https://review.example?challenge=1",
+            "https://review.example#fragment",
+            "https://review.example:443",
+            "https://foreign.example",
+        ] {
+            let mut config = valid_config();
+            config.webauthn_allowed_origins = vec![origin.to_owned()];
+            let mut emitter = Emitter::new();
+            let _ = config.parse(true, &mut emitter);
+            assert!(
+                emitter.into_result().is_err(),
+                "{origin:?} must fail closed"
+            );
+        }
+
+        let mut canonical = valid_config();
+        canonical.webauthn_allowed_origins = vec!["https://login.review.example:8443".to_owned()];
+        let mut emitter = Emitter::new();
+        assert!(canonical.parse(true, &mut emitter).is_some());
+        assert!(emitter.into_result().is_ok());
     }
 
     #[test]
@@ -25624,499 +25576,11 @@ mod sorafs_hedging_billing_runtime_config_tests {
 }
 
 #[cfg(test)]
-mod sorafs_reputation_runtime_config_tests {
-    use super::*;
-
-    fn publisher_public_key_hex() -> String {
-        let key = KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519).expect("test keypair");
-        hex::encode(key.public_key().to_bytes().1)
-    }
-
-    fn absolute_state_dir() -> PathBuf {
-        #[cfg(target_os = "windows")]
-        {
-            PathBuf::from(r"C:\iroha\sorafs\reputation")
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            PathBuf::from("/var/lib/iroha/sorafs/reputation")
-        }
-    }
-
-    fn absolute_trust_policy_path() -> PathBuf {
-        #[cfg(target_os = "windows")]
-        {
-            PathBuf::from(r"C:\iroha\reputation-trust-policy.to")
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            PathBuf::from("/etc/iroha/reputation-trust-policy.to")
-        }
-    }
-
-    fn valid_config() -> SorafsReputationRuntimeConfig {
-        SorafsReputationRuntimeConfig {
-            enabled: true,
-            state_dir: absolute_state_dir(),
-            window_start_height: Some(10),
-            window_end_height: Some(20),
-            finalized_query_handle: Some("ledger.finalized.primary".to_owned()),
-            journal_checkpoint_provider_handle: Some(
-                "sealed.reputation.journal.primary".to_owned(),
-            ),
-            journal_checkpoint_provider_revision: Some(1),
-            journal_checkpoint_provider_policy_digest_hex: Some("60".repeat(32)),
-            journal_transaction_submitter_handle: Some("queue.reputation.journal".to_owned()),
-            journal_transaction_submitter_revision: Some(11),
-            journal_transaction_submitter_policy_digest_hex: Some("61".repeat(32)),
-            threshold_signer_handle: Some("hsm.reputation.threshold".to_owned()),
-            threshold_signer_revision: Some(12),
-            threshold_signer_policy_digest_hex: Some("62".repeat(32)),
-            governance_dag_handle: Some("governance.dag.publisher".to_owned()),
-            governance_dag_revision: Some(13),
-            governance_dag_policy_digest_hex: Some("63".repeat(32)),
-            governance_publisher_peer_id: Some("12D3KooWProductionPublisher".to_owned()),
-            governance_publisher_public_key_hex: Some(publisher_public_key_hex()),
-            ..SorafsReputationRuntimeConfig::default()
-        }
-    }
-
-    #[test]
-    fn disabled_default_is_inert() {
-        let mut emitter = Emitter::new();
-        assert!(
-            SorafsReputationRuntimeConfig::default()
-                .parse(false, None, &mut emitter)
-                .is_none()
-        );
-        assert!(emitter.into_result().is_ok());
-    }
-
-    #[test]
-    fn enabled_policy_parses_without_credentials() {
-        let mut emitter = Emitter::new();
-        let trust_policy_path = absolute_trust_policy_path();
-        let parsed = valid_config()
-            .parse(true, Some(trust_policy_path.as_path()), &mut emitter)
-            .expect("enabled runtime policy");
-        assert!(emitter.into_result().is_ok());
-        assert_eq!(parsed.window_start_height, 10);
-        assert_eq!(parsed.window_end_height, 20);
-        assert_eq!(parsed.page_items, 64);
-        assert_eq!(parsed.max_pages_per_batch, 4_096);
-        assert_eq!(parsed.poll_interval, Duration::from_secs(1));
-        assert_eq!(
-            parsed.finalized_archive_root,
-            absolute_state_dir().join(
-                defaults::sorafs::storage::reputation_runtime::FINALIZED_ARCHIVE_DIRECTORY_NAME
-            )
-        );
-        assert_eq!(
-            parsed.finalized_archive_max_record_bytes,
-            defaults::sorafs::storage::reputation_runtime::FINALIZED_ARCHIVE_MAX_RECORD_BYTES
-        );
-        assert_eq!(
-            parsed.finalized_archive_max_entries,
-            defaults::sorafs::storage::reputation_runtime::FINALIZED_ARCHIVE_MAX_ENTRIES
-        );
-        assert_eq!(
-            parsed.finalized_archive_max_total_bytes,
-            defaults::sorafs::storage::reputation_runtime::FINALIZED_ARCHIVE_MAX_TOTAL_BYTES
-        );
-        assert_eq!(
-            parsed.finalized_archive_max_kura_tip_lag_blocks,
-            defaults::sorafs::storage::reputation_runtime::FINALIZED_ARCHIVE_MAX_KURA_TIP_LAG_BLOCKS
-        );
-        assert!(parsed.finalized_archive_retention_authority.is_none());
-        assert_eq!(
-            parsed.journal_transaction_submitter_handle,
-            "queue.reputation.journal"
-        );
-        assert_eq!(
-            parsed.journal_checkpoint_provider_handle,
-            "sealed.reputation.journal.primary"
-        );
-        assert_eq!(parsed.journal_checkpoint_provider_revision, 1);
-        assert_eq!(parsed.journal_checkpoint_provider_policy_digest, [0x60; 32]);
-        assert_eq!(parsed.journal_transaction_submitter_revision, 11);
-        assert_eq!(
-            parsed.journal_transaction_submitter_policy_digest,
-            [0x61; 32]
-        );
-        assert_eq!(parsed.threshold_signer_revision, 12);
-        assert_eq!(parsed.threshold_signer_policy_digest, [0x62; 32]);
-        assert_eq!(parsed.governance_dag_revision, 13);
-        assert_eq!(parsed.governance_dag_policy_digest, [0x63; 32]);
-        assert_eq!(
-            parsed
-                .por_success_bps
-                .saturating_add(parsed.pdp_success_bps)
-                .saturating_add(parsed.potr_success_bps)
-                .saturating_add(parsed.latency_bps)
-                .saturating_add(parsed.dispute_bps)
-                .saturating_add(parsed.token_violation_bps)
-                .saturating_add(parsed.repair_breach_bps),
-            10_000
-        );
-    }
-
-    #[test]
-    fn enabled_policy_rejects_missing_or_nonproduction_dependencies() {
-        let mut config = valid_config();
-        config.finalized_query_handle = Some("null-query.test".to_owned());
-        config.journal_checkpoint_provider_handle = Some("mock-seal.test".to_owned());
-        config.journal_transaction_submitter_handle = Some("mock-submit.test".to_owned());
-        config.threshold_signer_handle = None;
-        config.state_dir = PathBuf::from("relative/reputation");
-        config.window_end_height = Some(9);
-        config.page_items = 65;
-        config.max_pages_per_batch = 516;
-        config.poll_interval_ms = 0;
-        config.repair_breach_bps = 999;
-
-        let mut emitter = Emitter::new();
-        assert!(config.parse(false, None, &mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn enabled_policy_rejects_omitted_zero_and_noncanonical_qualification_bindings() {
-        let trust_policy_path = absolute_trust_policy_path();
-        let mut omitted_revision = valid_config();
-        omitted_revision.journal_transaction_submitter_revision = None;
-        let mut omitted_checkpoint_revision = valid_config();
-        omitted_checkpoint_revision.journal_checkpoint_provider_revision = None;
-        let mut omitted_digest = valid_config();
-        omitted_digest.threshold_signer_policy_digest_hex = None;
-        let mut zero_revision = valid_config();
-        zero_revision.governance_dag_revision = Some(0);
-        let mut zero_digest = valid_config();
-        zero_digest.journal_transaction_submitter_policy_digest_hex = Some("00".repeat(32));
-        let mut uppercase_digest = valid_config();
-        uppercase_digest.threshold_signer_policy_digest_hex = Some("A2".repeat(32));
-        let mut short_digest = valid_config();
-        short_digest.governance_dag_policy_digest_hex = Some("63".repeat(31));
-
-        for config in [
-            omitted_revision,
-            omitted_checkpoint_revision,
-            omitted_digest,
-            zero_revision,
-            zero_digest,
-            uppercase_digest,
-            short_digest,
-        ] {
-            let mut emitter = Emitter::new();
-            assert!(
-                config
-                    .parse(true, Some(trust_policy_path.as_path()), &mut emitter)
-                    .is_none()
-            );
-            assert!(emitter.into_result().is_err());
-        }
-    }
-
-    #[test]
-    fn enabled_policy_rejects_invalid_finalized_archive_bounds_without_clamping() {
-        let mut zero_record = valid_config();
-        zero_record.finalized_archive_max_record_bytes = 0;
-        let mut zero_entries = valid_config();
-        zero_entries.finalized_archive_max_entries = 0;
-        let mut undersized_total = valid_config();
-        undersized_total.finalized_archive_max_record_bytes = 2;
-        undersized_total.finalized_archive_max_total_bytes = 1;
-        let mut allocation_overflow = valid_config();
-        allocation_overflow.finalized_archive_max_record_bytes = u64::MAX;
-        allocation_overflow.finalized_archive_max_total_bytes = u64::MAX;
-        let mut excessive_lag = valid_config();
-        excessive_lag.finalized_archive_max_kura_tip_lag_blocks =
-            defaults::sorafs::storage::reputation_runtime::FINALIZED_ARCHIVE_MAX_KURA_TIP_LAG_BLOCKS_LIMIT
-                + 1;
-        let trust_policy_path = absolute_trust_policy_path();
-
-        for config in [
-            zero_record,
-            zero_entries,
-            undersized_total,
-            allocation_overflow,
-            excessive_lag,
-        ] {
-            let mut emitter = Emitter::new();
-            assert!(
-                config
-                    .parse(true, Some(trust_policy_path.as_path()), &mut emitter)
-                    .is_none()
-            );
-            assert!(emitter.into_result().is_err());
-        }
-    }
-
-    #[test]
-    fn enabled_retention_requires_and_projects_exact_public_authority_binding() {
-        let mut config = valid_config();
-        config.finalized_archive_retention_enabled = true;
-        config.finalized_archive_retention_authority_handle =
-            Some("sealed.reputation.archive.primary".to_owned());
-        config.finalized_archive_retention_authority_revision = Some(7);
-        config.finalized_archive_retention_authority_policy_digest_hex = Some("51".repeat(32));
-        let trust_policy_path = absolute_trust_policy_path();
-        let mut emitter = Emitter::new();
-
-        let parsed = config
-            .parse(true, Some(trust_policy_path.as_path()), &mut emitter)
-            .expect("enabled retention authority");
-        assert!(emitter.into_result().is_ok());
-        let authority = parsed
-            .finalized_archive_retention_authority
-            .expect("project exact retention authority");
-        assert_eq!(authority.handle, "sealed.reputation.archive.primary");
-        assert_eq!(authority.revision, 7);
-        assert_eq!(authority.policy_digest, [0x51; 32]);
-    }
-
-    #[test]
-    fn retention_rejects_missing_test_marked_stale_or_noncanonical_bindings() {
-        let trust_policy_path = absolute_trust_policy_path();
-        let mut missing = valid_config();
-        missing.finalized_archive_retention_enabled = true;
-
-        let mut test_marked = valid_config();
-        test_marked.finalized_archive_retention_enabled = true;
-        test_marked.finalized_archive_retention_authority_handle =
-            Some("sealed.reputation.archive.test".to_owned());
-        test_marked.finalized_archive_retention_authority_revision = Some(1);
-        test_marked.finalized_archive_retention_authority_policy_digest_hex = Some("51".repeat(32));
-
-        let mut stale = valid_config();
-        stale.finalized_archive_retention_enabled = true;
-        stale.finalized_archive_retention_authority_handle =
-            Some("sealed.reputation.archive.primary".to_owned());
-        stale.finalized_archive_retention_authority_revision = Some(0);
-        stale.finalized_archive_retention_authority_policy_digest_hex = Some("00".repeat(32));
-
-        let mut dormant = valid_config();
-        dormant.finalized_archive_retention_authority_handle =
-            Some("sealed.reputation.archive.primary".to_owned());
-
-        for config in [missing, test_marked, stale, dormant] {
-            let mut emitter = Emitter::new();
-            let parsed = config.parse(true, Some(trust_policy_path.as_path()), &mut emitter);
-            let emitted_error = emitter.into_result().is_err();
-            assert!(parsed.is_none() || emitted_error);
-        }
-    }
-
-    #[test]
-    fn disabled_policy_rejects_stale_authority_claims() {
-        let mut config = SorafsReputationRuntimeConfig::default();
-        config.finalized_query_handle = Some("ledger.finalized.primary".to_owned());
-        let mut emitter = Emitter::new();
-        assert!(config.parse(false, None, &mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn disabled_policy_rejects_nondefault_finalized_archive_claims() {
-        let mut config = SorafsReputationRuntimeConfig::default();
-        config.finalized_archive_max_entries -= 1;
-        let mut emitter = Emitter::new();
-
-        assert!(config.parse(false, None, &mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-}
-
+#[path = "user/sorafs_pop_credential_service_tests.rs"]
+mod sorafs_pop_credential_service_tests;
 #[cfg(test)]
-mod sorafs_pop_credential_service_tests {
-    use super::*;
-
-    fn ed25519_public_hex(seed: u8) -> String {
-        let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key");
-        hex::encode(key.public_key().to_bytes().1)
-    }
-
-    fn valid_config() -> SorafsPopCredentialService {
-        SorafsPopCredentialService {
-            enabled: true,
-            issuer_state_dir: PathBuf::from("/var/lib/iroha/sorafs/pop/issuer"),
-            wallet_state_dir: PathBuf::from("/var/lib/iroha/sorafs/pop/wallet"),
-            issuer_policy_digest_hex: Some("41".repeat(32)),
-            issuer_id: Some("pop-issuer-sora-foundation".to_owned()),
-            issuer_hsm_key_id: Some("pkcs11://pop/issuer-v1".to_owned()),
-            issuer_public_key_hex: Some(ed25519_public_hex(0x11)),
-            enrollment_recipient_key_id: Some("kms://pop/enrollment/primary".to_owned()),
-            enrollment_recipient_public_key_digest_hex: Some("61".repeat(32)),
-            wallet_wrapping_key_id: Some("kms://pop/wallet/primary".to_owned()),
-            runtime_provider_registry_handle: Some("runtime://pop/providers/primary".to_owned()),
-            runtime_provider_registry_revision: Some(7),
-            runtime_provider_registry_policy_digest_hex: Some("51".repeat(32)),
-            approval_quorum: 2,
-            approval_signers: vec![
-                SorafsPopApprovalSigner {
-                    signer_id: "approver-a".to_owned(),
-                    public_key_hex: ed25519_public_hex(0x21),
-                    revoked_at_epoch: None,
-                },
-                SorafsPopApprovalSigner {
-                    signer_id: "approver-b".to_owned(),
-                    public_key_hex: ed25519_public_hex(0x22),
-                    revoked_at_epoch: None,
-                },
-            ],
-            ..SorafsPopCredentialService::default()
-        }
-    }
-
-    fn assert_rejected(config: SorafsPopCredentialService) {
-        let mut emitter = Emitter::new();
-        assert!(config.parse(true, &mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn governed_pop_policy_parses_without_runtime_secrets() {
-        let mut emitter = Emitter::new();
-        let parsed = valid_config()
-            .parse(true, &mut emitter)
-            .expect("enabled policy");
-        assert!(emitter.into_result().is_ok());
-        assert_eq!(parsed.issuer_policy_digest, [0x41; 32]);
-        assert_eq!(parsed.approval_quorum, 2);
-        assert_eq!(parsed.approval_signers.len(), 2);
-        assert_eq!(parsed.worker_interval, Duration::from_secs(1));
-        assert_eq!(parsed.max_finalized_time_skew, Duration::from_secs(30));
-        assert_eq!(parsed.enrollment_recipient_public_key_digest, [0x61; 32]);
-        assert_eq!(parsed.wallet_wrapping_key_id, "kms://pop/wallet/primary");
-        assert_eq!(
-            parsed.runtime_provider_registry_handle,
-            "runtime://pop/providers/primary"
-        );
-        assert_eq!(parsed.runtime_provider_registry_revision, 7);
-        assert_eq!(parsed.runtime_provider_registry_policy_digest, [0x51; 32]);
-    }
-
-    #[test]
-    fn disabled_pop_policy_rejects_stale_authority_claims() {
-        let mut config = SorafsPopCredentialService::default();
-        config.issuer_id = Some("stale-authority".to_owned());
-        let mut emitter = Emitter::new();
-        assert!(config.parse(false, &mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn unsafe_pop_policy_fails_closed() {
-        let mut config = valid_config();
-        config.issuer_state_dir = PathBuf::from("relative/issuer");
-        config.issuer_policy_digest_hex = Some("AA".repeat(32));
-        config.approval_signers[1].signer_id = "approver-a".to_owned();
-        config.approval_signers[1].public_key_hex =
-            config.approval_signers[0].public_key_hex.clone();
-        config.approval_signers[1].revoked_at_epoch = Some(0);
-        config.max_seen_nullifiers = 0;
-        config.worker_interval_ms = 0;
-        config.max_finalized_time_skew_secs = 301;
-
-        let mut emitter = Emitter::new();
-        assert!(config.parse(true, &mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn enabled_pop_policy_requires_storage_and_dual_control() {
-        let mut config = valid_config();
-        config.approval_quorum = 1;
-        config.approval_signers.truncate(1);
-        let mut emitter = Emitter::new();
-        let _ = config.parse(false, &mut emitter);
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn enabled_pop_policy_rejects_missing_or_stale_provider_qualification() {
-        let missing_handle = {
-            let mut config = valid_config();
-            config.runtime_provider_registry_handle = None;
-            config
-        };
-        let missing_revision = {
-            let mut config = valid_config();
-            config.runtime_provider_registry_revision = None;
-            config
-        };
-        let zero_revision = {
-            let mut config = valid_config();
-            config.runtime_provider_registry_revision = Some(0);
-            config
-        };
-        let missing_digest = {
-            let mut config = valid_config();
-            config.runtime_provider_registry_policy_digest_hex = None;
-            config
-        };
-        let missing_enrollment_recipient_digest = {
-            let mut config = valid_config();
-            config.enrollment_recipient_public_key_digest_hex = None;
-            config
-        };
-        let zero_enrollment_recipient_digest = {
-            let mut config = valid_config();
-            config.enrollment_recipient_public_key_digest_hex = Some("00".repeat(32));
-            config
-        };
-        let zero_digest = {
-            let mut config = valid_config();
-            config.runtime_provider_registry_policy_digest_hex = Some("00".repeat(32));
-            config
-        };
-
-        for config in [
-            missing_handle,
-            missing_revision,
-            zero_revision,
-            missing_digest,
-            missing_enrollment_recipient_digest,
-            zero_enrollment_recipient_digest,
-            zero_digest,
-        ] {
-            assert_rejected(config);
-        }
-    }
-
-    #[test]
-    fn enabled_pop_policy_rejects_test_marked_provider_handles() {
-        let test_hsm = {
-            let mut config = valid_config();
-            config.issuer_hsm_key_id = Some("pkcs11:pop:test".to_owned());
-            config
-        };
-        let test_enrollment_recipient = {
-            let mut config = valid_config();
-            config.enrollment_recipient_key_id = Some("kms://pop/mock/enrollment".to_owned());
-            config
-        };
-        let test_wallet_wrapper = {
-            let mut config = valid_config();
-            config.wallet_wrapping_key_id = Some("kms://pop/fake/wallet".to_owned());
-            config
-        };
-        let test_registry = {
-            let mut config = valid_config();
-            config.runtime_provider_registry_handle =
-                Some("runtime://pop/providers/placeholder".to_owned());
-            config
-        };
-
-        for config in [
-            test_hsm,
-            test_enrollment_recipient,
-            test_wallet_wrapper,
-            test_registry,
-        ] {
-            assert_rejected(config);
-        }
-    }
-}
+#[path = "user/sorafs_reputation_runtime_config_tests.rs"]
+mod sorafs_reputation_runtime_config_tests;
 
 /// User-facing public identity and qualification for one native transaction signer.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
@@ -26691,6 +26155,9 @@ pub struct SorafsStorage {
     /// Finalized-ledger reputation projector and external publication policy.
     #[config(nested)]
     pub reputation_runtime: SorafsReputationRuntimeConfig,
+    /// Restart-safe finalized reserve-event transparency scanner policy.
+    #[config(nested)]
+    pub reserve_transparency_runtime: SorafsReserveTransparencyRuntimeConfig,
     /// Authenticated immutable archive for compacted finalized PoR replay state.
     #[config(nested)]
     pub por_replay_archive: SorafsPorReplayArchiveConfig,
@@ -26779,6 +26246,7 @@ impl Default for SorafsStorage {
             moderation_orchestrator: SorafsModerationOrchestrator::default(),
             evidence_viewer: SorafsEvidenceViewerConfig::default(),
             reputation_runtime: SorafsReputationRuntimeConfig::default(),
+            reserve_transparency_runtime: SorafsReserveTransparencyRuntimeConfig::default(),
             por_replay_archive: SorafsPorReplayArchiveConfig::default(),
             hedging_billing_runtime: SorafsHedgingBillingRuntimeConfig::default(),
             provider_ingest_runtime: SorafsProviderIngestRuntimeConfig::default(),
@@ -27065,53 +26533,6 @@ fn is_canonical_strong_ed25519_public_key_hex(value: &str) -> bool {
 
 fn is_canonical_governance_dag_publisher_peer_id(value: &str) -> bool {
     !value.is_empty() && value.len() <= 128 && value.bytes().all(|byte| byte.is_ascii_graphic())
-}
-
-fn is_canonical_webauthn_rp_id(value: &str) -> bool {
-    value.len() <= 253
-        && value.contains('.')
-        && value == value.to_ascii_lowercase()
-        && value.split('.').all(|label| {
-            !label.is_empty()
-                && label.len() <= 63
-                && label
-                    .bytes()
-                    .next()
-                    .is_some_and(|byte| byte.is_ascii_alphanumeric())
-                && label
-                    .bytes()
-                    .last()
-                    .is_some_and(|byte| byte.is_ascii_alphanumeric())
-                && label
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        })
-}
-
-fn is_canonical_webauthn_origin(value: &str, rp_id: &str) -> bool {
-    if value.len() > 512
-        || value != value.trim()
-        || !value.is_ascii()
-        || value
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-    {
-        return false;
-    }
-    let Ok(parsed) = Url::parse(value) else {
-        return false;
-    };
-    let Some(host) = parsed.host_str() else {
-        return false;
-    };
-    parsed.scheme() == "https"
-        && parsed.username().is_empty()
-        && parsed.password().is_none()
-        && parsed.path() == "/"
-        && parsed.query().is_none()
-        && parsed.fragment().is_none()
-        && parsed.origin().ascii_serialization() == value
-        && (host == rp_id || host.ends_with(&format!(".{rp_id}")))
 }
 
 impl SorafsStorage {
@@ -27414,6 +26835,11 @@ impl SorafsStorage {
             self.reputation_trust_policy_path.as_deref(),
             emitter,
         );
+        let reserve_transparency_runtime = self.reserve_transparency_runtime.parse(
+            self.enabled,
+            reputation_runtime.as_ref(),
+            emitter,
+        );
         let por_replay_archive =
             self.por_replay_archive
                 .parse(self.enabled, reputation_runtime_enabled, emitter);
@@ -27455,6 +26881,7 @@ impl SorafsStorage {
             moderation_orchestrator,
             evidence_viewer,
             reputation_runtime,
+            reserve_transparency_runtime,
             por_replay_archive,
             hedging_billing_runtime,
             provider_ingest_runtime,
@@ -27492,8 +26919,15 @@ pub struct SorafsGovernanceDagService {
     pub state_dir: Option<PathBuf>,
     /// IPFS-compatible HTTP API base URL.
     pub ipfs_api_url: Option<String>,
-    /// Signed-head HTTP endpoint providing strong-ETag compare-and-swap.
+    /// Public-head mode (`signed_http` or `ipns`).
+    #[config(default = "defaults::sorafs::storage::governance_dag_service::HEAD_MODE.to_owned()")]
+    pub head_mode: String,
+    /// Signed-head HTTP endpoint used by `signed_http` mode.
     pub signed_head_url: Option<String>,
+    /// IPNS name resolved by `ipns` mode.
+    pub ipns_name: Option<String>,
+    /// IPFS keystore alias passed to `name/publish` by `ipns` mode.
+    pub ipns_key_name: Option<String>,
     /// Opaque runtime authenticator handle for the IPFS/Kubo API.
     pub ipfs_authenticator_handle: Option<String>,
     /// Exact non-zero IPFS authenticator provider revision.
@@ -27580,7 +27014,10 @@ impl Default for SorafsGovernanceDagService {
             enabled: service::ENABLED,
             state_dir: service::state_dir(),
             ipfs_api_url: None,
+            head_mode: service::HEAD_MODE.to_owned(),
             signed_head_url: None,
+            ipns_name: None,
+            ipns_key_name: None,
             ipfs_authenticator_handle: None,
             ipfs_authenticator_revision: None,
             ipfs_authenticator_policy_digest_hex: None,
@@ -27812,7 +27249,7 @@ impl SorafsGovernanceDagService {
             emit(
                 emitter,
                 format!(
-                    "sorafs.storage.governance_dag_service.max_request_bytes must be at least the canonical Governance DAG block ceiling of {minimum_request_bytes} bytes"
+                    "sorafs.storage.governance_dag_service.max_request_bytes must be at least {minimum_request_bytes} bytes to cover the canonical Governance DAG block, archive wrapper, and multipart envelope"
                 ),
             );
         }
@@ -27881,6 +27318,13 @@ impl SorafsGovernanceDagService {
                     .to_owned(),
             );
         }
+        if !matches!(self.head_mode.as_str(), "signed_http" | "ipns") {
+            emit(
+                emitter,
+                "sorafs.storage.governance_dag_service.head_mode must be `signed_http` or `ipns`"
+                    .to_owned(),
+            );
+        }
         for (field, value) in [
             (
                 "ipfs_authenticator_handle",
@@ -27937,14 +27381,49 @@ impl SorafsGovernanceDagService {
                     );
                 }
             }
-            if self.signed_head_url.is_none()
-                || !head_provider_fields.iter().all(|present| *present)
-            {
-                emit(
-                    emitter,
-                    "sorafs.storage.governance_dag_service.signed_head_url and the complete head authenticator binding are required when enabled"
-                        .to_owned(),
-                );
+            match self.head_mode.as_str() {
+                "signed_http" => {
+                    if self.signed_head_url.is_none()
+                        || !head_provider_fields.iter().all(|present| *present)
+                    {
+                        emit(
+                            emitter,
+                            "sorafs.storage.governance_dag_service.signed_head_url and the complete head authenticator binding are required in signed_http mode"
+                                .to_owned(),
+                        );
+                    }
+                    if self.ipns_name.is_some() || self.ipns_key_name.is_some() {
+                        emit(
+                            emitter,
+                            "sorafs.storage.governance_dag_service.ipns_name and ipns_key_name must be absent in signed_http mode"
+                                .to_owned(),
+                        );
+                    }
+                }
+                "ipns" => {
+                    if self.ipns_name.is_none() || self.ipns_key_name.is_none() {
+                        emit(
+                            emitter,
+                            "sorafs.storage.governance_dag_service.ipns_name and ipns_key_name are required in ipns mode"
+                                .to_owned(),
+                        );
+                    }
+                    if head_provider_fields.iter().any(|present| *present) {
+                        emit(
+                            emitter,
+                            "sorafs.storage.governance_dag_service head authenticator binding must be absent in ipns mode"
+                                .to_owned(),
+                        );
+                    }
+                    if self.signed_head_url.is_some() {
+                        emit(
+                            emitter,
+                            "sorafs.storage.governance_dag_service.signed_head_url must be absent in ipns mode"
+                                .to_owned(),
+                        );
+                    }
+                }
+                _ => {}
             }
         }
         if checkpoint_provider_required {
@@ -27983,7 +27462,10 @@ impl SorafsGovernanceDagService {
             enabled: self.enabled,
             state_dir: self.state_dir,
             ipfs_api_url: self.ipfs_api_url,
+            head_mode: self.head_mode,
             signed_head_url: self.signed_head_url,
+            ipns_name: self.ipns_name,
+            ipns_key_name: self.ipns_key_name,
             ipfs_authenticator_handle: self.ipfs_authenticator_handle,
             ipfs_authenticator_revision: self.ipfs_authenticator_revision,
             ipfs_authenticator_policy_digest,
@@ -28053,8 +27535,8 @@ pub struct SorafsGovernanceDagServiceRootStorage {
     /// Canonical lowercase strong Ed25519 public key bound to the producer signer.
     pub governance_dag_publisher_public_key_hex: Option<String>,
     /// Public publisher/mirror service configuration.
-    #[config(nested)]
-    pub governance_dag_service: SorafsGovernanceDagService,
+    #[config(nested, key = "governance_dag_service")]
+    pub service: SorafsGovernanceDagService,
 }
 
 impl Default for SorafsGovernanceDagServiceRootStorage {
@@ -28066,7 +27548,7 @@ impl Default for SorafsGovernanceDagServiceRootStorage {
             governance_dag_signer_revision: None,
             governance_dag_signer_policy_digest_hex: None,
             governance_dag_publisher_public_key_hex: None,
-            governance_dag_service: SorafsGovernanceDagService::default(),
+            service: SorafsGovernanceDagService::default(),
         }
     }
 }
@@ -28155,9 +27637,7 @@ impl SorafsGovernanceDagServiceRoot {
                 "sorafs.storage.governance_dag_publisher_public_key_hex must be a canonical lowercase strong Ed25519 public key",
             ));
         }
-        let service = storage
-            .governance_dag_service
-            .parse(producer_configured, &mut emitter);
+        let service = storage.service.parse(producer_configured, &mut emitter);
         if service.enabled && source_dir.is_none() {
             emitter.emit(
                 Report::new(ParseError::InvalidSorafsConfig).attach(
@@ -28202,7 +27682,7 @@ mod sorafs_governance_dag_service_tests {
             sorafs: SorafsGovernanceDagServiceRootSorafs {
                 storage: SorafsGovernanceDagServiceRootStorage {
                     governance_dag_dir: None,
-                    governance_dag_service: SorafsGovernanceDagService {
+                    service: SorafsGovernanceDagService {
                         enabled: true,
                         ..SorafsGovernanceDagService::default()
                     },
@@ -28230,15 +27710,16 @@ mod sorafs_governance_dag_service_tests {
     }
 
     #[test]
-    fn service_request_bound_covers_the_canonical_governance_block_ceiling() {
+    fn service_request_bound_covers_the_governance_archive_envelope() {
         let minimum = defaults::sorafs::storage::governance_dag_service::MAX_REQUEST_BYTES.0;
+        assert_eq!(minimum, 135_397_376);
         let mut exact = valid_governance_dag_service();
         exact.max_request_bytes = Bytes(minimum);
         let mut exact_emitter = Emitter::new();
         let _ = exact.parse(false, &mut exact_emitter);
         exact_emitter
             .into_result()
-            .expect("the exact canonical block request ceiling must parse");
+            .expect("the exact Governance DAG archive-envelope minimum must parse");
 
         let mut undersized = valid_governance_dag_service();
         undersized.max_request_bytes = Bytes(minimum - 1);
@@ -28248,9 +27729,9 @@ mod sorafs_governance_dag_service_tests {
             "{:?}",
             undersized_emitter
                 .into_result()
-                .expect_err("one byte below the canonical block ceiling must fail")
+                .expect_err("one byte below the archive-envelope minimum must fail")
         );
-        assert!(diagnostic.contains("canonical Governance DAG block ceiling"));
+        assert!(diagnostic.contains("canonical Governance DAG block, archive wrapper"));
     }
 
     #[test]
@@ -28324,7 +27805,7 @@ mod sorafs_governance_dag_service_tests {
                     governance_dag_publisher_public_key_hex: Some(
                         VALID_PUBLISHER_PUBLIC_KEY_HEX.to_owned(),
                     ),
-                    governance_dag_service: service,
+                    service,
                 },
             },
         }
@@ -28462,6 +27943,8 @@ allow_private_head_endpoint = false
         }
     }
 
+    include!("user/governance_dag_head_mode_tests.rs");
+
     #[test]
     fn dedicated_view_rejects_incomplete_invalid_or_substituted_producer_binding() {
         let mut cases = Vec::new();
@@ -28502,7 +27985,7 @@ allow_private_head_endpoint = false
         substituted_service_key
             .sorafs
             .storage
-            .governance_dag_service
+            .service
             .publisher_public_key_hex = Some(ALTERNATE_PUBLISHER_PUBLIC_KEY_HEX.to_owned());
         cases.push(substituted_service_key);
 
@@ -28524,10 +28007,7 @@ allow_private_head_endpoint = false
             let mut root = valid_dedicated_view_root();
             root.sorafs.storage.governance_dag_publisher_public_key_hex =
                 Some(public_key_hex.clone());
-            root.sorafs
-                .storage
-                .governance_dag_service
-                .publisher_public_key_hex = Some(public_key_hex);
+            root.sorafs.storage.service.publisher_public_key_hex = Some(public_key_hex);
 
             let diagnostic = format!(
                 "{:?}",
@@ -28544,7 +28024,7 @@ allow_private_head_endpoint = false
     #[test]
     fn disabled_service_rejects_substituted_dormant_publisher_key() {
         let mut root = valid_dedicated_view_root();
-        let service = &mut root.sorafs.storage.governance_dag_service;
+        let service = &mut root.sorafs.storage.service;
         service.enabled = false;
         service.ipfs_api_url = None;
         service.signed_head_url = None;
@@ -28583,7 +28063,7 @@ allow_private_head_endpoint = false
             dedicated.governance_dag_signer_policy_digest_hex;
         storage.governance_dag_publisher_public_key_hex =
             dedicated.governance_dag_publisher_public_key_hex;
-        storage.governance_dag_service = dedicated.governance_dag_service;
+        storage.governance_dag_service = dedicated.service;
         storage.governance_dag_service.publisher_public_key_hex =
             Some(ALTERNATE_PUBLISHER_PUBLIC_KEY_HEX.to_owned());
         let mut emitter = Emitter::new();
@@ -28668,6 +28148,19 @@ allow_private_head_endpoint = false
         assert_eq!(view.service.checkpoint_store_revision, Some(13));
         assert!(view.service.allow_private_ipfs_endpoint);
         assert!(!view.service.allow_private_head_endpoint);
+    }
+
+    #[test]
+    fn dedicated_view_does_not_treat_rust_service_field_as_an_alias() {
+        let table = valid_dedicated_view_toml("service = { enabled = false }", "");
+        let view =
+            actual::SorafsGovernanceDagServiceView::from_toml_source(TomlSource::inline(table))
+                .expect("unrelated storage fields are filtered from the dedicated view");
+
+        assert!(
+            view.service.enabled,
+            "the Rust field name must not override the canonical governance_dag_service table"
+        );
     }
 
     #[test]
@@ -31142,6 +30635,9 @@ fn sorafs_por_rejects_obsolete_competing_state_paths() {
     );
 }
 
+#[path = "user/stream_token_admission.rs"]
+mod stream_token_admission;
+
 /// User-level configuration for stream-token issuance.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsStreamTokenConfig {
@@ -31152,6 +30648,28 @@ pub struct SorafsStreamTokenConfig {
     pub signer_handle: Option<String>,
     /// Canonical lowercase Ed25519 public key bound to the runtime signer.
     pub signer_public_key_hex: Option<String>,
+    /// Exact non-zero deployment adapter revision bound to the runtime signer.
+    pub signer_revision: Option<u64>,
+    /// Exact non-zero public-policy digest as lowercase hexadecimal.
+    pub signer_policy_digest_hex: Option<String>,
+    /// Credential-free deployment-owned quota/sequence/outbox provider handle.
+    pub admission_provider_handle: Option<String>,
+    /// Exact non-zero external admission-provider contract revision.
+    pub admission_provider_revision: Option<u64>,
+    /// Exact non-zero public-policy digest as lowercase hexadecimal.
+    pub admission_provider_policy_digest_hex: Option<String>,
+    /// Maximum durable callback rows admitted by the external provider.
+    #[config(default = "defaults::sorafs::storage::tokens::ADMISSION_MAX_PENDING")]
+    pub admission_max_pending: u32,
+    /// Maximum active token quota windows admitted by the external provider.
+    #[config(default = "defaults::sorafs::storage::tokens::ADMISSION_MAX_TRACKED_TOKENS")]
+    pub admission_max_tracked_tokens: u32,
+    /// Maximum ordered callback rows replayed by one reconciliation tick.
+    #[config(default = "defaults::sorafs::storage::tokens::ADMISSION_RECONCILE_MAX_ITEMS")]
+    pub admission_reconcile_max_items: u32,
+    /// Maximum lifetime of one cross-replica concurrency lease.
+    #[config(default = "defaults::sorafs::storage::tokens::ADMISSION_LEASE_TTL_MS")]
+    pub admission_lease_ttl_ms: u64,
     /// Public-key version advertised in tokens.
     #[config(default = "defaults::sorafs::storage::tokens::KEY_VERSION")]
     pub key_version: u32,
@@ -31175,6 +30693,17 @@ impl Default for SorafsStreamTokenConfig {
             enabled: defaults::sorafs::storage::tokens::ENABLED,
             signer_handle: None,
             signer_public_key_hex: None,
+            signer_revision: None,
+            signer_policy_digest_hex: None,
+            admission_provider_handle: None,
+            admission_provider_revision: None,
+            admission_provider_policy_digest_hex: None,
+            admission_max_pending: defaults::sorafs::storage::tokens::ADMISSION_MAX_PENDING,
+            admission_max_tracked_tokens:
+                defaults::sorafs::storage::tokens::ADMISSION_MAX_TRACKED_TOKENS,
+            admission_reconcile_max_items:
+                defaults::sorafs::storage::tokens::ADMISSION_RECONCILE_MAX_ITEMS,
+            admission_lease_ttl_ms: defaults::sorafs::storage::tokens::ADMISSION_LEASE_TTL_MS,
             key_version: defaults::sorafs::storage::tokens::KEY_VERSION,
             default_ttl_secs: defaults::sorafs::storage::tokens::DEFAULT_TTL_SECS,
             default_max_streams: defaults::sorafs::storage::tokens::DEFAULT_MAX_STREAMS,
@@ -31213,6 +30742,16 @@ impl SorafsStreamTokenConfig {
                 }
                 Some(bytes)
             });
+        let admission_provider_policy_digest = stream_token_admission::decode_policy_digest(
+            self.admission_provider_policy_digest_hex.as_deref(),
+            "admission_provider_policy_digest_hex",
+            emitter,
+        );
+        let signer_policy_digest = stream_token_admission::decode_policy_digest(
+            self.signer_policy_digest_hex.as_deref(),
+            "signer_policy_digest_hex",
+            emitter,
+        );
 
         if self.enabled {
             if !storage_enabled {
@@ -31239,16 +30778,47 @@ impl SorafsStreamTokenConfig {
                     "sorafs.storage.stream_tokens.signer_public_key_hex is required when issuance is enabled",
                 ));
             }
-        } else if self.signer_handle.is_some() || self.signer_public_key_hex.is_some() {
+            match self.signer_revision {
+                Some(0) => emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                    "sorafs.storage.stream_tokens.signer_revision must be non-zero",
+                )),
+                None => emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                    "sorafs.storage.stream_tokens.signer_revision is required when issuance is enabled",
+                )),
+                Some(_) => {}
+            }
+            if self.signer_policy_digest_hex.is_none() {
+                emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                    "sorafs.storage.stream_tokens.signer_policy_digest_hex is required when issuance is enabled",
+                ));
+            }
+        } else if self.signer_handle.is_some()
+            || self.signer_public_key_hex.is_some()
+            || self.signer_revision.is_some()
+            || self.signer_policy_digest_hex.is_some()
+            || self.admission_provider_handle.is_some()
+            || self.admission_provider_revision.is_some()
+            || self.admission_provider_policy_digest_hex.is_some()
+        {
             emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
-                "sorafs.storage.stream_tokens signer binding is forbidden while issuance is disabled",
+                "sorafs.storage.stream_tokens runtime bindings are forbidden while issuance is disabled",
             ));
         }
+        stream_token_admission::validate_binding_and_bounds(&self, emitter);
 
         actual::SorafsTokenConfig {
             enabled: self.enabled,
             signer_handle: self.signer_handle,
             signer_public_key,
+            signer_revision: self.signer_revision,
+            signer_policy_digest,
+            admission_provider_handle: self.admission_provider_handle,
+            admission_provider_revision: self.admission_provider_revision,
+            admission_provider_policy_digest,
+            admission_max_pending: self.admission_max_pending,
+            admission_max_tracked_tokens: self.admission_max_tracked_tokens,
+            admission_reconcile_max_items: self.admission_reconcile_max_items,
+            admission_lease_ttl_ms: self.admission_lease_ttl_ms,
             key_version: self.key_version,
             default_ttl_secs: self.default_ttl_secs,
             default_max_streams: self.default_max_streams,
@@ -33681,6 +33251,7 @@ mod offline_cfg_tests {
 mod duration_clamp_tests {
     use std::{
         fs,
+        num::NonZeroUsize,
         path::{Path, PathBuf},
         str::FromStr,
         sync::atomic::{AtomicU64, Ordering},
@@ -36432,113 +36003,7 @@ publish_delay_seconds = 17
         assert_eq!(actual.network.deferred_send_max_bytes_total, 1);
     }
 
-    #[test]
-    fn default_snapshot_store_dir_follows_explicit_kura_store_dir() {
-        let mut table = base_table();
-        let kura = table
-            .entry("kura")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("kura table");
-        kura.insert(
-            "store_dir".into(),
-            Value::String("/var/lib/iroha/peer0".into()),
-        );
-
-        let actual = load_root(table);
-
-        assert_eq!(
-            actual.snapshot.store_dir.value(),
-            &PathBuf::from("/var/lib/iroha/peer0/snapshot")
-        );
-    }
-
-    #[test]
-    fn explicit_snapshot_store_dir_is_preserved() {
-        let mut table = base_table();
-        let kura = table
-            .entry("kura")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("kura table");
-        kura.insert(
-            "store_dir".into(),
-            Value::String("/var/lib/iroha/peer0".into()),
-        );
-        let snapshot = table
-            .entry("snapshot")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("snapshot table");
-        snapshot.insert(
-            "store_dir".into(),
-            Value::String("/snapshots/paynet-1".into()),
-        );
-
-        let actual = load_root(table);
-
-        assert_eq!(
-            actual.snapshot.store_dir.value(),
-            &PathBuf::from("/snapshots/paynet-1")
-        );
-    }
-
-    #[test]
-    fn snapshot_bootstrap_policy_parses_only_complete_exact_authority() {
-        let digest = "1a0861b04fa35fd0d8ea4c2f38baaa478c7430df3466e9401c53f934671747bd";
-        let mut table = base_table();
-        let snapshot = table
-            .entry("snapshot")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("snapshot table");
-        let mut bootstrap = Table::new();
-        bootstrap.insert("enabled".into(), Value::Boolean(true));
-        bootstrap.insert("audited_sha256".into(), Value::String(digest.to_owned()));
-        bootstrap.insert("audited_height".into(), Value::Integer(42));
-        snapshot.insert("bootstrap".into(), Value::Table(bootstrap));
-
-        let actual = load_root(table);
-        assert!(actual.snapshot.bootstrap.authorizes(digest, 42));
-    }
-
-    #[test]
-    fn snapshot_bootstrap_policy_rejects_partial_or_invalid_authority() {
-        for bootstrap in [
-            {
-                let mut value = Table::new();
-                value.insert("enabled".into(), Value::Boolean(true));
-                value.insert("audited_height".into(), Value::Integer(42));
-                value
-            },
-            {
-                let mut value = Table::new();
-                value.insert("enabled".into(), Value::Boolean(true));
-                value.insert("audited_sha256".into(), Value::String("AA".repeat(32)));
-                value.insert("audited_height".into(), Value::Integer(42));
-                value
-            },
-            {
-                let mut value = Table::new();
-                value.insert("enabled".into(), Value::Boolean(false));
-                value.insert("audited_sha256".into(), Value::String("00".repeat(32)));
-                value.insert("audited_height".into(), Value::Integer(42));
-                value
-            },
-        ] {
-            let mut table = base_table();
-            let snapshot = table
-                .entry("snapshot")
-                .or_insert_with(|| Value::Table(Table::new()))
-                .as_table_mut()
-                .expect("snapshot table");
-            snapshot.insert("bootstrap".into(), Value::Table(bootstrap));
-            assert!(
-                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
-                "invalid snapshot bootstrap authority must fail configuration parsing"
-            );
-        }
-    }
+    include!("user/kura_and_snapshot_tests.rs");
 
     #[test]
     fn snapshot_resource_policy_rejects_incoherent_budgets() {
@@ -37718,566 +37183,7 @@ publish_delay_seconds = 17
         assert_eq!(credential_provider.policy_digest, [0xA7; 32]);
     }
 
-    #[test]
-    fn soracloud_runtime_json_deserialize_applies_inrou_archive_defaults() {
-        let parsed: SoracloudRuntime =
-            norito::json::from_json(r#"{"inrou":{}}"#).expect("runtime JSON should deserialize");
-
-        assert_eq!(
-            parsed.inrou.bundle_archive_max_compressed_bytes,
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES
-        );
-        assert_eq!(
-            parsed.inrou.bundle_archive_max_decoded_bytes,
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES
-        );
-        assert_eq!(
-            parsed.inrou.bundle_archive_max_entries,
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES
-        );
-        assert_eq!(
-            parsed.inrou.bundle_archive_max_file_bytes,
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES
-        );
-        assert_eq!(
-            parsed.inrou.bundle_archive_max_total_file_bytes,
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES
-        );
-    }
-
-    #[test]
-    fn soracloud_runtime_json_deserialize_applies_explicit_overrides() {
-        let json = r#"{
-            "state_dir":"./runtime/json",
-            "reconcile_interval_ms":2500,
-            "hydration_concurrency":7,
-            "cache_budgets":{
-                "bundle_bytes":1024,
-                "static_asset_bytes":2048,
-                "journal_bytes":3072,
-                "checkpoint_bytes":4096,
-                "model_artifact_bytes":5120,
-                "model_weight_bytes":6144
-            },
-            "inrou":{
-                "max_concurrent_vms":5,
-                "proxy_only":true,
-                "bundle_archive_max_compressed_bytes":10000,
-                "bundle_archive_max_decoded_bytes":40000,
-                "bundle_archive_max_entries":123,
-                "bundle_archive_max_file_bytes":20000,
-                "bundle_archive_max_total_file_bytes":30000,
-                "start_grace_ms":7500,
-                "stop_grace_ms":9500
-            },
-            "egress":{
-                "default_allow":true,
-                "allowed_hosts":["cdn.sora.test"],
-                "rate_per_minute":120,
-                "max_bytes_per_minute":262144
-            },
-            "hf":{
-                "hub_base_url":"https://mirror.hf.test",
-                "api_base_url":"https://mirror.hf.test/api",
-                "inference_base_url":"https://router.hf.test/hf-inference/models",
-                "request_timeout_ms":21000,
-                "local_execution_enabled":false,
-                "local_runner_program":"python3.12",
-                "local_runner_timeout_ms":45000,
-                "model_host_heartbeat_ttl_ms":18000,
-                "allow_inference_bridge_fallback":false,
-                "import_max_files":48,
-                "import_max_file_bytes":777777,
-                "import_max_total_bytes":9999999,
-                "import_file_allowlist":["config.json","*.safetensors"],
-                "inference_credential_provider":{
-                    "handle":"kms://soracloud/hf-inference-primary",
-                    "revision":7,
-                    "policy_digest_hex":"a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7"
-                }
-            }
-        }"#;
-
-        let parsed: SoracloudRuntime =
-            norito::json::from_json(json).expect("runtime JSON should deserialize");
-
-        assert!(
-            parsed
-                .state_dir
-                .value()
-                .to_string_lossy()
-                .ends_with("runtime/json")
-        );
-        assert_eq!(parsed.inrou.max_concurrent_vms.get(), 5);
-        assert!(parsed.inrou.proxy_only);
-        assert_eq!(
-            parsed.inrou.bundle_archive_max_compressed_bytes.get(),
-            10_000
-        );
-        assert_eq!(parsed.inrou.bundle_archive_max_decoded_bytes.get(), 40_000);
-        assert_eq!(parsed.inrou.bundle_archive_max_entries.get(), 123);
-        assert_eq!(parsed.inrou.bundle_archive_max_file_bytes.get(), 20_000);
-        assert_eq!(
-            parsed.inrou.bundle_archive_max_total_file_bytes.get(),
-            30_000
-        );
-        assert!(parsed.egress.default_allow);
-        let credential_provider = parsed
-            .hf
-            .inference_credential_provider
-            .as_ref()
-            .expect("credential-provider binding");
-        assert_eq!(
-            credential_provider.handle,
-            "kms://soracloud/hf-inference-primary"
-        );
-        assert_eq!(credential_provider.revision, 7);
-        assert_eq!(
-            credential_provider.policy_digest_hex,
-            "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7"
-        );
-    }
-
-    #[test]
-    fn soracloud_runtime_rejects_raw_hf_inference_credentials() {
-        let mut table = base_table();
-        let runtime = table
-            .entry("soracloud_runtime")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("soracloud_runtime table");
-        let mut hf = Table::new();
-        hf.insert(
-            "inference_token".into(),
-            Value::String("must-not-enter-config".to_owned()),
-        );
-        runtime.insert("hf".into(), Value::Table(hf));
-        assert!(
-            actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
-            "the removed raw-token field must not be accepted as a TOML alias"
-        );
-
-        let error = norito::json::from_json::<SoracloudRuntimeHuggingFace>(
-            r#"{"inference_token":"must-not-enter-config"}"#,
-        )
-        .expect_err("the removed raw-token field must not be accepted as a JSON alias");
-        assert!(error.to_string().contains("inference_token"));
-    }
-
-    #[test]
-    fn soracloud_runtime_hf_bridge_requires_exact_provider_binding() {
-        let mut table = base_table();
-        let runtime = table
-            .entry("soracloud_runtime")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("soracloud_runtime table");
-        let mut hf = Table::new();
-        hf.insert(
-            "allow_inference_bridge_fallback".into(),
-            Value::Boolean(true),
-        );
-        runtime.insert("hf".into(), Value::Table(hf));
-
-        let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("enabled HF bridge must require a provider binding");
-        let report = format!("{error:?}");
-        assert!(
-            report.contains("requires inference_credential_provider"),
-            "{report}"
-        );
-    }
-
-    #[test]
-    fn soracloud_runtime_parse_rejects_removed_legacy_runtime_section() {
-        let mut table = base_table();
-        let runtime = table
-            .entry("soracloud_runtime")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("soracloud_runtime table");
-        let removed_field = ["native", "process"].join("_");
-        runtime.insert(removed_field, Value::Table(Table::new()));
-
-        let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("removed legacy runtime section must not parse");
-        assert!(
-            !error.to_string().is_empty(),
-            "removed legacy runtime section should produce a parse error"
-        );
-    }
-
-    #[test]
-    fn soracloud_runtime_json_deserialize_rejects_removed_legacy_runtime_field() {
-        let removed_field = ["native", "process"].join("_");
-        let json = r#"{
-            "state_dir":"./runtime/json",
-            "reconcile_interval_ms":2500,
-            "hydration_concurrency":7,
-            "cache_budgets":{
-                "bundle_bytes":1024,
-                "static_asset_bytes":2048,
-                "journal_bytes":3072,
-                "checkpoint_bytes":4096,
-                "model_artifact_bytes":5120,
-                "model_weight_bytes":6144
-            },
-            "__REMOVED_FIELD__":{},
-            "inrou":{
-                "max_concurrent_vms":5,
-                "start_grace_ms":7500,
-                "stop_grace_ms":9500
-            },
-            "egress":{
-                "default_allow":true,
-                "allowed_hosts":["cdn.sora.test"]
-            },
-            "hf":{
-                "hub_base_url":"https://mirror.hf.test",
-                "api_base_url":"https://mirror.hf.test/api",
-                "inference_base_url":"https://router.hf.test/hf-inference/models",
-                "request_timeout_ms":21000,
-                "local_execution_enabled":false,
-                "local_runner_program":"python3.12",
-                "local_runner_timeout_ms":45000,
-                "model_host_heartbeat_ttl_ms":18000,
-                "allow_inference_bridge_fallback":false,
-                "import_max_files":48,
-                "import_max_file_bytes":777777,
-                "import_max_total_bytes":9999999,
-                "import_file_allowlist":["config.json","*.safetensors"],
-                "inference_credential_provider":{
-                    "handle":"kms://soracloud/hf-inference-primary",
-                    "revision":7,
-                    "policy_digest_hex":"a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7"
-                }
-            }
-        }"#
-        .replace(
-            "\"__REMOVED_FIELD__\":{}",
-            &format!("\"{removed_field}\":{{}}"),
-        );
-
-        let error = norito::json::from_json::<SoracloudRuntime>(&json)
-            .expect_err("removed legacy runtime JSON field must be rejected");
-        assert!(error.to_string().contains(&removed_field));
-    }
-
-    #[test]
-    fn nexus_hf_shared_leases_defaults_apply() {
-        let actual = load_root(base_table());
-        assert_eq!(
-            actual.nexus.hf_shared_leases.drain_grace,
-            StdDuration::from_millis(defaults::nexus::hf_shared_leases::DRAIN_GRACE_MS)
-        );
-        assert_eq!(
-            actual.nexus.hf_shared_leases.warmup_no_show_slash_bps,
-            defaults::nexus::hf_shared_leases::WARMUP_NO_SHOW_SLASH_BPS
-        );
-        assert_eq!(
-            actual
-                .nexus
-                .hf_shared_leases
-                .assigned_heartbeat_miss_slash_bps,
-            defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_SLASH_BPS
-        );
-        assert_eq!(
-            actual
-                .nexus
-                .hf_shared_leases
-                .assigned_heartbeat_miss_strike_threshold,
-            defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_STRIKE_THRESHOLD
-        );
-        assert_eq!(
-            actual.nexus.hf_shared_leases.advert_contradiction_slash_bps,
-            defaults::nexus::hf_shared_leases::ADVERT_CONTRADICTION_SLASH_BPS
-        );
-    }
-
-    #[test]
-    fn nexus_hf_shared_leases_parse_applies_explicit_overrides() {
-        let mut table = base_table();
-        let nexus = table
-            .entry("nexus")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("nexus table");
-        let mut hf_shared_leases = Table::new();
-        hf_shared_leases.insert("drain_grace_ms".into(), Value::Integer(12_345));
-        hf_shared_leases.insert("warmup_no_show_slash_bps".into(), Value::Integer(777));
-        hf_shared_leases.insert(
-            "assigned_heartbeat_miss_slash_bps".into(),
-            Value::Integer(222),
-        );
-        hf_shared_leases.insert(
-            "assigned_heartbeat_miss_strike_threshold".into(),
-            Value::Integer(4),
-        );
-        hf_shared_leases.insert("advert_contradiction_slash_bps".into(), Value::Integer(999));
-        nexus.insert("hf_shared_leases".into(), Value::Table(hf_shared_leases));
-
-        let actual = load_root(table);
-        assert_eq!(
-            actual.nexus.hf_shared_leases.drain_grace,
-            StdDuration::from_millis(12_345)
-        );
-        assert_eq!(actual.nexus.hf_shared_leases.warmup_no_show_slash_bps, 777);
-        assert_eq!(
-            actual
-                .nexus
-                .hf_shared_leases
-                .assigned_heartbeat_miss_slash_bps,
-            222
-        );
-        assert_eq!(
-            actual
-                .nexus
-                .hf_shared_leases
-                .assigned_heartbeat_miss_strike_threshold,
-            4
-        );
-        assert_eq!(
-            actual.nexus.hf_shared_leases.advert_contradiction_slash_bps,
-            999
-        );
-    }
-
-    #[test]
-    fn nexus_uploaded_models_defaults_apply() {
-        let actual = load_root(base_table());
-        assert_eq!(
-            actual.nexus.uploaded_models.chunk_plaintext_bytes,
-            defaults::nexus::uploaded_models::CHUNK_PLAINTEXT_BYTES
-        );
-        assert_eq!(
-            actual.nexus.uploaded_models.max_session_token_budget,
-            defaults::nexus::uploaded_models::MAX_SESSION_TOKEN_BUDGET
-        );
-    }
-
-    #[test]
-    fn nexus_uploaded_models_parse_applies_explicit_overrides() {
-        let mut table = base_table();
-        let nexus = table
-            .entry("nexus")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("nexus table");
-        let mut uploaded_models = Table::new();
-        uploaded_models.insert("chunk_plaintext_bytes".into(), Value::Integer(2_097_152));
-        uploaded_models.insert(
-            "max_active_private_sessions_per_apartment".into(),
-            Value::Integer(6),
-        );
-        uploaded_models.insert("max_session_token_budget".into(), Value::Integer(4_096));
-        nexus.insert("uploaded_models".into(), Value::Table(uploaded_models));
-
-        let actual = load_root(table);
-        assert_eq!(
-            actual.nexus.uploaded_models.chunk_plaintext_bytes,
-            2_097_152
-        );
-        assert_eq!(
-            actual
-                .nexus
-                .uploaded_models
-                .max_active_private_sessions_per_apartment,
-            6
-        );
-        assert_eq!(actual.nexus.uploaded_models.max_session_token_budget, 4_096);
-    }
-
-    #[test]
-    fn tiered_state_parse_accepts_da_store_root() {
-        let mut table = base_table();
-        let tiered = table
-            .entry("tiered_state")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("tiered_state table");
-        tiered.insert(
-            "da_store_root".into(),
-            Value::String("./storage/da_wsv_custom".to_string()),
-        );
-
-        let actual = load_root(table);
-        assert_eq!(
-            actual
-                .tiered_state
-                .da_store_root
-                .as_ref()
-                .expect("da_store_root must parse"),
-            &PathBuf::from("./storage/da_wsv_custom")
-        );
-    }
-
-    #[test]
-    fn sumeragi_v2_rejects_retired_v1_tables() {
-        for retired_table in [
-            "collectors",
-            "advanced",
-            "recovery",
-            "pacing_governor",
-            "rbc",
-            "da",
-            "debug",
-            "worker",
-            "vnext",
-        ] {
-            let mut table = base_table();
-            let sumeragi = table
-                .entry("sumeragi")
-                .or_insert_with(|| Value::Table(Table::new()))
-                .as_table_mut()
-                .expect("sumeragi table");
-            sumeragi.insert(retired_table.into(), Value::Table(Table::new()));
-
-            assert!(
-                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
-                "retired sumeragi.{retired_table} must be rejected",
-            );
-        }
-        for retired_field in [
-            "protocol_version",
-            "consensus_mode",
-            "block_time_ms",
-            "commit_time_ms",
-            "round_timeout_ms",
-        ] {
-            let mut table = base_table();
-            let sumeragi = table
-                .entry("sumeragi")
-                .or_insert_with(|| Value::Table(Table::new()))
-                .as_table_mut()
-                .expect("sumeragi table");
-            sumeragi.insert(retired_field.into(), Value::String("retired".to_owned()));
-
-            assert!(
-                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
-                "retired sumeragi.{retired_field} must be rejected",
-            );
-        }
-    }
-
-    #[test]
-    fn root_rejects_non_bls_consensus_keys() {
-        let mut table = base_table();
-        table.insert(
-            "public_key".into(),
-            Value::String(
-                "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
-                    .to_string(),
-            ),
-        );
-        table.insert(
-            "private_key".into(),
-            Value::String(
-                "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
-                    .to_string(),
-            ),
-        );
-        assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
-    }
-
-    #[test]
-    fn root_rejects_non_bls_trusted_peer_pop_key() {
-        let mut table = base_table();
-        let trusted_peers_pop = table
-            .get_mut("trusted_peers_pop")
-            .and_then(Value::as_array_mut)
-            .expect("trusted_peers_pop array");
-        let first = trusted_peers_pop
-            .first_mut()
-            .and_then(Value::as_table_mut)
-            .expect("trusted_peers_pop entry");
-        first.insert(
-            "public_key".into(),
-            Value::String(
-                "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
-                    .to_string(),
-            ),
-        );
-
-        assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
-    }
-
-    #[test]
-    fn sumeragi_requires_bls_allowed_algorithms() {
-        let mut table = base_table();
-        let sumeragi = table
-            .entry("sumeragi")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("sumeragi table");
-        let keys = sumeragi
-            .entry("keys")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("sumeragi.keys table");
-        keys.insert(
-            "allowed_algorithms".into(),
-            Value::Array(vec![Value::String("ed25519".to_string())]),
-        );
-        assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
-    }
-
-    #[test]
-    fn retired_sumeragi_npos_config_is_rejected() {
-        let mut table = base_table();
-        let sumeragi = table
-            .entry("sumeragi")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("sumeragi table");
-        let npos = sumeragi
-            .entry("npos")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("npos table");
-        let reconfig = npos
-            .entry("reconfig")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("reconfig table");
-        reconfig.insert("evidence_horizon_blocks".into(), Value::Integer(20));
-
-        // NPoS policy is now governed state rather than a startup configuration
-        // subtree, so stale file configuration must fail closed.
-        assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
-    }
-
-    #[test]
-    fn nts_parse_clamps_zero_sample_interval() {
-        let mut table = base_table();
-        let mut nts = Table::new();
-        nts.insert("sample_interval_ms".into(), Value::Integer(0));
-        table.insert("nts".into(), Value::Table(nts));
-        let actual = load_root(table);
-        assert_eq!(actual.nts.sample_interval, StdDuration::from_millis(100));
-    }
-
-    #[test]
-    fn telemetry_clamps_zero_telegram_metrics_period() {
-        let mut table = base_table();
-        let mut telemetry = Table::new();
-        telemetry.insert("name".into(), Value::String("ops".to_string()));
-        telemetry.insert(
-            "url".into(),
-            Value::String("http://localhost:8180".to_string()),
-        );
-        telemetry.insert(
-            "telegram_metrics_url".into(),
-            Value::String("http://localhost:8180/metrics".to_string()),
-        );
-        telemetry.insert("telegram_metrics_period_ms".into(), Value::Integer(0));
-        table.insert("telemetry".into(), Value::Table(telemetry));
-        let actual = load_root(table);
-        let telemetry = actual.telemetry.expect("telemetry configured");
-        assert_eq!(
-            telemetry.telegram_metrics_period,
-            Some(StdDuration::from_millis(100))
-        );
-    }
+    include!("user/runtime_tail_tests.rs");
 }
 
 #[cfg(test)]

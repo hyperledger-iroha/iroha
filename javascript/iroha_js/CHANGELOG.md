@@ -4,6 +4,10 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Hard-cut SoraFS pin listing to finalized, byte-bounded exclusive-keyset
+  pages. The client rejects `offset`, legacy attestation/full-record payloads,
+  forged or repeated continuation cursors, and anchor drift; list entries are
+  now strict summaries with consensus-maintained charged count/byte totals.
 - Closed every governance mutation request shape before network I/O and reject
   all retired private-key aliases, including inside ZK public inputs and the
   nested V1 ballot proof. Deploy proposals now expose exact typed public
@@ -34,8 +38,8 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   the finality and `BlockProofs` archives but not yet the exact executed block
   wire required to assemble this verification input from public routes alone.
 - Replaced asset-selected offline readiness discovery with the universal
-  `getOfflineCapability()`/`OfflineStatus` contract. Deprecated selector-based
-  shims now ignore the selector and never add an asset query parameter.
+  `getOfflineCapability()`/`OfflineStatus` contract. The first-release hard cut
+  removes selector-taking readiness methods, normalizers, types, and exports.
 - Bound validation-fee policy and payout-lifecycle proposal fingerprints to
   the complete first-release PLAIN electorate rules. Both native exports now
   validate exact JSON and compute canonical `ProposalKind` fingerprints, and

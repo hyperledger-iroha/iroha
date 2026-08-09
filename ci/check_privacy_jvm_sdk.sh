@@ -216,9 +216,9 @@ javac \
   -d "${JAVA_OUT}" \
   java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java \
   java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtilsTests.java
-java -ea -cp "${JAVA_OUT}:${PRIVACY_CORE_JVM_JAR}" \
+java -ea -Djava.library.path="${NATIVE_LIBRARY_DIR}" -cp "${JAVA_OUT}:${PRIVACY_CORE_JVM_JAR}" \
   org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest
-java -ea -cp "${JAVA_OUT}:${PRIVACY_CORE_JVM_JAR}" \
+java -ea -Djava.library.path="${NATIVE_LIBRARY_DIR}" -cp "${JAVA_OUT}:${PRIVACY_CORE_JVM_JAR}" \
   org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests
 
 "${PYTHON_BIN}" -I -S "${ABI22_CHECKER}" verify \

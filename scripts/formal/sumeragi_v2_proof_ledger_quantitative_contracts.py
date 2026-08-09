@@ -930,14 +930,16 @@ QUANTITATIVE_FIXED_CORRIDOR_PROOF_DEPENDENCIES = {
         "SumeragiV2AsyncCausalWorkBudgetProofs",
         "AsyncCausalEpisodeOwnedLifecycleCutCannotReplenish",
     ): (
-        # This theorem intentionally has no GST premise.  Its frozen-set
-        # monotonicity follows from immutable cuts and ordinal high-watermarks;
-        # the GST-only lifecycle-retirement theorem belongs to the temporal
-        # episode layer that carries the full service-lifecycle invariant.
+        # The physical-cut refinement supersedes the narrower GST departure
+        # lemma: strong-type preservation plus both monotone high-watermarks
+        # prevent any pre-cut origin from being re-admitted.
         "AsyncNextNeverSchedulesAnUnownedCandidateLifecycle",
+        "AsyncBracketNextPreservesStrongTypeInvariant",
         "AsyncSharedSchedulerHighWatermarkIsMonotone",
+        "AsyncIngressPhysicalHighWatermarkIsMonotone",
         "AsyncCausalEpisodeLifecycleCutOwned",
         "AsyncCausalEpisodeFrozenPredecessorOrigins",
+        "AsyncCausalEpisodeTargetPhysicalCut",
         "AsyncAllVars",
     ),
     (

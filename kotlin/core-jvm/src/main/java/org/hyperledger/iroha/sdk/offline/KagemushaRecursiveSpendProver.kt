@@ -4145,16 +4145,6 @@ class KagemushaRecursiveSpendProver private constructor() {
             ).thenApply { OfflineStatus.decode(it.body) }
         }
 
-        @Deprecated(
-            message = "Offline capability is asset-neutral; use getOfflineCapability()",
-            replaceWith = ReplaceWith("getOfflineCapability()"),
-        )
-        fun getReadiness(assetDefinitionId: String): CompletableFuture<OfflineStatus> {
-            @Suppress("UNUSED_VARIABLE")
-            val ignoredSelector = assetDefinitionId
-            return getOfflineCapability()
-        }
-
         fun getRecipientRegistrationLineage(
             query: RecipientLineageQueryV2,
         ): CompletableFuture<RecipientRegistrationLineage> {

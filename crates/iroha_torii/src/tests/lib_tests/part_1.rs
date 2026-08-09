@@ -340,15 +340,15 @@ impl sorafs_node::GovernanceDagRuntimeSigner for PrebuiltGovernanceDagSigner {
 
 #[derive(Debug)]
 struct PrebuiltGovernanceDagCheckpointStoreState {
-    records: [Option<sorafs_node::GovernanceDagSealedStateRecord>; 4],
-    generation_floors: [u64; 4],
+    records: [Option<sorafs_node::GovernanceDagSealedStateRecord>; 6],
+    generation_floors: [u64; 6],
 }
 
 impl Default for PrebuiltGovernanceDagCheckpointStoreState {
     fn default() -> Self {
         Self {
             records: std::array::from_fn(|_| None),
-            generation_floors: [0; 4],
+            generation_floors: [0; 6],
         }
     }
 }
@@ -390,6 +390,8 @@ impl PrebuiltGovernanceDagCheckpointStore {
             sorafs_node::GovernanceDagSealedStateSlot::PublishIntent => 1,
             sorafs_node::GovernanceDagSealedStateSlot::ProducerCheckpoint => 2,
             sorafs_node::GovernanceDagSealedStateSlot::ProducerPublishIntent => 3,
+            sorafs_node::GovernanceDagSealedStateSlot::IpfsRequestReplay => 4,
+            sorafs_node::GovernanceDagSealedStateSlot::SignedHeadRequestReplay => 5,
         }
     }
 
@@ -2644,10 +2646,13 @@ fn recipient_lookup_world_for_test(caller: &AccountId, target: &AccountId) -> Wo
             Account::new(caller.clone()).build(caller),
             Account::new(target.clone()).build(caller),
         ],
-        [
-            iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone(), "aed".to_owned(), AssetBalancePolicy::DataspaceRestricted, Some(definition_domain))
-                .build(caller),
-        ],
+        [iroha_data_model::asset::AssetDefinition::numeric(
+            definition_id.clone(),
+            "aed".to_owned(),
+            AssetBalancePolicy::DataspaceRestricted,
+            Some(definition_domain),
+        )
+        .build(caller)],
         [iroha_data_model::asset::Asset::new(
             AssetId::with_scope(
                 definition_id,
@@ -2732,9 +2737,13 @@ fn onboarding_alias_test_app(authority: &AccountId, domain_owner: &AccountId) ->
         iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
             .parse()
             .expect("default fee asset id");
-    let fee_definition =
-        iroha_data_model::asset::AssetDefinition::numeric(fee_asset_id.clone(), "xor".to_owned(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
-            .build(authority);
+    let fee_definition = iroha_data_model::asset::AssetDefinition::numeric(
+        fee_asset_id.clone(),
+        "xor".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(authority);
     let fee_asset = iroha_data_model::asset::Asset::new(
         iroha_data_model::asset::AssetId::of(fee_asset_id, authority.clone()),
         Quantity::from(100_u32),
@@ -2915,9 +2924,13 @@ fn onboarding_alias_test_app_with_role_permissions(
         iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
             .parse()
             .expect("default fee asset id");
-    let fee_definition =
-        iroha_data_model::asset::AssetDefinition::numeric(fee_asset_id.clone(), "xor".to_owned(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
-            .build(authority);
+    let fee_definition = iroha_data_model::asset::AssetDefinition::numeric(
+        fee_asset_id.clone(),
+        "xor".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(authority);
     let fee_asset = iroha_data_model::asset::Asset::new(
         iroha_data_model::asset::AssetId::of(fee_asset_id, authority.clone()),
         Quantity::from(100_u32),

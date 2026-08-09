@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPT = Path(__file__).parents[1] / "check_mobile_sdk_artifact_pin_commit.py"
@@ -21,7 +22,7 @@ def loader(first: str = "1", *, extra: str = "") -> str:
     return (
         "enum Loader {\n"
         "    static let expectedHashes = [\n"
-        f'        "macos-arm64": "{first * 64}",\n'
+        f'        "macos-arm64_x86_64": "{first * 64}",\n'
         f'        "ios-arm64": "{first * 64}",\n'
         f'        "ios-arm64_x86_64-simulator": "{first * 64}"\n'
         "    ]\n"
@@ -48,9 +49,7 @@ class MobileSdkArtifactPinCommitTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def git(self, *arguments: str) -> bytes:
-        environment = os.environ.copy()
-        environment["GIT_CONFIG_GLOBAL"] = os.devnull
-        environment["GIT_CONFIG_NOSYSTEM"] = "1"
+        environment = pin._git_environment()
         return subprocess.run(
             ["git", "-C", str(self.root), *arguments],
             check=True,
@@ -72,6 +71,19 @@ class MobileSdkArtifactPinCommitTests(unittest.TestCase):
             pin.validate_pin_relationship(self.root, self.source_commit),
             "direct",
         )
+
+    def test_git_fixture_ignores_inherited_repository_context(self) -> None:
+        poison = self.root / "inherited-git-context"
+        with mock.patch.dict(
+            os.environ,
+            {
+                "GIT_DIR": str(poison / "git-dir"),
+                "GIT_WORK_TREE": str(poison / "work-tree"),
+                "GIT_INDEX_FILE": str(poison / "index"),
+            },
+        ):
+            self.assertEqual(self.head(), self.source_commit)
+        self.assertFalse(poison.exists())
 
     def test_accepts_exact_parent_when_only_three_hash_literals_change(self) -> None:
         self.loader.write_text(loader("a"), encoding="utf-8")

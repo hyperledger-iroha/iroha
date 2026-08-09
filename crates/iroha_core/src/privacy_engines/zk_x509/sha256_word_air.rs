@@ -16,9 +16,10 @@
 
 use thiserror::Error;
 
-use super::{
-    air::{U32RangeAirRowV1, ZkX509AirErrorV1},
-    io_air::{ZkX509IoChallengesV1, ZkX509IoEndpointV1, ZkX509IoSegmentRoleV1, ZkX509IoTraceV1},
+use super::air::{U32RangeAirRowV1, ZkX509AirErrorV1};
+#[cfg(test)]
+use super::io_air::{
+    ZkX509IoChallengesV1, ZkX509IoEndpointV1, ZkX509IoSegmentRoleV1, ZkX509IoTraceV1,
 };
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
@@ -181,6 +182,7 @@ pub(crate) struct ZkX509WordMemoryChallengesV1 {
     pub(crate) lanes: [ZkX509WordMemoryLaneChallengesV1; WORD_MEMORY_PERMUTATION_LANES_V1],
 }
 
+#[cfg(test)]
 impl ZkX509WordMemoryChallengesV1 {
     fn validate(self) -> Result<(), ZkX509Sha256WordAirErrorV1> {
         for lane in self.lanes {
@@ -234,6 +236,7 @@ pub(crate) struct WordMemoryTraceV1 {
     pub(crate) sorted: Vec<WordMemoryAccessV1>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct WordMemoryPermutationRowV1 {
     pub(crate) execution: WordMemoryAccessV1,
@@ -244,11 +247,13 @@ pub(crate) struct WordMemoryPermutationRowV1 {
     pub(crate) sorted_product_after: [F; WORD_MEMORY_PERMUTATION_LANES_V1],
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WordMemoryPermutationArgumentV1 {
     pub(crate) rows: Vec<WordMemoryPermutationRowV1>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Sha256WordSegmentContinuationV1 {
     pub(crate) segment_index: u8,
@@ -266,6 +271,7 @@ pub(crate) struct Sha256WordSegmentContinuationV1 {
 
 /// Challenge-dependent auxiliary copy trace plus every physical-segment
 /// continuation value.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509Sha256WordSegmentedTraceV1 {
     pub(crate) copy_argument: WordMemoryPermutationArgumentV1,
@@ -403,15 +409,19 @@ pub(crate) enum ZkX509Sha256WordAirErrorV1 {
     #[error("zk-X509 word SHA-256 AIR memory identity is invalid")]
     WordMemory,
     /// Word-copy challenges are zero, non-canonical, or duplicate.
+    #[cfg(test)]
     #[error("zk-X509 word SHA-256 AIR memory challenges are invalid")]
     WordMemoryChallenge,
     /// A word-copy grand-product transition or final equality is invalid.
+    #[cfg(test)]
     #[error("zk-X509 word SHA-256 AIR permutation product is invalid")]
     WordMemoryPermutation,
     /// A physical SHA segment boundary or copy-product continuation is invalid.
+    #[cfg(test)]
     #[error("zk-X509 word SHA-256 AIR segment continuation is invalid")]
     SegmentContinuation,
     /// DER/accumulator channel cells are not bound to this SHA invocation.
+    #[cfg(test)]
     #[error("zk-X509 word SHA-256 AIR cross-segment I/O binding is invalid")]
     IoBinding,
     /// Final output words do not reconstruct the stored digest.
@@ -474,6 +484,7 @@ impl ZkX509Sha256WordCircuitV1 {
     }
 
     /// Conceptual base rows after splitting wide bitwise rows to 64 columns.
+    #[cfg(test)]
     pub(crate) fn air_rows(&self) -> usize {
         self.words.len()
             + self
@@ -487,11 +498,13 @@ impl ZkX509Sha256WordCircuitV1 {
     }
 
     /// Exact global word-copy rows for this message.
+    #[cfg(test)]
     pub(crate) fn word_memory_rows(&self) -> usize {
         self.memory.execution.len()
     }
 
     /// Exact local plus global-copy rows for this message.
+    #[cfg(test)]
     pub(crate) fn total_air_rows(&self) -> Result<usize, ZkX509Sha256WordAirErrorV1> {
         self.air_rows()
             .checked_add(self.word_memory_rows())
@@ -547,6 +560,7 @@ impl ZkX509Sha256WordCircuitV1 {
 
     /// Validate local identities plus the transcript-challenged global copy
     /// argument used by the segmented proof.
+    #[cfg(test)]
     pub(crate) fn validate_with_word_memory_v1(
         &self,
         challenges: ZkX509WordMemoryChallengesV1,
@@ -557,6 +571,7 @@ impl ZkX509Sha256WordCircuitV1 {
 
     /// Build the copy auxiliary trace and exact compiled physical-segment
     /// continuation states.
+    #[cfg(test)]
     pub(crate) fn build_segmented_trace_v1(
         &self,
         challenges: ZkX509WordMemoryChallengesV1,
@@ -566,6 +581,7 @@ impl ZkX509Sha256WordCircuitV1 {
     }
 
     /// Validate every copy row and every boundary under the compiled shape.
+    #[cfg(test)]
     pub(crate) fn validate_segmented_trace_v1(
         &self,
         challenges: ZkX509WordMemoryChallengesV1,
@@ -575,6 +591,7 @@ impl ZkX509Sha256WordCircuitV1 {
         self.validate_segmented_trace_with_shape_v1(challenges, trace, segment_rows, max_segments)
     }
 
+    #[cfg(test)]
     fn build_segmented_trace_with_shape_v1(
         &self,
         challenges: ZkX509WordMemoryChallengesV1,
@@ -598,6 +615,7 @@ impl ZkX509Sha256WordCircuitV1 {
         })
     }
 
+    #[cfg(test)]
     fn validate_segmented_trace_with_shape_v1(
         &self,
         challenges: ZkX509WordMemoryChallengesV1,
@@ -619,6 +637,7 @@ impl ZkX509Sha256WordCircuitV1 {
 
     /// Bind this invocation's exact unpadded input and digest bytes to the
     /// global DER/accumulator byte-channel argument.
+    #[cfg(test)]
     pub(crate) fn validate_cross_segment_io_v1(
         &self,
         io_challenges: ZkX509IoChallengesV1,
@@ -655,6 +674,7 @@ impl ZkX509Sha256WordCircuitV1 {
         validate_sorted_word_memory_v1(&self.memory.sorted, self.words.len())
     }
 
+    #[cfg(test)]
     fn build_word_memory_argument_v1(
         &self,
         challenges: ZkX509WordMemoryChallengesV1,
@@ -697,6 +717,7 @@ impl ZkX509Sha256WordCircuitV1 {
         Ok(WordMemoryPermutationArgumentV1 { rows })
     }
 
+    #[cfg(test)]
     fn validate_word_memory_argument_v1(
         &self,
         challenges: ZkX509WordMemoryChallengesV1,
@@ -1181,6 +1202,7 @@ fn validate_sorted_word_memory_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn compress_word_memory_access_v1(
     access: WordMemoryAccessV1,
     challenges: ZkX509WordMemoryLaneChallengesV1,
@@ -1192,6 +1214,7 @@ fn compress_word_memory_access_v1(
         .add(challenges.is_write.mul(access.is_write))
 }
 
+#[cfg(test)]
 const fn compiled_sha_segment_shape_v1() -> (usize, usize) {
     (
         SHA256_WORD_FIXED_BATCH_SEGMENT_ROWS_V1,
@@ -1199,6 +1222,7 @@ const fn compiled_sha_segment_shape_v1() -> (usize, usize) {
     )
 }
 
+#[cfg(test)]
 fn build_sha256_segment_continuations_v1(
     local_rows: usize,
     memory_rows: usize,
@@ -1258,6 +1282,7 @@ fn build_sha256_segment_continuations_v1(
     Ok(segments)
 }
 
+#[cfg(test)]
 fn validate_sha256_segment_continuations_v1(
     local_rows: usize,
     memory_rows: usize,
@@ -1317,6 +1342,7 @@ fn validate_sha256_segment_continuations_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn word_copy_products_at_v1(
     argument: &WordMemoryPermutationArgumentV1,
     row_offset: usize,

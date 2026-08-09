@@ -28,6 +28,8 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(SoraFsReferenceValidators.IsAvailable(new FakeNativeBoundary()));
         Assert.False(SoraFsReferenceValidators.IsAvailable(
+            new FakeNativeBoundary { Abi = 19 }));
+        Assert.False(SoraFsReferenceValidators.IsAvailable(
             new FakeNativeBoundary { Abi = 20 }));
         Assert.False(SoraFsReferenceValidators.IsAvailable(
             new FakeNativeBoundary { Abi = SoraFsReferenceValidators.RequiredBridgeAbiVersion + 1 }));
@@ -48,6 +50,8 @@ public sealed class SoraFsReferenceValidatorsTests
         Assert.True(SoraFsReferenceValidators.IsAppealFinanceAvailable(
             new FakeNativeBoundary()));
         Assert.False(SoraFsReferenceValidators.IsAppealFinanceAvailable(
+            new FakeNativeBoundary { Abi = 19 }));
+        Assert.False(SoraFsReferenceValidators.IsAppealFinanceAvailable(
             new FakeNativeBoundary { Abi = 20 }));
         Assert.False(SoraFsReferenceValidators.IsAppealFinanceAvailable(
             new FakeNativeBoundary { Abi = SoraFsReferenceValidators.RequiredBridgeAbiVersion + 1 }));
@@ -66,6 +70,8 @@ public sealed class SoraFsReferenceValidatorsTests
         Assert.True(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
             new FakeNativeBoundary()));
         Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
+            new FakeNativeBoundary { Abi = 19 }));
+        Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
             new FakeNativeBoundary { Abi = 20 }));
         Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
             new FakeNativeBoundary { Abi = SoraFsReferenceValidators.RequiredBridgeAbiVersion + 1 }));
@@ -83,6 +89,8 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(SoraFsReferenceValidators.IsFixtureBundleAvailable(
             new FakeNativeBoundary()));
+        Assert.False(SoraFsReferenceValidators.IsFixtureBundleAvailable(
+            new FakeNativeBoundary { Abi = 19 }));
         Assert.False(SoraFsReferenceValidators.IsFixtureBundleAvailable(
             new FakeNativeBoundary { Abi = 20 }));
         Assert.False(SoraFsReferenceValidators.IsFixtureBundleAvailable(
@@ -714,7 +722,7 @@ public sealed class SoraFsReferenceValidatorsTests
     }
 
     [Fact]
-    public void LinkedFixtureBundleMatchesNativeReferenceWhenAvailable()
+    public void LinkedFixtureBundleMatchesNativeReference()
     {
         Assert.True(
             SoraFsReferenceValidators.IsFixtureBundleAvailable(),
@@ -759,7 +767,7 @@ public sealed class SoraFsReferenceValidatorsTests
     }
 
     [Fact]
-    public void OrderbookAndPdpFixturesMatchExactNativeReferenceOutcomesWhenAvailable()
+    public void OrderbookAndPdpFixturesMatchExactNativeReferenceOutcomes()
     {
         Assert.True(
             SoraFsReferenceValidators.IsOrderbookPdpAvailable(),
@@ -986,7 +994,7 @@ public sealed class SoraFsReferenceValidatorsTests
     }
 
     [Fact]
-    public void OrderbookBuildersProduceAcceptedPayloadsWhenNativeAvailable()
+    public void OrderbookBuildersProduceAcceptedPayloads()
     {
         Assert.True(
             SoraFsReferenceValidators.IsOrderbookPdpAvailable(),
@@ -1066,7 +1074,7 @@ public sealed class SoraFsReferenceValidatorsTests
     }
 
     [Fact]
-    public void GovernanceLogNodeMatchesModerationGoldenByteForByteWhenAvailable()
+    public void GovernanceLogNodeMatchesModerationGoldenByteForByte()
     {
         Assert.True(
             SoraFsReferenceValidators.IsAvailable(),
@@ -1101,7 +1109,7 @@ public sealed class SoraFsReferenceValidatorsTests
     }
 
     [Fact]
-    public void GovernanceFixturesAndNegativeVectorsMatchNativeReferenceWhenAvailable()
+    public void GovernanceFixturesAndNegativeVectorsMatchNativeReference()
     {
         Assert.True(
             SoraFsReferenceValidators.IsAvailable(),

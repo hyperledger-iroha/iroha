@@ -175,6 +175,7 @@ final class CancelAssetLockV1Tests: XCTestCase {
     }
 
     func testJSONDecoderRejectsAliasesExtrasDuplicatesAndMalformedIds() throws {
+        let rawEscrowHash = String(Self.merchantEscrowId.dropFirst(5).prefix(64))
         let invalidJSON = [
             """
             {"CancelAssetLock":{"escrow_id":"\(Self.merchantEscrowId)","expectedRemainingAmount":"1"}}
@@ -194,6 +195,12 @@ final class CancelAssetLockV1Tests: XCTestCase {
             """
             {"CancelAssetLock":{"escrow_id":["\(Self.merchantEscrowId)"],"expected_remaining_amount":"1"}}
             """,
+            """
+            {"CancelAssetLock":{"escrow_id":{"hash":"\(rawEscrowHash)"},"expected_remaining_amount":"1"}}
+            """,
+            """
+            {"CancelAssetLock":{"escrow_id":"\(rawEscrowHash)","expected_remaining_amount":"1"}}
+            """,
         ]
         for json in invalidJSON {
             let payload = try NoritoJSON(data: Data(json.utf8))
@@ -212,6 +219,33 @@ final class CancelAssetLockV1Tests: XCTestCase {
             try CancelAssetLockInstructionV1.decodeBareJSON(retiredBareArray),
             "accepted the retired one-element EscrowId array"
         )
+    }
+
+    func testBareJSONRejectsInvalidUTF8AndUnpairedSurrogates() throws {
+        let invalidUTF8 = Data(
+            Array("{\"escrow_id\":\"".utf8)
+                + [0xFF]
+                + Array("\",\"expected_remaining_amount\":\"1\"}".utf8)
+        )
+        let unpairedSurrogates = [
+            """
+            {"escrow_id":"\\uD800","expected_remaining_amount":"1"}
+            """,
+            """
+            {"escrow_id":"\\uDC00","expected_remaining_amount":"1"}
+            """,
+        ]
+
+        XCTAssertThrowsError(
+            try CancelAssetLockInstructionV1.decodeBareJSON(invalidUTF8),
+            "accepted invalid UTF-8"
+        )
+        for json in unpairedSurrogates {
+            XCTAssertThrowsError(
+                try CancelAssetLockInstructionV1.decodeBareJSON(Data(json.utf8)),
+                "accepted an unpaired UTF-16 surrogate escape: \(json)"
+            )
+        }
     }
 
     func testNoritoDecoderRejectsLegacyZeroNoncanonicalAndTrailingForms() throws {

@@ -111,8 +111,8 @@ class ToriiWebSocketClient private constructor(builder: Builder) {
         override fun onOpen(socket: TransportWebSocket) { delegate.onOpen(session) }
         override fun onText(socket: TransportWebSocket, data: CharSequence, last: Boolean) { delegate.onText(session, data, last) }
         override fun onBinary(socket: TransportWebSocket, data: ByteBuffer, last: Boolean) { delegate.onBinary(session, data, last) }
-        override fun onPing(socket: TransportWebSocket, message: ByteBuffer) { delegate.onPing(session, message) }
-        override fun onPong(socket: TransportWebSocket, message: ByteBuffer) { delegate.onPong(session, message) }
+        override fun onPing(socket: TransportWebSocket, data: ByteBuffer) { delegate.onPing(session, data) }
+        override fun onPong(socket: TransportWebSocket, data: ByteBuffer) { delegate.onPong(session, data) }
         override fun onError(socket: TransportWebSocket, error: Throwable) { delegate.onError(session, error); session.fail(error) }
         override fun onClose(socket: TransportWebSocket, statusCode: Int, reason: String) { delegate.onClose(session, statusCode, reason); session.close(statusCode, reason) }
     }

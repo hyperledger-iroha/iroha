@@ -291,7 +291,7 @@ where
     }
 }
 
-/// Value seed that delegates to `JsonDeserialize` via the in-memory DOM.
+/// Value seed that delegates directly to `JsonDeserialize`.
 #[derive(Debug, Default)]
 pub struct ValueFromJson<T>(PhantomData<T>);
 

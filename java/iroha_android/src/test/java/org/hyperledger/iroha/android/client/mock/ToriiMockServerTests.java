@@ -22,11 +22,6 @@ public final class ToriiMockServerTests {
   private ToriiMockServerTests() {}
 
   public static void main(final String[] args) throws Exception {
-    if (!ToriiMockServer.isSupported()) {
-      System.out.println(
-          "[IrohaAndroid] Torii mock server tests skipped (mock server cannot bind in this environment).");
-      return;
-    }
     recordsSubmitRequests();
     servesQueuedStatusResponsesPerHash();
     servesEventStreams();
@@ -34,13 +29,7 @@ public final class ToriiMockServerTests {
   }
 
   private static void recordsSubmitRequests() throws Exception {
-    final var maybeServer = ToriiMockServer.tryCreate();
-    if (maybeServer.isEmpty()) {
-      System.out.println(
-          "[IrohaAndroid] Torii mock server tests skipped (mock server unavailable).");
-      return;
-    }
-    try (ToriiMockServer server = maybeServer.get()) {
+    try (ToriiMockServer server = ToriiMockServer.create()) {
       final URI submitUri = server.baseUri().resolve("/v1/pipeline/transactions");
       server.enqueueSubmitResponse(
           ToriiMockServer.MockResponse.bytes(
@@ -69,13 +58,7 @@ public final class ToriiMockServerTests {
   }
 
   private static void servesQueuedStatusResponsesPerHash() throws Exception {
-    final var maybeServer = ToriiMockServer.tryCreate();
-    if (maybeServer.isEmpty()) {
-      System.out.println(
-          "[IrohaAndroid] Torii mock server tests skipped (mock server unavailable).");
-      return;
-    }
-    try (ToriiMockServer server = maybeServer.get()) {
+    try (ToriiMockServer server = ToriiMockServer.create()) {
       final String hashHex =
           "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
       final URI statusUri =
@@ -105,13 +88,7 @@ public final class ToriiMockServerTests {
   }
 
   private static void servesEventStreams() throws Exception {
-    final var maybeServer = ToriiMockServer.tryCreate();
-    if (maybeServer.isEmpty()) {
-      System.out.println(
-          "[IrohaAndroid] Torii mock server tests skipped (mock server unavailable).");
-      return;
-    }
-    try (ToriiMockServer server = maybeServer.get()) {
+    try (ToriiMockServer server = ToriiMockServer.create()) {
       server.enqueueEventStream(
           ToriiMockServer.MockEventStream.builder()
               .addFrame(

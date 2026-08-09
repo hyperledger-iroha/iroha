@@ -339,10 +339,8 @@ final class ToriiAssetTransferTests: XCTestCase {
         )
         XCTAssertFalse(decoded.submitted)
         XCTAssertEqual(decoded.intent.assetBalanceScope, "dataspace:10")
-        XCTAssertEqual(decoded.signingPayload?.algorithm, "ed25519")
-        XCTAssertEqual(decoded.signingPayload?.payloadBase64, hashBytes().base64EncodedString())
-        XCTAssertEqual(decoded.placeholderTransactionHashHex, hashHex(0x22))
-        XCTAssertEqual(decoded.placeholderEntrypointHashHex, hashHex(0x22))
+        XCTAssertEqual(decoded.transactionPayloadB64, canonicalAssetPayload().base64EncodedString())
+        XCTAssertEqual(decoded.signingMessageB64, hashBytes().base64EncodedString())
         XCTAssertNil(decoded.transactionHashHex)
 
         var topLevelUnknown = valid
@@ -366,9 +364,10 @@ final class ToriiAssetTransferTests: XCTestCase {
         )
 
         var legacySignature = valid
-        var signing = legacySignature["signing_payload"] as! [String: Any]
-        signing["signature_b64"] = "AQ=="
-        legacySignature["signing_payload"] = signing
+        legacySignature["signing_payload"] = [
+            "payload_base64": hashBytes().base64EncodedString(),
+            "algorithm": "ed25519",
+        ]
         XCTAssertThrowsError(
             try JSONDecoder().decode(
                 ToriiAssetTransferResponse.self,
@@ -377,7 +376,9 @@ final class ToriiAssetTransferTests: XCTestCase {
         )
 
         var uppercaseHash = valid
-        uppercaseHash["placeholder_transaction_hash_hex"] = hashHex(0xAB).uppercased()
+        var uppercaseReceipt = uppercaseHash["receipt"] as! [String: Any]
+        uppercaseReceipt["payload_signing_hash_hex"] = hashHex(hashBytes()).uppercased()
+        uppercaseHash["receipt"] = uppercaseReceipt
         XCTAssertThrowsError(
             try JSONDecoder().decode(
                 ToriiAssetTransferResponse.self,
@@ -385,14 +386,12 @@ final class ToriiAssetTransferTests: XCTestCase {
             )
         )
 
-        var wrongAlgorithm = valid
-        signing = wrongAlgorithm["signing_payload"] as! [String: Any]
-        signing["algorithm"] = "secp256k1"
-        wrongAlgorithm["signing_payload"] = signing
+        var retiredScaffold = valid
+        retiredScaffold["transaction_scaffold_base64"] = "AQ=="
         XCTAssertThrowsError(
             try JSONDecoder().decode(
                 ToriiAssetTransferResponse.self,
-                from: try JSONSerialization.data(withJSONObject: wrongAlgorithm)
+                from: try JSONSerialization.data(withJSONObject: retiredScaffold)
             )
         )
     }
@@ -401,23 +400,13 @@ final class ToriiAssetTransferTests: XCTestCase {
         let mutations: [(inout [String: Any]) -> Void] = [
             { $0["ok"] = false },
             { $0["submitted"] = true },
-            { $0.removeValue(forKey: "signing_payload") },
-            { $0.removeValue(forKey: "transaction_scaffold_base64") },
+            { $0.removeValue(forKey: "signing_message_b64") },
+            { $0.removeValue(forKey: "transaction_payload_b64") },
             { $0["transaction_hash_hex"] = self.hashHex(0x33) },
             { $0["entrypoint_hash_hex"] = self.hashHex(0x33) },
-            { $0["placeholder_entrypoint_hash_hex"] = self.hashHex(0x23) },
             {
-                $0["placeholder_transaction_hash_hex"] = String(repeating: "0", count: 64)
-                $0["placeholder_entrypoint_hash_hex"] = String(repeating: "0", count: 64)
-                var receipt = $0["receipt"] as! [String: Any]
-                receipt["placeholder_transaction_hash_hex"] = String(repeating: "0", count: 64)
-                receipt["placeholder_entrypoint_hash_hex"] = String(repeating: "0", count: 64)
-                $0["receipt"] = receipt
-            },
-            {
-                var payload = $0["signing_payload"] as! [String: Any]
-                payload["payload_base64"] = Data(repeating: 0x12, count: 32).base64EncodedString()
-                $0["signing_payload"] = payload
+                $0["signing_message_b64"] = Data(repeating: 0x12, count: 32)
+                    .base64EncodedString()
             },
             {
                 var receipt = $0["receipt"] as! [String: Any]
@@ -437,11 +426,6 @@ final class ToriiAssetTransferTests: XCTestCase {
             {
                 var receipt = $0["receipt"] as! [String: Any]
                 receipt["payload_signing_hash_hex"] = self.hashHex(0x12)
-                $0["receipt"] = receipt
-            },
-            {
-                var receipt = $0["receipt"] as! [String: Any]
-                receipt["placeholder_transaction_hash_hex"] = self.hashHex(0x23)
                 $0["receipt"] = receipt
             },
             {
@@ -560,8 +544,8 @@ final class ToriiAssetTransferTests: XCTestCase {
                 applied,
                 request: request(),
                 preparedIntent: prepared.intent,
-                signingPayload: try XCTUnwrap(prepared.signingPayload),
-                payloadSigningHashHex: hashHex(0x11),
+                signingMessage: hashBytes(),
+                payloadSigningHashHex: hashHex(hashBytes()),
                 finalization: DetachedTransactionFinalization(
                     payloadSigningHash: hashBytes(),
                     transactionHash: Data(repeating: 0x33, count: 32),
@@ -589,67 +573,77 @@ final class ToriiAssetTransferTests: XCTestCase {
         XCTAssertThrowsError(try decodeResponse(zeroHeight))
     }
 
-    func testPreparedScaffoldValidatorRejectsEverySignedFieldSubstitution() throws {
-        let response = try decodeResponse(responseObject())
-        let exact = inspection()
+    func testCanonicalPayloadValidatorRejectsEverySignedFieldSubstitution() throws {
+        let exactBytes = canonicalAssetPayload()
+        let exact = try ToriiCanonicalTransactionDraft.decode(
+            transactionPayloadB64: exactBytes.base64EncodedString(),
+            signingMessageB64: IrohaHash.hash(exactBytes).base64EncodedString(),
+            context: "asset transfer test"
+        )
         XCTAssertNoThrow(
-            try ToriiAssetTransferDraft.validatePreparedScaffoldBindings(
-                exact,
+            try ToriiAssetTransferDraft.validateTransactionPayloadBindings(
+                exact.payload,
                 request: request(),
-                response: response,
                 expectedNetworkId: TestNetworkIds.canonical
             )
         )
 
-        let hostile: [DetachedTransactionScaffoldInspection] = [
-            inspection(payloadSigningHash: Data(repeating: 0x12, count: 32)),
-            inspection(entrypointHash: Data(repeating: 0x23, count: 32)),
-            inspection(authority: Self.destination),
-            inspection(networkId: TestNetworkIds.other),
-            inspection(creationTimeMs: 1_700_000_000_001),
-            inspection(timeToLiveMs: nil),
-            inspection(assetDefinitionId: Self.otherAssetDefinitionId),
-            inspection(assetScope: .global),
-            inspection(sourceAssetId: "hostile-source"),
-            inspection(sourceAccountId: Self.destination),
-            inspection(destinationAccountId: Self.authority),
-            inspection(amount: "2"),
-            inspection(metadata: [
-                "memo": .string("changed"),
-            ]),
-            inspection(metadata: [
-                "memo": .signedInteger(1),
-            ]),
-            inspection(metadata: [
-                "memo": .string("invoice 42"),
-                "unexpected": .unsignedInteger(1),
-            ]),
-            inspection(executable: .contractCall(
-                DetachedContractCallInspection(
-                    contractAddress: "contract",
-                    expectedCodeHash: String(repeating: "00", count: 32),
-                    entrypoint: "pay",
-                    arguments: nil
-                )
-            )),
+        let hostile: [(ToriiAssetTransferRequest, String)] = [
+            (request(authority: Self.destination), "authority"),
+            (request(creationTimeMs: 1_700_000_000_001), "creation time"),
+            (request(transactionTtlMs: 120_001), "ttl"),
+            (request(assetDefinitionId: Self.otherAssetDefinitionId), "asset"),
+            (request(scope: "global"), "scope"),
+            (request(destination: Self.authority), "destination"),
+            (request(amount: "2"), "amount"),
+            (request(memo: "changed"), "metadata"),
+            (request(feePayment: .authority(chargeLimits: [], gasLimit: nil)), "fee"),
         ]
-        for (index, candidate) in hostile.enumerated() {
+        for (candidateRequest, label) in hostile {
+            let candidateBytes = canonicalAssetPayload(candidateRequest)
+            let candidate = try ToriiCanonicalTransactionDraft.decode(
+                transactionPayloadB64: candidateBytes.base64EncodedString(),
+                signingMessageB64: IrohaHash.hash(candidateBytes).base64EncodedString(),
+                context: "hostile asset transfer test"
+            )
             XCTAssertThrowsError(
-                try ToriiAssetTransferDraft.validatePreparedScaffoldBindings(
-                    candidate,
+                try ToriiAssetTransferDraft.validateTransactionPayloadBindings(
+                    candidate.payload,
                     request: request(),
-                    response: response,
                     expectedNetworkId: TestNetworkIds.canonical
                 ),
-                "scaffold substitution \(index) must fail"
+                "\(label) substitution must fail"
             )
         }
+        let wrongNetworkBytes = canonicalAssetPayload(networkId: TestNetworkIds.other)
+        let wrongNetwork = try ToriiCanonicalTransactionDraft.decode(
+            transactionPayloadB64: wrongNetworkBytes.base64EncodedString(),
+            signingMessageB64: IrohaHash.hash(wrongNetworkBytes).base64EncodedString(),
+            context: "wrong-network asset transfer test"
+        )
+        XCTAssertThrowsError(
+            try ToriiAssetTransferDraft.validateTransactionPayloadBindings(
+                wrongNetwork.payload,
+                request: request(),
+                expectedNetworkId: TestNetworkIds.canonical
+            )
+        )
+
+        var trailing = exactBytes
+        trailing.append(0)
+        XCTAssertThrowsError(
+            try ToriiCanonicalTransactionDraft.decode(
+                transactionPayloadB64: trailing.base64EncodedString(),
+                signingMessageB64: IrohaHash.hash(trailing).base64EncodedString(),
+                context: "trailing asset transfer test"
+            )
+        )
     }
 
     func testSubmittedAndFinalityBindingsRejectSignatureHashAndStatusSubstitution() throws {
         let prepared = try decodeResponse(responseObject())
         let submitted = try decodeResponse(submittedResponseObject())
-        let signingPayload = try XCTUnwrap(prepared.signingPayload)
+        let signingMessage = hashBytes()
         let finalization = DetachedTransactionFinalization(
             payloadSigningHash: hashBytes(),
             transactionHash: Data(repeating: 0x33, count: 32),
@@ -660,8 +654,8 @@ final class ToriiAssetTransferTests: XCTestCase {
                 submitted,
                 request: request(),
                 preparedIntent: prepared.intent,
-                signingPayload: signingPayload,
-                payloadSigningHashHex: hashHex(0x11),
+                signingMessage: signingMessage,
+                payloadSigningHashHex: hashHex(hashBytes()),
                 finalization: finalization
             )
         )
@@ -689,8 +683,8 @@ final class ToriiAssetTransferTests: XCTestCase {
                     submitted,
                     request: request(),
                     preparedIntent: prepared.intent,
-                    signingPayload: signingPayload,
-                    payloadSigningHashHex: hashHex(0x11),
+                    signingMessage: signingMessage,
+                    payloadSigningHashHex: hashHex(hashBytes()),
                     finalization: finalization
                 )
             )
@@ -700,7 +694,7 @@ final class ToriiAssetTransferTests: XCTestCase {
                 submitted,
                 request: request(),
                 preparedIntent: prepared.intent,
-                signingPayload: signingPayload,
+                signingMessage: signingMessage,
                 payloadSigningHashHex: hashHex(0x12),
                 finalization: finalization
             )
@@ -719,8 +713,8 @@ final class ToriiAssetTransferTests: XCTestCase {
                 changedIntentResponse,
                 request: request(),
                 preparedIntent: prepared.intent,
-                signingPayload: signingPayload,
-                payloadSigningHashHex: hashHex(0x11),
+                signingMessage: signingMessage,
+                payloadSigningHashHex: hashHex(hashBytes()),
                 finalization: finalization
             )
         )
@@ -735,8 +729,8 @@ final class ToriiAssetTransferTests: XCTestCase {
                 changedReceiptResponse,
                 request: request(),
                 preparedIntent: prepared.intent,
-                signingPayload: signingPayload,
-                payloadSigningHashHex: hashHex(0x11),
+                signingMessage: signingMessage,
+                payloadSigningHashHex: hashHex(hashBytes()),
                 finalization: finalization
             )
         )
@@ -854,8 +848,47 @@ final class ToriiAssetTransferTests: XCTestCase {
         }
     }
 
+    func testExactPayloadFinalizationUsesCanonicalSignedTransactionLayout() throws {
+        let transactionPayload = canonicalAssetPayload()
+        let signingMessage = IrohaHash.hash(transactionPayload)
+        let signature = try Self.authorityKey.sign(signingMessage)
+        let finalized = try ToriiCanonicalTransactionDraft.finalize(
+            transactionPayload: transactionPayload,
+            publicKey: Self.authorityKey.publicKey,
+            signature: signature
+        )
+
+        var signatureBytes = CompactNoritoWriter()
+        signatureBytes.writeUInt64LE(UInt64(signature.count))
+        for byte in signature {
+            signatureBytes.writeField(Data([byte]))
+        }
+        var signatureSet = CompactNoritoWriter()
+        signatureSet.writeField(signatureBytes.data)
+        var signed = CompactNoritoWriter()
+        signed.writeField(signatureSet.data)
+        signed.writeField(transactionPayload)
+        signed.writeField(Data([0]))
+        var expected = Data([1])
+        expected.append(signed.data)
+
+        XCTAssertEqual(finalized.signedTransaction, expected)
+        XCTAssertEqual(finalized.finalization.payloadSigningHash, signingMessage)
+        XCTAssertEqual(
+            finalized.finalization.transactionHash,
+            CanonicalUnsignedTransactionTestSupport.transactionHash(for: transactionPayload)
+        )
+        XCTAssertEqual(
+            try ToriiCanonicalTransactionDraft.transactionPayload(
+                fromVersionedSignedTransaction: finalized.signedTransaction,
+                context: "asset finalization test"
+            ),
+            transactionPayload
+        )
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
-    func testNetworkBoundaryRejectsDuplicateKeysAndOversizedResponsesBeforeNativeInspection() async {
+    func testNetworkBoundaryRejectsDuplicateKeysAndOversizedResponsesBeforePayloadDecode() async {
         let now = 1_700_000_000_000 as UInt64
         let hostileResponses: [(headers: [String: String], body: Data)] = [
             (
@@ -980,7 +1013,7 @@ final class ToriiAssetTransferTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testTransportLossReturnsDurableUncertainSubmissionEvidence() async throws {
-        let fixture = try await makeNativeDraftFixture()
+        let fixture = try await makeDraftFixture()
         let evidence = try fixture.client.finalizeDetachedAssetTransfer(
             fixture.draft,
             signingKey: fixture.signingKey
@@ -1025,7 +1058,7 @@ final class ToriiAssetTransferTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testReplayConflictReconcilesOnlyTheExactAuthoritativeHash() async throws {
-        let fixture = try await makeNativeDraftFixture()
+        let fixture = try await makeDraftFixture()
         let evidence = try fixture.client.finalizeDetachedAssetTransfer(
             fixture.draft,
             signingKey: fixture.signingKey
@@ -1094,7 +1127,7 @@ final class ToriiAssetTransferTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testDefiniteBadRequestIsNotWrappedAsUncertainSubmission() async throws {
-        let fixture = try await makeNativeDraftFixture()
+        let fixture = try await makeDraftFixture()
         let evidence = try fixture.client.finalizeDetachedAssetTransfer(
             fixture.draft,
             signingKey: fixture.signingKey
@@ -1124,7 +1157,7 @@ final class ToriiAssetTransferTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testEvidenceCodableRejectsUnknownHashBase64RequestAndOverflowTampering() async throws {
-        let fixture = try await makeNativeDraftFixture()
+        let fixture = try await makeDraftFixture()
         let evidence = try fixture.client.finalizeDetachedAssetTransfer(
             fixture.draft,
             signingKey: fixture.signingKey
@@ -1179,7 +1212,7 @@ final class ToriiAssetTransferTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testRecoveryAfterCrashBeforePostReplaysOnlyExactPersistedEvidence() async throws {
-        let fixture = try await makeNativeDraftFixture()
+        let fixture = try await makeDraftFixture()
         let evidence = try fixture.client.finalizeDetachedAssetTransfer(
             fixture.draft,
             signingKey: fixture.signingKey
@@ -1265,7 +1298,7 @@ final class ToriiAssetTransferTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testRecoveryUsesAuthoritativeValidationTimeDespiteHostileLocalClock() async throws {
-        let fixture = try await makeNativeDraftFixture()
+        let fixture = try await makeDraftFixture()
         let evidence = try fixture.client.finalizeDetachedAssetTransfer(
             fixture.draft,
             signingKey: fixture.signingKey
@@ -1351,7 +1384,7 @@ final class ToriiAssetTransferTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testRecoveryOfAlreadyAppliedEvidenceNeverPosts() async throws {
-        let fixture = try await makeNativeDraftFixture()
+        let fixture = try await makeDraftFixture()
         let evidence = try fixture.client.finalizeDetachedAssetTransfer(
             fixture.draft,
             signingKey: fixture.signingKey
@@ -1382,7 +1415,7 @@ final class ToriiAssetTransferTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testRecoveryAcceptsIdempotentAppliedReplayAfterStatusRace() async throws {
-        let fixture = try await makeNativeDraftFixture()
+        let fixture = try await makeDraftFixture()
         let evidence = try fixture.client.finalizeDetachedAssetTransfer(
             fixture.draft,
             signingKey: fixture.signingKey
@@ -1456,7 +1489,7 @@ final class ToriiAssetTransferTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testRecoveryTreatsExactReplayConflictAsReconciliationSignal() async throws {
-        let fixture = try await makeNativeDraftFixture()
+        let fixture = try await makeDraftFixture()
         let evidence = try fixture.client.finalizeDetachedAssetTransfer(
             fixture.draft,
             signingKey: fixture.signingKey
@@ -1527,7 +1560,7 @@ final class ToriiAssetTransferTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testRecoveryPreservesEvidenceAcrossDefiniteReplayRejectionRace() async throws {
-        let fixture = try await makeNativeDraftFixture()
+        let fixture = try await makeDraftFixture()
         let evidence = try fixture.client.finalizeDetachedAssetTransfer(
             fixture.draft,
             signingKey: fixture.signingKey
@@ -1587,7 +1620,7 @@ final class ToriiAssetTransferTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testRecoveryExpiresAbsentEvidenceWithoutPosting() async throws {
-        let fixture = try await makeNativeDraftFixture()
+        let fixture = try await makeDraftFixture()
         let evidence = try fixture.client.finalizeDetachedAssetTransfer(
             fixture.draft,
             signingKey: fixture.signingKey
@@ -1627,6 +1660,8 @@ final class ToriiAssetTransferTests: XCTestCase {
     }
 
     private func responseObject() -> [String: Any] {
+        let transactionPayload = canonicalAssetPayload()
+        let signingMessage = IrohaHash.hash(transactionPayload)
         let intent: [String: Any] = [
             "chain_id": "asset-transfer-test",
             "authority": Self.authority,
@@ -1644,21 +1679,14 @@ final class ToriiAssetTransferTests: XCTestCase {
             "status": "pending_signature",
             "transport": "torii",
             "intent": intent,
-            "payload_signing_hash_hex": hashHex(0x11),
-            "placeholder_transaction_hash_hex": hashHex(0x22),
-            "placeholder_entrypoint_hash_hex": hashHex(0x22),
+            "payload_signing_hash_hex": hashHex(signingMessage),
         ]
         return [
             "ok": true,
             "submitted": false,
             "intent": intent,
-            "signing_payload": [
-                "payload_base64": hashBytes().base64EncodedString(),
-                "algorithm": "ed25519",
-            ],
-            "transaction_scaffold_base64": Data([1]).base64EncodedString(),
-            "placeholder_transaction_hash_hex": hashHex(0x22),
-            "placeholder_entrypoint_hash_hex": hashHex(0x22),
+            "transaction_payload_b64": transactionPayload.base64EncodedString(),
+            "signing_message_b64": signingMessage.base64EncodedString(),
             "receipt": receipt,
         ]
     }
@@ -1671,7 +1699,7 @@ final class ToriiAssetTransferTests: XCTestCase {
             "status": "submitted",
             "transport": "torii",
             "intent": intent,
-            "payload_signing_hash_hex": hashHex(0x11),
+            "payload_signing_hash_hex": hashHex(hashBytes()),
             "transaction_hash_hex": transactionHash,
             "entrypoint_hash_hex": transactionHash,
         ]
@@ -1790,48 +1818,6 @@ final class ToriiAssetTransferTests: XCTestCase {
         )
     }
 
-    private func inspection(
-        payloadSigningHash: Data? = nil,
-        entrypointHash: Data? = nil,
-        authority: String = ToriiAssetTransferTests.authority,
-        networkId: NetworkId = TestNetworkIds.canonical,
-        creationTimeMs: UInt64 = 1_700_000_000_000,
-        timeToLiveMs: UInt64? = 120_000,
-        metadata: [String: NativeBridgeJSONValue]? = nil,
-        assetDefinitionId: String = ToriiAssetTransferTests.assetDefinitionId,
-        assetScope: DetachedAssetScopeInspection = .dataspace(10),
-        sourceAssetId: String? = nil,
-        sourceAccountId: String = ToriiAssetTransferTests.authority,
-        destinationAccountId: String = ToriiAssetTransferTests.destination,
-        amount: String = "1.25",
-        executable: DetachedTransactionExecutableInspection? = nil
-    ) -> DetachedTransactionScaffoldInspection {
-        let sourceAssetId = sourceAssetId
-            ?? "\(Self.assetDefinitionId)#\(Self.authority)#dataspace:10"
-        let executable = executable ?? .assetTransfer(
-            DetachedAssetTransferInspection(
-                assetDefinitionId: assetDefinitionId,
-                assetScope: assetScope,
-                sourceAssetId: sourceAssetId,
-                sourceAccountId: sourceAccountId,
-                destinationAccountId: destinationAccountId,
-                amount: amount
-            )
-        )
-        return DetachedTransactionScaffoldInspection(
-            payloadSigningHash: payloadSigningHash ?? hashBytes(),
-            authority: authority,
-            networkId: networkId,
-            creationTimeMs: creationTimeMs,
-            timeToLiveMs: timeToLiveMs,
-            metadata: metadata ?? [
-                "memo": .string("invoice 42"),
-            ],
-            entrypointHash: entrypointHash ?? Data(repeating: 0x22, count: 32),
-            executable: executable
-        )
-    }
-
     private func pipelineStatusObject() -> [String: Any] {
         pipelineStatusObject(hash: hashHex(0x33))
     }
@@ -1888,7 +1874,7 @@ final class ToriiAssetTransferTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    private func makeNativeDraftFixture(
+    private func makeDraftFixture(
         now: UInt64 = 1_700_000_000_000,
         amount: String = "1.25"
     ) async throws -> (
@@ -1896,41 +1882,17 @@ final class ToriiAssetTransferTests: XCTestCase {
         draft: ToriiAssetTransferDraft,
         signingKey: SigningKey
     ) {
-        try requireNativeTestCapability(
-            NoritoNativeBridge.shared.isAvailable &&
-                NoritoNativeBridge.shared.isDetachedTransactionVerificationAvailable,
-            "detached transaction native bridge is unavailable"
-        )
         let request = self.request(
             amount: amount,
             memo: nil,
             feePayment: .authority(chargeLimits: [], gasLimit: nil),
             creationTimeMs: now
         )
-        let transfer = TransferRequest(
-            networkId: TestNetworkIds.canonical,
-            authority: Self.authority,
-            assetDefinitionId: "\(Self.assetDefinitionId)#dataspace:10",
-            quantity: amount,
-            destination: Self.destination,
-            description: nil,
-            feePayment: request.feePayment,
-            ttlMs: request.transactionTtlMs,
-            nonce: nil
+        let transactionPayload = try CanonicalUnsignedTransactionTestSupport.assetPayload(
+            request: request,
+            networkId: TestNetworkIds.canonical
         )
-        let builder = IrohaSDK(
-            baseURL: URL(string: "https://fixture.invalid")!,
-            creationTimeProvider: { now }
-        )
-        let envelope = try builder.buildSignedTransfer(
-            transfer: transfer,
-            keypair: Self.authorityKey
-        )
-        let inspection = try NoritoNativeBridge.shared.inspectDetachedTransactionScaffold(
-            envelope.norito
-        )
-        let payloadHashHex = hashHex(inspection.payloadSigningHash)
-        let placeholderHashHex = hashHex(inspection.entrypointHash)
+        let signingMessage = IrohaHash.hash(transactionPayload)
         let intent: [String: Any] = [
             "chain_id": "asset-transfer-test",
             "authority": request.authority,
@@ -1947,21 +1909,14 @@ final class ToriiAssetTransferTests: XCTestCase {
             "status": "pending_signature",
             "transport": "torii",
             "intent": intent,
-            "payload_signing_hash_hex": payloadHashHex,
-            "placeholder_transaction_hash_hex": placeholderHashHex,
-            "placeholder_entrypoint_hash_hex": placeholderHashHex,
+            "payload_signing_hash_hex": hashHex(signingMessage),
         ]
         let prepared: [String: Any] = [
             "ok": true,
             "submitted": false,
             "intent": intent,
-            "signing_payload": [
-                "payload_base64": inspection.payloadSigningHash.base64EncodedString(),
-                "algorithm": "ed25519",
-            ],
-            "transaction_scaffold_base64": envelope.norito.base64EncodedString(),
-            "placeholder_transaction_hash_hex": placeholderHashHex,
-            "placeholder_entrypoint_hash_hex": placeholderHashHex,
+            "transaction_payload_b64": transactionPayload.base64EncodedString(),
+            "signing_message_b64": signingMessage.base64EncodedString(),
             "receipt": receipt,
         ]
         let preparedData = try JSONSerialization.data(
@@ -1988,8 +1943,18 @@ final class ToriiAssetTransferTests: XCTestCase {
         return (client, draft, signingKey)
     }
 
+    private func canonicalAssetPayload(
+        _ requestOverride: ToriiAssetTransferRequest? = nil,
+        networkId: NetworkId = TestNetworkIds.canonical
+    ) -> Data {
+        try! CanonicalUnsignedTransactionTestSupport.assetPayload(
+            request: requestOverride ?? request(),
+            networkId: networkId
+        )
+    }
+
     private func hashBytes() -> Data {
-        Data(repeating: 0x11, count: 32)
+        IrohaHash.hash(canonicalAssetPayload())
     }
 
     private func feePaymentObject(_ intent: FeePaymentIntent) -> [String: Any] {

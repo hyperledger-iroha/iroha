@@ -371,7 +371,7 @@ impl ProducerContinuationHandoffToken {
     }
 
     /// Physical source class frozen before the source can retire.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) const fn source_class(self) -> ProducerContinuationSourceClass {
         self.source_class
     }
@@ -3046,9 +3046,11 @@ mod tests {
             .collect::<Vec<_>>();
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         let context = wire::HeightContext {
-            network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
-                BlockHeader,
-            >::from_untyped_unchecked(Hash::prehashed([0x95; Hash::LENGTH]))),
+            network_id: NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                    [0x95; Hash::LENGTH],
+                )),
+            ),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 7,
             epoch: 1,
@@ -3101,10 +3103,11 @@ mod tests {
                 )),
                 payload_hash: Hash::new(b"predecessor payload"),
             },
-            execution_commitment: wire::ExecutionCommitment::without_topups(
+            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"predecessor parent state"),
                 Hash::new(b"predecessor post state"),
                 Hash::new(b"predecessor ordinary writes"),
+                1,
                 Hash::new(b"predecessor wire"),
             ),
             signers: vec![0, 1, 2],
@@ -3815,7 +3818,7 @@ mod tests {
         assert!(!replay.inserted());
         assert_eq!(replay.token(), &terminal_target);
         reopened
-            .mark_ingress(&terminal_target)
+            .mark_ingress(replay.token())
             .expect("replay target ingress after restart");
         let runtime_owner = LeaderWireRuntimeOwner::new(
             terminal_target.identity_hash(),
@@ -3823,7 +3826,7 @@ mod tests {
         )
         .expect("exact runtime owner");
         let runtime = reopened
-            .mark_runtime(&terminal_target, runtime_owner)
+            .mark_runtime(replay.token(), runtime_owner)
             .expect("rebind exact runtime owner after restart");
         let producer_terminal = matching_terminal(&context, runtime_owner, &terminal_target);
         reopened
@@ -4028,7 +4031,7 @@ mod tests {
         assert_eq!(replay.token(), &token);
         reopened.mark_ingress(&token).expect("replay exact ingress");
         let runtime = reopened
-            .mark_runtime(&token, runtime_owner)
+            .mark_runtime(replay.token(), runtime_owner)
             .expect("rebind exact runtime owner");
         reopened
             .mark_producer_terminal(&runtime, matching_terminal(&context, runtime_owner, &token))

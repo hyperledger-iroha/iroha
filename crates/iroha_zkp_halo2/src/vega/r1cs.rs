@@ -103,12 +103,6 @@ impl SparseMatrix {
         )
     }
 
-    pub(super) fn row_is_empty(&self, row: usize) -> bool {
-        self.row_offsets
-            .get(row..=row + 1)
-            .is_none_or(|bounds| bounds[0] == bounds[1])
-    }
-
     pub(super) fn multiply(&self, vector: &[Scalar]) -> Result<Vec<Scalar>, R1csError> {
         if vector.len() != self.columns {
             return Err(R1csError::InvalidDimension);

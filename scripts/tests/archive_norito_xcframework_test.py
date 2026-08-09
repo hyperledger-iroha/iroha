@@ -25,7 +25,7 @@ VALIDATOR = ROOT / "scripts/validate_norito_bridge_xcframework.py"
 SOURCE_DATE_EPOCH = "1700000001"
 NORMALIZED_ZIP_TIME = (2023, 11, 14, 22, 13, 20)
 KNOWN_FIXTURE_ARCHIVE_SHA256 = (
-    "dafcc541c89e0e0d1460f5ca8dbe3582fc40266d6fc084975987d2a1ef09e809"
+    "a9c757397511f0d4bcadd4f26a9cdb17a4568d6d596c57507e14289c65ebb66a"
 )
 SLICE_METADATA = {
     "ios-arm64": ("ios", ["arm64"], None),
@@ -34,7 +34,7 @@ SLICE_METADATA = {
         ["arm64", "x86_64"],
         "simulator",
     ),
-    "macos-arm64": ("macos", ["arm64"], None),
+    "macos-arm64_x86_64": ("macos", ["arm64", "x86_64"], None),
 }
 
 
@@ -101,7 +101,7 @@ class ArchiveNoritoXcframeworkTests(unittest.TestCase):
         hashes: dict[str, str] = {}
         self.framework.mkdir()
         for identifier, (platform, architectures, variant) in SLICE_METADATA.items():
-            binary = f"native:{identifier}:abi21".encode()
+            binary = f"native:{identifier}:abi22".encode()
             slice_root = self.framework / identifier
             headers = slice_root / "Headers"
             headers.mkdir(parents=True)

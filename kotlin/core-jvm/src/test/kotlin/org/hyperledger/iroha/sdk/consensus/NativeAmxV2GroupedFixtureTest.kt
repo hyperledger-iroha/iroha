@@ -14,6 +14,7 @@ import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import org.hyperledger.iroha.sdk.core.util.HashLiteral
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import kotlin.test.Test
@@ -112,8 +113,12 @@ class NativeAmxV2GroupedFixtureTest {
                     "coherent_stale_descriptor_hash",
                     "coherent_stale_proposal_hash",
                     "coherent_stale_settlement_hash",
+                    "coherent_duplicate_validator_set",
+                    "coherent_over_quorum_requirement",
                     "manifest_leaf_hash_tampering",
                     "non_canonical_validator_peer_id",
+                    "execution_commitment_merge_carrier_wrong_version",
+                    "execution_commitment_missing_merge_carrier_field",
                 ),
             ),
         )
@@ -243,6 +248,16 @@ class NativeAmxV2GroupedFixtureTest {
         val execution = evidence.objectValue("execution_commitment")
         val artifacts = evidence.arrayValue("manifest_artifacts")
         require(execution.int("native_amx_application_manifest_version") == 1)
+        require(execution.containsKey("merge_carrier"))
+        val rawMergeCarrier = execution.getValue("merge_carrier")
+        require(rawMergeCarrier is JsonObject)
+        val mergeCarrier = rawMergeCarrier.jsonObject
+        require(mergeCarrier.keys == setOf("version", "entry_hash"))
+        val mergeCarrierVersion = mergeCarrier.getValue("version").jsonPrimitive
+        require(!mergeCarrierVersion.isString && mergeCarrierVersion.int == 1)
+        val mergeCarrierEntryHash = mergeCarrier.getValue("entry_hash").jsonPrimitive
+        require(mergeCarrierEntryHash.isString)
+        NativeAmxV2.ConsensusHash(mergeCarrierEntryHash.content)
         val manifestCount = execution.int("native_amx_application_manifest_count")
         require(
             manifestCount == artifacts.size && artifacts.size == 1,
@@ -266,6 +281,7 @@ class NativeAmxV2GroupedFixtureTest {
             leaf.getValue("executed_block_wire_hash") ==
                 execution.getValue("executed_block_wire_hash"),
         )
+        require(execution.getValue("executed_block_wire_len").jsonPrimitive.long == 49L)
         require(leaf.int("predecessor_height") + 1 == leaf.int("participant_height"))
         val active = evidence.arrayValue("active_lane_incarnations").single().jsonObject
         require(active.getValue("lane_id") == leaf.getValue("lane_id"))

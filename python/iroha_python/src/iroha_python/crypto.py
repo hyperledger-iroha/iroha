@@ -120,10 +120,10 @@ __all__ = [
     "BLS_SMALL_ALGORITHM",
     "SM2_ALGORITHM",
     "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION",
-    "PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1",
     "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES",
     "PRIVACY_EXACT12_CAPABILITY_MANIFEST_ARCHIVE_MAX_BYTES_V1",
     "PRIVACY_EXACT12_CAPABILITY_MANIFEST_VALIDATION_STATUS_V1",
+    "PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1",
     "SUPPORTED_CRYPTO_ALGORITHMS",
     "ED25519_PRIVATE_KEY_LENGTH",
     "ED25519_PUBLIC_KEY_LENGTH",
@@ -1927,10 +1927,15 @@ def _privacy_output_archive(module: object, operation: str, result: object) -> b
     archive = view.tobytes()
     if not archive:
         raise RuntimeError(f"native {operation} returned empty output")
-    validation_status = _invoke_privacy_compiled_profile_catalog_validator(module, archive)
-    if validation_status != PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1["VALID"]:
+    validation_status = _invoke_privacy_compiled_profile_catalog_validator(
+        module, archive
+    )
+    if (
+        validation_status
+        != PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1["VALID"]
+    ):
         raise RuntimeError(
-            f"native {operation} returned an invalid local compiled-profile catalog archive"
+            f"native {operation} returned an invalid typed privacy compiled-profile catalog"
         )
     return archive
 
@@ -1955,7 +1960,9 @@ def _clear_privacy_native_output(result: object) -> None:
 
 
 _PRIVACY_BRIDGE_ABI_VERSION_METHOD: Final[str] = "privacy_bridge_abi_version"
-_PRIVACY_COMPILED_PROFILE_CATALOG_METHOD: Final[str] = "privacy_compiled_profile_catalog_v1"
+_PRIVACY_COMPILED_PROFILE_CATALOG_METHOD: Final[str] = (
+    "privacy_compiled_profile_catalog_v1"
+)
 _PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATOR_METHOD: Final[str] = (
     "privacy_validate_compiled_profile_catalog_v1"
 )
@@ -1996,24 +2003,32 @@ def _privacy_compiled_profile_catalog_validator(module: object):
             "privacy compiled-profile catalogs require native bridge ABI "
             f"{PRIVACY_REQUIRED_BRIDGE_ABI_VERSION}"
         )
-    method = getattr(module, _PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATOR_METHOD, None)
+    method = getattr(
+        module, _PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATOR_METHOD, None
+    )
     if not callable(method):
         raise RuntimeError(
             "iroha_python._crypto is missing "
-            "privacy_validate_compiled_profile_catalog_v1; rebuild the extension"
+            "privacy_validate_compiled_profile_catalog_v1; "
+            "rebuild the extension"
         )
     return method
 
 
-def _invoke_privacy_compiled_profile_catalog_validator(module: object, archive: bytes) -> int:
+def _invoke_privacy_compiled_profile_catalog_validator(
+    module: object, archive: bytes
+) -> int:
     try:
         status = _privacy_compiled_profile_catalog_validator(module)(archive)
     except Exception:
-        raise RuntimeError("native privacy compiled-profile catalog validation failed") from None
+        raise RuntimeError(
+            "native privacy compiled-profile catalog validation failed"
+        ) from None
     if (
         isinstance(status, bool)
         or not isinstance(status, int)
-        or status not in PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1.values()
+        or status
+        not in PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1.values()
     ):
         raise RuntimeError(
             "native privacy compiled-profile catalog validation returned invalid status"
@@ -2040,7 +2055,9 @@ def _privacy_native_probe_returns_bytes(module: object) -> bool:
     result: object | None = None
     try:
         result = _privacy_compiled_profile_catalog_method(module)()
-        _privacy_output_archive(module, _PRIVACY_COMPILED_PROFILE_CATALOG_METHOD, result)
+        _privacy_output_archive(
+            module, _PRIVACY_COMPILED_PROFILE_CATALOG_METHOD, result
+        )
         return True
     except Exception:
         return False
@@ -2052,11 +2069,13 @@ def _invoke_privacy_compiled_profile_catalog_native() -> object:
     try:
         return _privacy_compiled_profile_catalog_method(_crypto)()
     except Exception:
-        raise RuntimeError("native privacy_compiled_profile_catalog_v1 failed") from None
+        raise RuntimeError(
+            "native privacy_compiled_profile_catalog_v1 failed"
+        ) from None
 
 
 def privacy_bridge_abi_version() -> int:
-    """Return the native bridge ABI version required by privacy catalog metadata."""
+    """Return the native bridge ABI version required by privacy build metadata."""
 
     version = _privacy_bridge_abi_version(_crypto)
     if version is None:
@@ -2074,10 +2093,11 @@ def is_privacy_native_available() -> bool:
 
 
 def privacy_compiled_profile_catalog_v1() -> bytes:
-    """Return this binary's canonical Norito V1 compiled-profile catalog.
+    """Return this binary's canonical Norito V1 local compiled-profile catalog.
 
-    This is local build metadata. Network activation and readiness must be read
-    from the live Torii privacy capability endpoint.
+    This archive has no committed height, governance activation, or readiness
+    state. Use the client's authoritative Exact12 capability query for a fresh
+    snapshot from live Torii.
     """
 
     return _privacy_output_archive(

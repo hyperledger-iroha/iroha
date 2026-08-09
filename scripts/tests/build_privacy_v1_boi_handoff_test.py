@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import ctypes
 import hashlib
 import json
 import stat
@@ -30,6 +31,10 @@ PROTOCOL_ID = "6" * 64
 RELEASE_MANIFEST_SHA256 = "7" * 64
 NATIVE_VALIDATOR_SHA256 = "b" * 64
 MACOS_HANDOFF_SHA256 = "c" * 64
+COMPILED_CATALOG = b"NRT0canonical-compiled-profile-catalog-v1"
+QUALIFICATION_PUBLIC_KEY = b"q" * 32
+QUALIFICATION_FINGERPRINT = hashlib.sha256(QUALIFICATION_PUBLIC_KEY).hexdigest()
+QUALIFICATION_NOW = 1_800_000_000
 
 
 @dataclass
@@ -169,6 +174,21 @@ def _candidate(
     archive = root.parent / "admitted-candidate.tar.gz"
     if not archive.exists():
         archive.write_bytes(b"signed-admitted-candidate-fixture\n")
+    authority = root.parent / "candidate-authority"
+    authority.mkdir(exist_ok=True)
+    authority_payloads = {
+        "release_manifest.json": b"signed candidate manifest fixture\n",
+        "release_manifest.json.pub": b"p" * 32,
+        "release_manifest.json.sig": b"s" * 64,
+    }
+    for relative, payload in authority_payloads.items():
+        path = authority / relative
+        if not path.exists():
+            path.write_bytes(payload)
+    authority_files = {
+        relative: contract.stable_hash_relative(authority, relative)
+        for relative in admission.FINAL_AUTHORITY_FILES
+    }
     source = _source()
     qualification, protocol = _receipt_payloads(
         source, MACOS_HANDOFF_SHA256, matrix_sha256
@@ -201,7 +221,9 @@ def _candidate(
         ).read_bytes(),
         archive=archive,
         archive_info=contract.stable_hash_path(archive),
-        release_manifest_sha256=RELEASE_MANIFEST_SHA256,
+        authority_dir=authority,
+        authority_files=authority_files,
+        release_manifest_sha256=authority_files["release_manifest.json"].sha256,
         native_validator_binary_sha256=NATIVE_VALIDATOR_SHA256,
         validator_binary_sha256=VALIDATOR_SHA256,
         exact12_matrix_sha256=matrix_sha256,
@@ -302,6 +324,25 @@ def _assemble(
     wheel_probe: object | None = None,
     abi_probe: object | None = None,
 ) -> dict[str, object]:
+    qualification_key = fixture.root.parent / "qualification-signing.pub"
+    if not qualification_key.exists():
+        qualification_key.write_bytes(QUALIFICATION_PUBLIC_KEY)
+
+    def qualification_signer(
+        manifest: Path,
+        _external_signer: Path,
+        raw_public_key: Path,
+        fingerprint: str,
+        signature_output: Path,
+        public_key_output: Path,
+        _verifier: Path,
+        _verifier_sha256: str,
+    ) -> dict[str, object]:
+        assert fingerprint == QUALIFICATION_FINGERPRINT
+        public_key_output.write_bytes(raw_public_key.read_bytes())
+        signature_output.write_bytes(b"s" * 64)
+        return {"manifest_sha256": _sha(manifest.read_bytes())}
+
     return boi.assemble_boi_handoff(
         fixture.root.resolve(),
         fixture.output.resolve(),
@@ -309,8 +350,20 @@ def _assemble(
         python="python3",
         wheel_probe=(wheel_probe if callable(wheel_probe) else lambda *_: None),
         abi_runtime_validator=(
-            abi_probe if callable(abi_probe) else lambda _path: None
+            abi_probe if callable(abi_probe) else lambda _path: COMPILED_CATALOG
         ),
+        qualification_external_signer=fixture.root.parent / "hsm-signer",
+        qualification_signing_public_key=qualification_key,
+        trusted_qualification_signing_fingerprint=QUALIFICATION_FINGERPRINT,
+        qualification_host_id="boi-host-v1",
+        qualification_installation_id="boi-installation-v1",
+        controller_closure_digest="d" * 64,
+        workflow_run_id=101,
+        workflow_run_attempt=2,
+        release_manifest_verifier_path=fixture.root.parent / "native-verifier",
+        trusted_release_manifest_verifier_sha256="e" * 64,
+        qualification_issued_at_unix=QUALIFICATION_NOW,
+        qualification_signer=qualification_signer,
     )
 
 
@@ -318,11 +371,20 @@ def test_assembles_one_closed_source_and_candidate_bound_bundle(tmp_path: Path) 
     fixture = _fixture(tmp_path)
     calls: list[str] = []
 
-    def wheel_probe(*_args: object) -> None:
+    def wheel_probe(
+        _root: Path,
+        _captured: object,
+        _native_member: str,
+        _capability: bytes,
+        compiled_catalog: bytes,
+        _python: str,
+    ) -> None:
+        assert compiled_catalog == COMPILED_CATALOG
         calls.append("wheel")
 
-    def abi_probe(_path: Path) -> None:
+    def abi_probe(_path: Path) -> bytes:
         calls.append("abi")
+        return COMPILED_CATALOG
 
     result = _assemble(fixture, wheel_probe=wheel_probe, abi_probe=abi_probe)
     assert result["ready"] is True
@@ -349,9 +411,39 @@ def test_assembles_one_closed_source_and_candidate_bound_bundle(tmp_path: Path) 
     assert (fixture.output / boi.QUALIFICATION_RECEIPT_PATH).read_bytes() == (
         fixture.candidate.qualification_receipt
     )
+    transport = json.loads(
+        (fixture.output / boi.QUALIFIED_HANDOFF_MANIFEST).read_bytes()
+    )
+    assert transport["kind"] == boi.QUALIFIED_HANDOFF_KIND
+    assert transport["files"] == sorted(
+        transport["files"], key=lambda row: row["path"]
+    )
+    archive_relative = inventory["candidate"]["archive_path"]
+    assert (fixture.output / archive_relative).read_bytes() == (
+        fixture.candidate.archive.read_bytes()
+    )
+    assert {
+        path.name for path in (fixture.output / boi.CANDIDATE_AUTHORITY_DIRECTORY).iterdir()
+    } == set(admission.FINAL_AUTHORITY_FILES)
     assert stat.S_IMODE(fixture.output.stat().st_mode) == 0o555
     assert stat.S_IMODE((fixture.output / boi.WORKER_PATH).stat().st_mode) == 0o555
     assert stat.S_IMODE(inventory_path.stat().st_mode) == 0o444
+    assert result["qualification_receipt_id"] == boi._qualification_receipt_id(
+        (fixture.output / boi.QUALIFICATION_ENVELOPE_PATH).read_bytes()
+    )
+    envelope = json.loads(
+        (fixture.output / boi.QUALIFICATION_ENVELOPE_PATH).read_bytes()
+    )
+    assert envelope["controller"] == {
+        "closure_digest": "d" * 64,
+        "host_id": "boi-host-v1",
+        "installation_id": "boi-installation-v1",
+        "role": "linux-boi-qualification",
+    }
+    assert envelope["workflow"] == {"run_attempt": 2, "run_id": 101}
+    assert (
+        fixture.output / boi.QUALIFICATION_PUBLIC_KEY_PATH
+    ).read_bytes() == QUALIFICATION_PUBLIC_KEY
 
 
 def test_candidate_authority_static_rebind_covers_the_exact_inventory(
@@ -519,13 +611,23 @@ def test_native_wheel_probe_stages_only_authenticated_inputs(
         arguments: list[str], **_kwargs: object
     ) -> subprocess.CompletedProcess[str]:
         observed.append(arguments[0])
+        probe_source = arguments[4]
+        assert "privacy_compiled_profile_catalog_v1" in probe_source
+        assert "privacy_validate_compiled_profile_catalog_v1(catalog)" in probe_source
+        assert (
+            "privacy_validate_exact12_capability_manifest_v1(archive)"
+            in probe_source
+        )
+        assert "privacy_exact12_capability_manifest_v1(archive)" in probe_source
+        assert "bytes(canonical_archive) != archive" in probe_source
         assert Path(arguments[5]).read_bytes() == _elf_aarch64()
         assert Path(arguments[6]).read_bytes() == capability
+        assert Path(arguments[7]).read_bytes() == COMPILED_CATALOG
         assert (
-            Path(arguments[7]).read_bytes() == b'"""Thin IPWW controller fixture."""\n'
+            Path(arguments[8]).read_bytes() == b'"""Thin IPWW controller fixture."""\n'
         )
-        assert Path(arguments[8]).read_bytes() == expected_worker
-        assert arguments[9] == _sha(expected_worker)
+        assert Path(arguments[9]).read_bytes() == expected_worker
+        assert arguments[10] == _sha(expected_worker)
         return subprocess.CompletedProcess(arguments, 0)
 
     monkeypatch.setattr(boi.subprocess, "run", run)
@@ -534,6 +636,7 @@ def test_native_wheel_probe_stages_only_authenticated_inputs(
         captured,
         native_member,
         capability,
+        COMPILED_CATALOG,
         "python-native-fixture",
     )
     assert observed == ["python-native-fixture"]
@@ -583,6 +686,100 @@ def test_native_replay_failure_emits_no_bundle(tmp_path: Path, which: str) -> No
             wheel_probe=reject if which == "wheel" else None,
             abi_probe=reject if which == "abi" else None,
         )
+    assert not fixture.output.exists()
+
+
+def test_abi_runtime_executes_catalog_getter_and_validator_on_exact_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog = b"NRT0" + b"canonical-compiled-profile-catalog"
+    calls: list[tuple[str, bytes | None]] = []
+
+    class Function:
+        def __init__(self, callback):
+            self.callback = callback
+            self.argtypes = None
+            self.restype = None
+
+        def __call__(self, *args):
+            return self.callback(*args)
+
+    class Library:
+        def __init__(self) -> None:
+            self.buffers: list[object] = []
+
+            def getter(out_pointer, out_length):
+                buffer = (ctypes.c_uint8 * len(catalog)).from_buffer_copy(catalog)
+                self.buffers.append(buffer)
+                ctypes.cast(
+                    out_pointer,
+                    ctypes.POINTER(ctypes.POINTER(ctypes.c_uint8)),
+                )[0] = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_uint8))
+                ctypes.cast(out_length, ctypes.POINTER(ctypes.c_ulong))[0] = len(catalog)
+                calls.append(("get", None))
+                return 0
+
+            def validator(pointer, length):
+                payload = ctypes.string_at(pointer, int(length))
+                calls.append(("validate", payload))
+                return 0 if payload == catalog else 5
+
+            def free(_pointer):
+                calls.append(("free", None))
+
+            self.iroha_privacy_compiled_profile_catalog_v1 = Function(getter)
+            self.iroha_privacy_validate_compiled_profile_catalog_v1 = Function(
+                validator
+            )
+            self.iroha_privacy_free_buffer = Function(free)
+
+    monkeypatch.setattr(boi.ctypes, "CDLL", lambda _path: Library())
+    monkeypatch.setattr(abi22, "probe_artifact", lambda *_args: 22)
+    monkeypatch.setattr(
+        abi22,
+        "inspect_exported_symbols",
+        lambda *_args, **_kwargs: abi22.APPROVED_PRIVACY_C_EXPORTS,
+    )
+    monkeypatch.setattr(
+        abi22,
+        "validate_privacy_c_exports",
+        lambda *_args, **_kwargs: abi22.APPROVED_PRIVACY_C_EXPORTS,
+    )
+
+    returned = boi._validate_abi_runtime(tmp_path / "libbridge.so")
+
+    assert returned == catalog
+    assert calls.count(("get", None)) == 2
+    assert calls.count(("validate", catalog)) == 2
+    assert calls.count(("free", None)) == 2
+
+
+def test_mismatched_standalone_and_wheel_catalogs_never_publish(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    standalone_catalog = b"NRT0standalone-compiled-profile-catalog"
+    wheel_catalog = b"NRT0different-wheel-compiled-profile-catalog"
+
+    def abi_probe(_path: Path) -> bytes:
+        return standalone_catalog
+
+    def wheel_probe(
+        _root: Path,
+        _captured: object,
+        _native_member: str,
+        _capability: bytes,
+        supplied_catalog: bytes,
+        _python: str,
+    ) -> None:
+        assert supplied_catalog == standalone_catalog
+        if supplied_catalog != wheel_catalog:
+            raise boi.BoiHandoffError(
+                "native wheel compiled catalog differs from the standalone ABI"
+            )
+
+    with pytest.raises(boi.BoiHandoffError, match="compiled catalog differs"):
+        _assemble(fixture, wheel_probe=wheel_probe, abi_probe=abi_probe)
     assert not fixture.output.exists()
 
 
@@ -716,10 +913,14 @@ def test_macos_handoff_digest_cannot_substitute_signed_boi_inventory(
 def test_candidate_archive_toctou_never_publishes_output(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
 
-    def mutate_candidate(_path: Path) -> None:
+    def mutate_candidate(_path: Path) -> bytes:
         fixture.candidate.archive.write_bytes(b"candidate changed after admission\n")
+        return COMPILED_CATALOG
 
-    with pytest.raises(boi.BoiHandoffError, match="candidate archive changed"):
+    with pytest.raises(
+        boi.BoiHandoffError,
+        match="candidate archive changed|no longer matches its stable capture",
+    ):
         _assemble(fixture, abi_probe=mutate_candidate)
     assert not fixture.output.exists()
 
@@ -771,3 +972,235 @@ def test_noncanonical_and_duplicate_handoff_json_are_rejected(tmp_path: Path) ->
     with pytest.raises(boi.BoiHandoffError, match="duplicate JSON object key"):
         _assemble(fixture)
     assert not fixture.output.exists()
+
+
+def _verify_qualified(
+    fixture: Fixture,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    archive: Path | None = None,
+    expected_host_id: str = "boi-host-v1",
+    expected_run_id: int = 101,
+    now_unix: int = QUALIFICATION_NOW,
+    reject_signature: bool = False,
+) -> boi.QualifiedBoiSnapshot:
+    monkeypatch.setattr(
+        boi, "authenticate_candidate", lambda _args: fixture.candidate
+    )
+    source = admission.SourceIdentity(
+        commit=SOURCE_COMMIT,
+        dpn_validator_release_commit=DPN_COMMIT,
+        cargo_lock_sha256=boi.FIXED_CARGO_LOCK_SHA256,
+        workspace_source_manifest_sha256=SOURCE_MANIFEST,
+    )
+    replay_ledger = fixture.root.parent / "unused-ledger.json"
+    if not replay_ledger.exists():
+        replay_ledger.write_bytes(admission.canonical_replay_ledger_bytes([]))
+
+    def verify_signature(
+        manifest: Path,
+        _signature: Path,
+        _public_key: Path,
+        fingerprint: str,
+        _verifier: Path,
+        _verifier_sha256: str,
+    ) -> dict[str, object]:
+        if reject_signature:
+            raise boi.ReleaseManifestSignatureError("injected invalid signature")
+        return {
+            "manifest_sha256": _sha(manifest.read_bytes()),
+            "signature_verified": True,
+            "signer_fingerprint_sha256": fingerprint,
+        }
+
+    return boi.verify_qualified_boi_handoff(
+        fixture.output.resolve(),
+        candidate_archive=archive or fixture.candidate.archive,
+        candidate_authority_dir=fixture.candidate.authority_dir,
+        expected_source=source,
+        expected_receipt_id=QUALIFICATION_ID,
+        replay_ledger_path=replay_ledger,
+        trusted_signing_fingerprint="a" * 64,
+        trusted_qualification_public_key_path=(
+            fixture.root.parent / "qualification-signing.pub"
+        ),
+        trusted_qualification_signing_fingerprint=QUALIFICATION_FINGERPRINT,
+        expected_qualification_host_id=expected_host_id,
+        expected_qualification_installation_id="boi-installation-v1",
+        expected_controller_closure_digest="d" * 64,
+        expected_workflow_run_id=expected_run_id,
+        expected_workflow_run_attempt=2,
+        release_manifest_verifier_path=fixture.root.parent / "unused-verifier",
+        trusted_release_manifest_verifier_sha256="b" * 64,
+        now_unix=now_unix,
+        qualification_signature_verifier=verify_signature,
+    )
+
+
+def test_qualified_handoff_independently_binds_signed_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture(tmp_path)
+    _assemble(fixture)
+    snapshot = _verify_qualified(fixture, monkeypatch)
+
+    assert snapshot.candidate_archive_sha256 == fixture.candidate.archive_info.sha256
+    assert snapshot.candidate_release_manifest_sha256 == (
+        fixture.candidate.release_manifest_sha256
+    )
+    assert snapshot.boi_inventory_sha256 == _sha(
+        (fixture.output / boi.OUTPUT_INVENTORY).read_bytes()
+    )
+    assert snapshot.qualification_signer_fingerprint_sha256 == (
+        QUALIFICATION_FINGERPRINT
+    )
+
+
+def test_qualified_handoff_rejects_invalid_external_signature(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture(tmp_path)
+    _assemble(fixture)
+
+    with pytest.raises(boi.BoiHandoffError, match="signature is invalid"):
+        _verify_qualified(fixture, monkeypatch, reject_signature=True)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("expected_host_id", "different-host", "controller identity differs"),
+        ("expected_run_id", 102, "workflow identity differs"),
+        (
+            "now_unix",
+            QUALIFICATION_NOW + boi.QUALIFICATION_LIFETIME_SECONDS + 1,
+            "expired or outside policy",
+        ),
+    ],
+)
+def test_qualified_handoff_rejects_wrong_policy_or_expiry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    fixture = _fixture(tmp_path)
+    _assemble(fixture)
+
+    with pytest.raises(boi.BoiHandoffError, match=message):
+        _verify_qualified(fixture, monkeypatch, **{field: value})
+
+
+def test_qualified_handoff_rejects_signed_receipt_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture(tmp_path)
+    result = _assemble(fixture)
+    (fixture.root.parent / "unused-ledger.json").write_bytes(
+        admission.canonical_replay_ledger_bytes(
+            [str(result["qualification_receipt_id"])]
+        )
+    )
+
+    with pytest.raises(boi.BoiHandoffError, match="already consumed"):
+        _verify_qualified(fixture, monkeypatch)
+
+
+def test_unsigned_self_hashed_qualification_tree_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture(tmp_path)
+    _assemble(fixture)
+    signature = fixture.output / boi.QUALIFICATION_SIGNATURE_PATH
+    transport = fixture.output / boi.QUALIFIED_HANDOFF_MANIFEST
+    signature.parent.chmod(0o755)
+    fixture.output.chmod(0o755)
+    signature.unlink()
+    value = json.loads(transport.read_bytes())
+    value["files"] = [
+        row
+        for row in value["files"]
+        if row["path"] != boi.QUALIFICATION_SIGNATURE_PATH
+    ]
+    transport.chmod(0o644)
+    transport.write_bytes(
+        (
+            json.dumps(
+                value,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        ).encode("ascii")
+    )
+    transport.chmod(0o444)
+    signature.parent.chmod(0o555)
+    fixture.output.chmod(0o555)
+
+    with pytest.raises(boi.BoiHandoffError):
+        _verify_qualified(fixture, monkeypatch)
+
+
+@pytest.mark.parametrize("attack", ["wrong", "missing", "reordered"])
+def test_qualified_transport_inventory_attacks_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, attack: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    _assemble(fixture)
+    manifest = fixture.output / boi.QUALIFIED_HANDOFF_MANIFEST
+    if attack == "missing":
+        fixture.output.chmod(0o755)
+        (fixture.output / boi.OUTPUT_INVENTORY).unlink()
+        fixture.output.chmod(0o555)
+    else:
+        value = json.loads(manifest.read_bytes())
+        if attack == "wrong":
+            value["files"][0]["sha256"] = "0" * 64
+        else:
+            value["files"].reverse()
+        manifest.chmod(0o644)
+        manifest.write_bytes(
+            (
+                json.dumps(
+                    value,
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("ascii")
+        )
+        manifest.chmod(0o444)
+
+    with pytest.raises(boi.BoiHandoffError):
+        _verify_qualified(fixture, monkeypatch)
+
+
+def test_qualified_handoff_rejects_a_different_candidate_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture(tmp_path)
+    _assemble(fixture)
+    other = tmp_path / "other" / fixture.candidate.archive.name
+    other.parent.mkdir()
+    other.write_bytes(b"different signed candidate\n")
+
+    with pytest.raises(boi.BoiHandoffError, match="different signed candidate"):
+        _verify_qualified(fixture, monkeypatch, archive=other)
+
+
+def test_qualified_handoff_toctou_recheck_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture(tmp_path)
+    _assemble(fixture)
+    snapshot = _verify_qualified(fixture, monkeypatch)
+    target = fixture.output / boi.QUALIFICATION_RECEIPT_PATH
+    target.chmod(0o644)
+    target.write_bytes(target.read_bytes() + b"stale")
+    target.chmod(0o444)
+
+    with pytest.raises(boi.BoiHandoffError, match="changed"):
+        boi.recheck_qualified_boi_handoff(snapshot)

@@ -507,8 +507,9 @@ pub struct RepairTransactionForwarder {
 }
 
 impl RepairTransactionForwarder {
-    /// Construct a non-persistent forwarder for focused composition tests.
-    pub fn in_memory(
+    /// Construct a bounded non-persistent forwarder for unit tests.
+    #[cfg(test)]
+    fn in_memory(
         policy: RepairTransactionForwarderPolicyV1,
     ) -> Result<Self, RepairTransactionForwarderError> {
         policy.validate()?;

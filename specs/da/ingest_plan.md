@@ -307,14 +307,18 @@ payload, or metadata field invalidates the signature.
   `crates/iroha_cli/src/commands/da.rs` for the subcommand and `specs/da/rent_policy.md`
   for the policy schema.【crates/iroha_cli/src/commands/da.rs:1】【specs/da/rent_policy.md:1】
 - Pin registry parity now extends to SDKs:
-  `ToriiClient.registerSorafsPinManifest(...)` builds the closed JSON V1 request
-  with exact canonical padded-base64 `ManifestV1` in `manifest_payload`. Torii
-  derives the digest, chunker, content length, pin policy, and fee inputs solely
-  from the decoded manifest and rejects duplicate summaries; the optional alias
-  and nonzero predecessor remain. This keeps CI bots and automation from
-  shelling out to the CLI when recording registrations through
-  `/v1/sorafs/pin/register`, and the helper ships with TypeScript/README coverage so DA-8’s
-  “submit/get/prove” tooling parity is fully satisfied on JS alongside Rust/Swift.【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788】
+  `buildRegisterPinManifestTransaction(...)` builds and signs one exact-network
+  native transaction whose sole `RegisterPinManifest` carries the canonical
+  `ManifestV1` bytes, optional alias, and optional non-zero predecessor.
+  `ToriiClient.registerSorafsPinManifest(...)` accepts only those signed bytes,
+  disables retries and redirects, and posts versioned Norito. Torii verifies
+  the network/signature/instruction shape and derives the digest, chunker,
+  content length, pin policy, and fee inputs solely from the manifest. No
+  client-supplied lifecycle epoch or JSON registration DTO is accepted. This
+  keeps CI bots and automation from shelling out to the CLI when recording
+  registrations through `/v1/sorafs/pin/register`, and the helper ships with
+  TypeScript/README coverage so DA-8’s “submit/get/prove” tooling parity is
+  fully satisfied on JS alongside Rust/Swift.【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788】
 - `iroha app da prove-availability` chains all of the above: it takes a storage ticket, downloads the
   canonical manifest bundle, runs the multi-source orchestrator (`iroha app sorafs fetch`) against the
   supplied `--gateway-provider` list, persists the downloaded payload + scoreboard under

@@ -17,6 +17,8 @@ use thiserror::Error;
 
 #[cfg(test)]
 use super::fixed_algebraic::ZkX509FixedAlgebraicAtomV1;
+#[cfg(test)]
+use super::p256_aggregate_adapter::P256_X5S1_SIGNATURES_V1;
 use super::{
     fixed_algebraic::{
         ZkX509FixedAlgebraicDomainV1, ZkX509FixedAlgebraicErrorV1, ZkX509FixedAlgebraicOpeningsV1,
@@ -25,8 +27,7 @@ use super::{
     p256_aggregate_adapter::{
         P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1, P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1,
         P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1, P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1,
-        P256_X5S1_SIGNATURES_V1, P256AggregateAdapterErrorV1, P256MainAdapterV1,
-        P256MainRegistrationV1,
+        P256AggregateAdapterErrorV1, P256MainAdapterV1, P256MainRegistrationV1,
     },
     p256_air::{
         P256_ARITHMETIC_ROWS_PER_OPERATION_V1, P256_ARITHMETIC_STARK_FIXED_WIDTH_V1,
@@ -54,6 +55,7 @@ use crate::privacy_engines::transparent_stark::{
 pub(crate) const ZK_X509_P256_FIXED_ALGEBRAIC_DESCRIPTOR_V1: &[u8] =
     b"zk-x509-p256-fixed-algebraic-v1-incompatible:native-log19:generator-coset-lde-log25:width404:six-schedules=certificate-arithmetic134+wallet-arithmetic134+certificate-execution46+wallet-execution46+certificate-sorted22+wallet-sorted22:typed-composite-children=134,134,46,46,22,22:each-child-generic-cap65536:composite-digest-binds-profile+ordered-widths+ordered-child-digests:row-major-child-opening-concatenation:aliases-exactly15=signatures0through4-times-arithmetic0+value-execution0+value-sorted1:signatures0through3-certificate-role:signature4-wallet-role:closed-value-free-topology-only:additive-affine+repeated-affine+sparse:operation-metadata-plan=min-exact-row-axis-vs-canonical-call-axis:row-axis-on-tie:call-segments=14x43+64x222+row-tail18:sorted-active-factors=725504-distinct-from-execution-logical-factors949312:sorted-equal-read-runs=min-exact-relative-factor-axis-vs-per-value-axis:relative-factor-axis-on-tie:sorted-whole-plan=min-exact-global-local-vs-phase-hybrid:global-local-on-tie:phase-hybrid=prefix893-local+min-local-vs13x43-phase+scalar-boundary222-local+min-local-vs63x222-phase+tail18-local:pinned-boundary-extents=1712,9984:pinned-repeated-extents=1888,10176:local-on-phase-tie:no-native-matrix:no-lde-table:no-artifact:no-merkle:no-proof-fixed-bytes:first-release";
 
+#[cfg(test)]
 const P256_COMPILER_DESCRIPTOR_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:p256-fixed-algebraic-compiler:v1";
 const P256_COMPOSITE_DESCRIPTOR_DIGEST_DOMAIN_V1: &[u8] =
@@ -62,6 +64,7 @@ const P256_COMPOSITE_DESCRIPTOR_DIGEST_DOMAIN_V1: &[u8] =
 /// Exact number of unique verifier-owned schedules.
 pub(crate) const ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1: usize = 6;
 /// Exact number of accepted registration aliases.
+#[cfg(test)]
 pub(crate) const ZK_X509_P256_FIXED_ALGEBRAIC_ALIAS_COUNT_V1: usize = 15;
 /// Exact combined fixed width.
 pub(crate) const ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1: usize = 404;
@@ -341,6 +344,7 @@ impl ZkX509P256FixedAlgebraicScheduleKindV1 {
     }
 
     /// Representative canonical MAIN registration.
+    #[cfg(test)]
     pub(crate) fn representative_registration_v1(
         self,
     ) -> Result<P256MainRegistrationV1, ZkX509P256FixedAlgebraicErrorV1> {
@@ -2739,6 +2743,7 @@ fn logical_constant_range_atom_count_v1(
 }
 
 /// Digest of the stable P-256 structural compiler descriptor.
+#[cfg(test)]
 pub(crate) fn zk_x509_p256_fixed_algebraic_compiler_descriptor_digest_v1()
 -> Result<[u8; 32], ZkX509P256FixedAlgebraicErrorV1> {
     sha256_frame_v1(
@@ -2805,6 +2810,7 @@ impl ZkX509P256FixedAlgebraicScheduleV1 {
     }
 
     /// Exact combined fixed width in canonical child order.
+    #[cfg(test)]
     pub(crate) const fn width_v1(&self) -> u16 {
         ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1 as u16
     }
@@ -2815,6 +2821,7 @@ impl ZkX509P256FixedAlgebraicScheduleV1 {
     }
 
     /// Fail closed unless the compiled profile pins this exact composite.
+    #[cfg(test)]
     pub(crate) fn verify_descriptor_digest_v1(
         &self,
         expected: &[u8; 32],
@@ -2826,11 +2833,13 @@ impl ZkX509P256FixedAlgebraicScheduleV1 {
     }
 
     /// Common child domain shared by all six registrations.
+    #[cfg(test)]
     pub(crate) fn domain_v1(&self) -> ZkX509FixedAlgebraicDomainV1 {
         self.children[0].domain_v1()
     }
 
     /// Exact total across the six independently bounded atom collections.
+    #[cfg(test)]
     pub(crate) fn atom_count_v1(&self) -> usize {
         self.children
             .iter()
@@ -2839,6 +2848,7 @@ impl ZkX509P256FixedAlgebraicScheduleV1 {
     }
 
     /// Borrow the six independently capped schedules in registration order.
+    #[cfg(test)]
     pub(crate) fn children_v1(
         &self,
     ) -> &[ZkX509FixedAlgebraicScheduleV1; ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1] {
@@ -2846,6 +2856,7 @@ impl ZkX509P256FixedAlgebraicScheduleV1 {
     }
 
     /// Evaluate one combined native row without constructing a native matrix.
+    #[cfg(test)]
     pub(crate) fn native_row_v1(
         &self,
         row: u64,

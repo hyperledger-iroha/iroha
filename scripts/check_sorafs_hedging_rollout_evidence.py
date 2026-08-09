@@ -103,6 +103,7 @@ MAX_DIVERGENCE_BPS = 10_000
 DEFAULT_MAX_DIVERGENCE_BPS = 500
 DEFAULT_MIN_BILLING_CYCLES = 2
 DEFAULT_MIN_NATIVE_BRIDGE_ARTIFACTS = 2
+REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 22
 HEX64_LEN = 64
 CYCLE_ID_PATTERN = re.compile(r"^billing-cycle-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 CYCLE_ID_ERROR = "cycle_id must match canonical lowercase `billing-cycle-*`"
@@ -851,7 +852,15 @@ def validate_metrics_alerts(payload: dict[str, Any], errors: list[str]) -> None:
 
 
 def validate_native_bridge_release(payload: dict[str, Any], errors: list[str]) -> None:
-    require_minimum_int(payload, "bridge_abi_version", 12, errors)
+    bridge_abi_version = require_minimum_int(payload, "bridge_abi_version", 1, errors)
+    if (
+        bridge_abi_version is not None
+        and bridge_abi_version != REQUIRED_NATIVE_BRIDGE_ABI_VERSION
+    ):
+        errors.append(
+            "bridge_abi_version must equal the sole first-release ABI "
+            f"{REQUIRED_NATIVE_BRIDGE_ABI_VERSION}"
+        )
     artifact_count = require_positive_int(payload, "artifact_count", errors)
     require_minimum_value(
         artifact_count,

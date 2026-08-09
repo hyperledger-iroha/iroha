@@ -32,12 +32,10 @@ use iroha_crypto::{
             DEFAULT_CLIENT_CAPABILITIES, DEFAULT_RELAY_CAPABILITIES, RuntimeParams,
             SORANET_QUIC_ALPN, SessionSecrets, build_client_hello, client_handle_relay_hello,
         },
-        record::{
-            RecordEndpoint, RecordLayer, RecordReader, RecordStreamContext, RecordStreamKind,
-            RecordWriter,
-        },
+        record::{RecordEndpoint, RecordLayer, RecordStreamContext, RecordStreamKind},
     },
 };
+iroha_crypto::define_soranet_record_io_adapters!(soranet_record_io);
 use iroha_data_model::soranet::vpn::{
     VPN_CELL_LEN, VPN_USAGE_VOUCHER_CONTROL_MAGIC, VpnCellClassV1, VpnCellError, VpnCellFlagsV1,
     VpnCellHeaderV1, VpnCellV1, VpnFlowLabelV1, VpnHelperTicketV1, VpnPaddedCellV1,
@@ -64,6 +62,7 @@ use rustls::{
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
     pki_types::CertificateDer,
 };
+use soranet_record_io::{RecordReader, RecordWriter};
 use thiserror::Error;
 use tokio::{
     io::unix::AsyncFd,

@@ -28,6 +28,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import zipfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -55,7 +56,13 @@ try:
         stable_hash_path,
         stable_hash_relative,
         stable_open_relative,
+        stable_read_path,
         stable_read_relative,
+    )
+    from .release_manifest_signing import (
+        ReleaseManifestSignatureError,
+        sign_release_manifest,
+        verify_release_manifest,
     )
 except ImportError:
     import check_native_sdk_abi22_artifact as abi22
@@ -73,7 +80,13 @@ except ImportError:
         stable_hash_path,
         stable_hash_relative,
         stable_open_relative,
+        stable_read_path,
         stable_read_relative,
+    )
+    from release_manifest_signing import (
+        ReleaseManifestSignatureError,
+        sign_release_manifest,
+        verify_release_manifest,
     )
 
 
@@ -83,11 +96,31 @@ SOURCE_HANDOFF_SCHEMA = admission.BOI_SOURCE_HANDOFF_SCHEMA
 SOURCE_HANDOFF_KIND = admission.BOI_SOURCE_HANDOFF_KIND
 SOURCE_HANDOFF_MANIFEST = admission.BOI_SOURCE_HANDOFF_MANIFEST
 OUTPUT_INVENTORY = "boi-privacy-v1-inventory.json"
+QUALIFIED_HANDOFF_MANIFEST = "handoff-inventory-v1.json"
+QUALIFIED_HANDOFF_KIND = "privacy-v1-boi-qualified"
+QUALIFIED_HANDOFF_SCHEMA = "iroha.taira.release_handoff"
+PROBE_TRANSCRIPT_PATH = "qualification/probe-transcript-v1.json"
+QUALIFICATION_PAYLOAD_INVENTORY_PATH = (
+    "qualification/qualified-payload-inventory-v1.json"
+)
+QUALIFICATION_ENVELOPE_PATH = "qualification/linux-boi-qualification-v1.json"
+QUALIFICATION_SIGNATURE_PATH = (
+    "qualification/linux-boi-qualification-v1.json.sig"
+)
+QUALIFICATION_PUBLIC_KEY_PATH = (
+    "qualification/linux-boi-qualification-v1.json.pub"
+)
+QUALIFICATION_ENVELOPE_SCHEMA = "iroha.taira.linux_boi_qualification"
+QUALIFICATION_ENVELOPE_SCHEMA_VERSION = 1
+QUALIFICATION_REPLAY_DOMAIN = b"iroha.taira.linux-boi-qualification-replay.v1\0"
+QUALIFICATION_LIFETIME_SECONDS = 6 * 60 * 60
+QUALIFICATION_CLOCK_SKEW_SECONDS = 5 * 60
 FIXED_CARGO_LOCK_SHA256 = (
     "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
 )
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+TRUST_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}")
 
 MAX_CAPABILITY_BYTES = 256 * 1024
 MAX_WHEEL_BYTES = 1024 * 1024 * 1024
@@ -123,6 +156,8 @@ NATIVE_RECEIPT_NORITO_PATH = "receipts/native-release-receipt-v1.norito"
 NATIVE_RECEIPT_JSON_PATH = "receipts/native-release-receipt-v1.json"
 QUALIFICATION_RECEIPT_PATH = "receipts/four-peer-receipt-v2.json"
 PROTOCOL_RECEIPT_PATH = "receipts/privacy-protocol-four-peer-receipt-v2.json"
+CANDIDATE_ARCHIVE_DIRECTORY = "candidate/admission"
+CANDIDATE_AUTHORITY_DIRECTORY = "candidate/authority"
 
 CAPABILITY_SCHEMA_ID = "iroha://schemas/privacy/exact12-capability-manifest-v1"
 WORKER_SCHEMA_ID = "iroha://schemas/privacy/ipww-v1"
@@ -174,6 +209,8 @@ class AuthenticatedCandidate:
     boi_artifact_inventory: bytes
     archive: Path
     archive_info: StableFile
+    authority_dir: Path
+    authority_files: Mapping[str, StableFile]
     release_manifest_sha256: str
     native_validator_binary_sha256: str
     validator_binary_sha256: str
@@ -184,6 +221,25 @@ class AuthenticatedCandidate:
     privacy_protocol_receipt: bytes
     native_receipt_norito: bytes
     native_receipt_json: bytes
+
+
+@dataclass(frozen=True)
+class QualifiedBoiSnapshot:
+    """Stable identity of one independently verified qualified BOI handoff."""
+
+    root: Path
+    files: Mapping[str, StableFile]
+    handoff_inventory_sha256: str
+    boi_inventory_sha256: str
+    candidate_archive_sha256: str
+    candidate_boi_artifact_inventory_sha256: str
+    candidate_release_manifest_sha256: str
+    qualification_receipt_id: str
+    probe_transcript_sha256: str
+    qualification_signer_fingerprint_sha256: str
+    trusted_qualification_public_key: Path
+    trusted_qualification_public_key_state: StableFile
+    source: Mapping[str, object]
 
 
 def _fail(message: str) -> NoReturn:
@@ -221,6 +277,36 @@ def _commit(value: object, label: str) -> str:
     ):
         _fail(f"{label} must be one nonzero lowercase 40-hex object id")
     return value
+
+
+def _trust_id(value: object, label: str) -> str:
+    if not isinstance(value, str) or TRUST_ID_RE.fullmatch(value) is None:
+        _fail(f"{label} must be one canonical trust identifier")
+    return value
+
+
+def _positive_run_number(value: object, label: str, maximum_digits: int) -> int:
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value <= 0
+        or len(str(value)) > maximum_digits
+    ):
+        _fail(f"{label} must be one bounded positive integer")
+    return value
+
+
+def _qualification_replay_namespace(
+    source_commit: str, workflow_run_id: int, workflow_run_attempt: int
+) -> str:
+    return (
+        "iroha.taira.linux-boi-qualification.v1:"
+        f"{source_commit}:{workflow_run_id}:{workflow_run_attempt}"
+    )
+
+
+def _qualification_receipt_id(envelope_payload: bytes) -> str:
+    return hashlib.sha256(QUALIFICATION_REPLAY_DOMAIN + envelope_payload).hexdigest()
 
 
 def _canonical_directory(path: Path, label: str) -> Path:
@@ -343,12 +429,24 @@ def authenticate_candidate(args: argparse.Namespace) -> AuthenticatedCandidate:
     )
     _source_identity(source.as_dict())
     archive = Path(os.path.abspath(args.candidate_archive))
-    authority_dir = Path(os.path.abspath(args.candidate_authority_dir))
+    authority_dir = _canonical_directory(
+        Path(os.path.abspath(args.candidate_authority_dir)),
+        "candidate authority directory",
+    )
     replay_ledger = Path(os.path.abspath(args.candidate_replay_ledger))
     verifier = Path(os.path.abspath(args.release_manifest_verifier))
     archive_info = stable_hash_path(
         archive, max_size=native_authority.MAX_ARCHIVE_LOGICAL_BYTES
     )
+    try:
+        if scan_inventory_paths(authority_dir) != list(admission.FINAL_AUTHORITY_FILES):
+            _fail("candidate authority must contain exactly manifest/signature/key")
+        authority_files = {
+            relative: stable_hash_relative(authority_dir, relative)
+            for relative in admission.FINAL_AUTHORITY_FILES
+        }
+    except ReleaseArtifactError as exc:
+        raise BoiHandoffError(f"cannot capture candidate authority: {exc}") from exc
     try:
         result = admission.verify_admission(
             archive_path=archive,
@@ -447,6 +545,8 @@ def authenticate_candidate(args: argparse.Namespace) -> AuthenticatedCandidate:
         boi_artifact_inventory=boi_inventory_payload,
         archive=archive,
         archive_info=archive_info,
+        authority_dir=authority_dir,
+        authority_files=authority_files,
         release_manifest_sha256=_sha256(
             result.get("release_manifest_sha256"), "candidate release manifest digest"
         ),
@@ -471,6 +571,19 @@ def authenticate_candidate(args: argparse.Namespace) -> AuthenticatedCandidate:
     )
     if stable_hash_path(archive) != archive_info:
         _fail("candidate archive changed while BOI admission evidence was captured")
+    if (
+        authority_files["release_manifest.json"].sha256
+        != candidate.release_manifest_sha256
+    ):
+        _fail("candidate authority manifest differs from its admission result")
+    try:
+        if scan_inventory_paths(authority_dir) != list(admission.FINAL_AUTHORITY_FILES):
+            _fail("candidate authority inventory changed during BOI admission")
+        for relative, before in authority_files.items():
+            if stable_hash_relative(authority_dir, relative) != before:
+                _fail(f"candidate authority file changed: {relative!r}")
+    except ReleaseArtifactError as exc:
+        raise BoiHandoffError(f"cannot recheck candidate authority: {exc}") from exc
     return candidate
 
 
@@ -716,6 +829,7 @@ def _probe_native_wheel(
     captured: Mapping[str, StableFile],
     native_member: str,
     capability_payload: bytes,
+    compiled_catalog_payload: bytes,
     python: str,
 ) -> None:
     source = r"""
@@ -726,9 +840,10 @@ import sys
 
 extension = pathlib.Path(sys.argv[1])
 archive = pathlib.Path(sys.argv[2]).read_bytes()
-controller_path = pathlib.Path(sys.argv[3])
-worker_path = pathlib.Path(sys.argv[4])
-worker_sha256 = sys.argv[5]
+catalog = pathlib.Path(sys.argv[3]).read_bytes()
+controller_path = pathlib.Path(sys.argv[4])
+worker_path = pathlib.Path(sys.argv[5])
+worker_sha256 = sys.argv[6]
 name = "iroha_python._crypto"
 loader = importlib.machinery.ExtensionFileLoader(name, str(extension))
 spec = importlib.util.spec_from_loader(name, loader)
@@ -738,16 +853,26 @@ module = importlib.util.module_from_spec(spec)
 loader.exec_module(module)
 required = (
     "connect_norito_bridge_abi_version",
+    "privacy_compiled_profile_catalog_v1",
     "privacy_exact12_capability_manifest_v1",
+    "privacy_validate_compiled_profile_catalog_v1",
     "privacy_validate_exact12_capability_manifest_v1",
 )
 if any(not callable(getattr(module, item, None)) for item in required):
     raise SystemExit("native wheel omits a required Privacy v1 function")
 if module.connect_norito_bridge_abi_version() != 22:
     raise SystemExit("native wheel ABI is not exactly 22")
+if module.privacy_validate_compiled_profile_catalog_v1(catalog) != 0:
+    raise SystemExit("native wheel rejected the standalone ABI compiled catalog")
+if bytes(module.privacy_compiled_profile_catalog_v1()) != catalog:
+    raise SystemExit("native wheel compiled catalog differs from the standalone ABI")
 if module.privacy_validate_exact12_capability_manifest_v1(archive) != 0:
     raise SystemExit("native wheel rejected the Exact12 capability manifest")
-if bytes(module.privacy_exact12_capability_manifest_v1()) != archive:
+admitted_manifest = module.privacy_exact12_capability_manifest_v1(archive)
+canonical_archive = getattr(admitted_manifest, "canonical_archive", None)
+if not isinstance(canonical_archive, (bytes, bytearray, memoryview)):
+    raise SystemExit("native wheel admission omitted canonical manifest bytes")
+if bytes(canonical_archive) != archive:
     raise SystemExit("native wheel compiled capability bytes differ")
 controller_loader = importlib.machinery.SourceFileLoader(
     "iroha_privacy_wallet_worker_controller", str(controller_path)
@@ -769,6 +894,7 @@ with controller_module.PrivacyWalletWorkerControllerV1(
         temporary = Path(raw).resolve(strict=True)
         extension = temporary / PurePosixPath(native_member).name
         manifest = temporary / "exact12-capability-manifest-v1.norito"
+        catalog = temporary / "compiled-profile-catalog-v1.norito"
         controller = temporary / "privacy_wallet_worker.py"
         worker = temporary / "iroha_privacy_wallet_worker"
         try:
@@ -813,6 +939,7 @@ with controller_module.PrivacyWalletWorkerControllerV1(
                 executable=True,
             )
             exclusive_write_bytes(manifest, capability_payload, mode=0o600)
+            exclusive_write_bytes(catalog, compiled_catalog_payload, mode=0o600)
         except (OSError, ReleaseArtifactError, zipfile.BadZipFile) as exc:
             raise BoiHandoffError(f"cannot stage native wheel probe: {exc}") from exc
         environment = {"PATH": os.defpath, "PYTHONHASHSEED": "0"}
@@ -831,6 +958,7 @@ with controller_module.PrivacyWalletWorkerControllerV1(
                         source,
                         str(extension),
                         str(manifest),
+                        str(catalog),
                         str(controller),
                         str(worker),
                         captured[WORKER_PATH].sha256,
@@ -857,7 +985,9 @@ with controller_module.PrivacyWalletWorkerControllerV1(
                 _fail("native wheel probe failed" + (f": {detail}" if detail else ""))
 
 
-def _validate_abi_runtime(path: Path) -> None:
+def _validate_abi_runtime(path: Path) -> bytes:
+    """Execute the exact ABI surface and its compiled-catalog byte contract."""
+
     try:
         version = abi22.probe_artifact("c-jni", path)
         symbols = abi22.inspect_exported_symbols(path, required=True)
@@ -868,6 +998,52 @@ def _validate_abi_runtime(path: Path) -> None:
         raise BoiHandoffError(f"ABI22 native replay failed: {exc}") from exc
     if version != 22 or exports != abi22.APPROVED_PRIVACY_C_EXPORTS:
         _fail("ABI22 native replay did not return the exact approved surface")
+
+    try:
+        library = ctypes.CDLL(path)
+        getter = library.iroha_privacy_compiled_profile_catalog_v1
+        validator = library.iroha_privacy_validate_compiled_profile_catalog_v1
+        free_buffer = library.iroha_privacy_free_buffer
+        getter.argtypes = [
+            ctypes.POINTER(ctypes.POINTER(ctypes.c_uint8)),
+            ctypes.POINTER(ctypes.c_ulong),
+        ]
+        getter.restype = ctypes.c_int32
+        validator.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.c_ulong]
+        validator.restype = ctypes.c_int32
+        free_buffer.argtypes = [ctypes.POINTER(ctypes.c_uint8)]
+        free_buffer.restype = None
+
+        def get_catalog() -> bytes:
+            pointer = ctypes.POINTER(ctypes.c_uint8)()
+            length = ctypes.c_ulong(0)
+            status = getter(ctypes.byref(pointer), ctypes.byref(length))
+            if (
+                status != 0
+                or not bool(pointer)
+                or length.value < 16
+                or length.value > MAX_CAPABILITY_BYTES
+            ):
+                _fail("ABI22 compiled-profile catalog getter failed closed")
+            try:
+                payload = ctypes.string_at(pointer, length.value)
+                copied = (ctypes.c_uint8 * len(payload)).from_buffer_copy(payload)
+                if validator(copied, len(payload)) != 0:
+                    _fail("ABI22 rejected its canonical compiled-profile catalog")
+                return payload
+            finally:
+                free_buffer(pointer)
+
+        first_catalog = get_catalog()
+        if first_catalog[:4] != b"NRT0" or not any(first_catalog[4:]):
+            _fail("ABI22 compiled-profile catalog is not canonical Norito bytes")
+        if get_catalog() != first_catalog:
+            _fail("ABI22 compiled-profile catalog getter is not byte-stable")
+        return first_catalog
+    except (AttributeError, OSError, TypeError, ValueError) as exc:
+        raise BoiHandoffError(
+            f"ABI22 compiled-profile catalog replay failed: {exc}"
+        ) from exc
 
 
 def _validate_sample_config(payload: bytes, captured: Mapping[str, StableFile]) -> None:
@@ -899,9 +1075,11 @@ def _validate_artifacts(
     source: Mapping[str, object],
     exact12_matrix_sha256: str,
     python: str,
-    wheel_probe: Callable[[Path, Mapping[str, StableFile], str, bytes, str], None],
-    abi_runtime_validator: Callable[[Path], None],
-) -> None:
+    wheel_probe: Callable[
+        [Path, Mapping[str, StableFile], str, bytes, bytes, str], None
+    ],
+    abi_runtime_validator: Callable[[Path], bytes],
+) -> dict[str, object]:
     source = _source_identity(source)
     cargo = _read_captured(root, CARGO_LOCK_PATH, captured)
     if hashlib.sha256(cargo).hexdigest() != FIXED_CARGO_LOCK_SHA256:
@@ -948,7 +1126,7 @@ def _validate_artifacts(
     _validate_elf_aarch64(
         _read_captured(root, ABI_LIBRARY_PATH, captured)[:64], "ABI22 native library"
     )
-    abi_runtime_validator(root / ABI_LIBRARY_PATH)
+    compiled_catalog = abi_runtime_validator(root / ABI_LIBRARY_PATH)
     if stable_hash_relative(root, ABI_LIBRARY_PATH) != captured[ABI_LIBRARY_PATH]:
         _fail("ABI22 native library changed during replay")
 
@@ -956,7 +1134,7 @@ def _validate_artifacts(
         _read_captured(root, WORKER_PATH, captured)[:64], "IPWW native worker"
     )
     native_member, _controller = _wheel_layout(root, captured)
-    wheel_probe(root, captured, native_member, capability, python)
+    wheel_probe(root, captured, native_member, capability, compiled_catalog, python)
     if stable_hash_relative(root, WHEEL_PATH) != captured[WHEEL_PATH]:
         _fail("native Python wheel changed during replay")
     if stable_hash_relative(root, WORKER_PATH) != captured[WORKER_PATH]:
@@ -973,6 +1151,23 @@ def _validate_artifacts(
         "IPWW JSON Schema",
     )
     _validate_sample_config(_read_captured(root, CONFIG_PATH, captured), captured)
+    catalog_sha256 = hashlib.sha256(compiled_catalog).hexdigest()
+    return {
+        "abi22": {
+            "abi_version": 22,
+            "compiled_profile_catalog_sha256": catalog_sha256,
+            "library_sha256": captured[ABI_LIBRARY_PATH].sha256,
+            "privacy_c_exports": list(abi22.APPROVED_PRIVACY_C_EXPORTS),
+            "result": "passed",
+        },
+        "python_wheel": {
+            "capability_manifest_sha256": captured[CAPABILITY_PATH].sha256,
+            "compiled_profile_catalog_sha256": catalog_sha256,
+            "native_member": native_member,
+            "result": "passed",
+            "wheel_sha256": captured[WHEEL_PATH].sha256,
+        },
+    }
 
 
 def _write_streamed(
@@ -1073,6 +1268,32 @@ def _candidate_admission_payload(candidate: AuthenticatedCandidate) -> bytes:
             "verified": True,
         }
     )
+
+
+def _candidate_archive_relative(candidate: AuthenticatedCandidate) -> str:
+    name = candidate.archive.name
+    if (
+        not name.endswith(".tar.gz")
+        or len(name.encode("utf-8")) > 256
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", name) is None
+    ):
+        _fail("candidate archive basename is not a bounded portable name")
+    return f"{CANDIDATE_ARCHIVE_DIRECTORY}/{name}"
+
+
+def _recheck_candidate_files(candidate: AuthenticatedCandidate) -> None:
+    if stable_hash_path(candidate.archive) != candidate.archive_info:
+        _fail("candidate archive changed during BOI qualification")
+    try:
+        if scan_inventory_paths(candidate.authority_dir) != list(
+            admission.FINAL_AUTHORITY_FILES
+        ):
+            _fail("candidate authority inventory changed during BOI qualification")
+        for relative, before in candidate.authority_files.items():
+            if stable_hash_relative(candidate.authority_dir, relative) != before:
+                _fail(f"candidate authority file changed: {relative!r}")
+    except ReleaseArtifactError as exc:
+        raise BoiHandoffError(f"cannot recheck candidate authority: {exc}") from exc
 
 
 def _validate_candidate_receipts(candidate: AuthenticatedCandidate) -> None:
@@ -1214,7 +1435,7 @@ def validate_candidate_boi_artifact_handoff(
         exact12_matrix_sha256=normalized_matrix,
         python=sys.executable,
         wheel_probe=lambda *_args: None,
-        abi_runtime_validator=lambda _path: None,
+        abi_runtime_validator=lambda _path: b"",
     )
     return captured
 
@@ -1226,17 +1447,70 @@ def assemble_boi_handoff(
     *,
     python: str = sys.executable,
     wheel_probe: Callable[
-        [Path, Mapping[str, StableFile], str, bytes, str], None
+        [Path, Mapping[str, StableFile], str, bytes, bytes, str], None
     ] = _probe_native_wheel,
-    abi_runtime_validator: Callable[[Path], None] = _validate_abi_runtime,
+    abi_runtime_validator: Callable[[Path], bytes] = _validate_abi_runtime,
+    qualification_external_signer: Path,
+    qualification_signing_public_key: Path,
+    trusted_qualification_signing_fingerprint: str,
+    qualification_host_id: str,
+    qualification_installation_id: str,
+    controller_closure_digest: str,
+    workflow_run_id: int,
+    workflow_run_attempt: int,
+    release_manifest_verifier_path: Path,
+    trusted_release_manifest_verifier_sha256: str,
+    qualification_issued_at_unix: int | None = None,
+    qualification_signer: Callable[..., Mapping[str, object]] = (
+        sign_release_manifest
+    ),
 ) -> dict[str, object]:
     """Validate every input and create one closed, immutable BOI directory."""
 
     artifact_root = _canonical_directory(artifact_root, "BOI source handoff")
     source = _source_identity(candidate.source)
+    qualification_fingerprint = _sha256(
+        trusted_qualification_signing_fingerprint,
+        "trusted BOI qualification signing fingerprint",
+    )
+    controller_digest = _sha256(
+        controller_closure_digest, "BOI qualification controller closure digest"
+    )
+    verifier_sha256 = _sha256(
+        trusted_release_manifest_verifier_sha256,
+        "trusted qualification verifier digest",
+    )
+    host_id = _trust_id(qualification_host_id, "BOI qualification host ID")
+    installation_id = _trust_id(
+        qualification_installation_id, "BOI qualification installation ID"
+    )
+    run_id = _positive_run_number(workflow_run_id, "workflow run ID", 20)
+    run_attempt = _positive_run_number(
+        workflow_run_attempt, "workflow run attempt", 10
+    )
+    issued_at = (
+        int(time.time())
+        if qualification_issued_at_unix is None
+        else qualification_issued_at_unix
+    )
+    if not isinstance(issued_at, int) or isinstance(issued_at, bool) or issued_at <= 0:
+        _fail("BOI qualification issue time must be one positive Unix second")
+    expires_at = issued_at + QUALIFICATION_LIFETIME_SECONDS
+    replay_namespace = _qualification_replay_namespace(
+        str(source["commit"]), run_id, run_attempt
+    )
     if candidate.archive_info.sha256 == "0" * 64 or candidate.archive_info.size <= 0:
         _fail("BOI handoff requires one nonempty admitted candidate archive")
     _validate_candidate_receipts(candidate)
+    if set(candidate.authority_files) != set(admission.FINAL_AUTHORITY_FILES):
+        _fail("BOI handoff requires the exact signed candidate authority")
+    if (
+        candidate.authority_files["release_manifest.json"].sha256
+        != candidate.release_manifest_sha256
+    ):
+        _fail("candidate release manifest differs from its authenticated digest")
+    candidate_archive_path = _candidate_archive_relative(candidate)
+    _recheck_candidate_files(candidate)
     captured, source_manifest_payload = _validate_source_handoff(
         artifact_root,
         source=candidate.source,
@@ -1244,7 +1518,7 @@ def assemble_boi_handoff(
         inventory_sha256=candidate.boi_artifact_inventory_sha256,
         inventory_payload=candidate.boi_artifact_inventory,
     )
-    _validate_artifacts(
+    probe_results = _validate_artifacts(
         artifact_root,
         captured,
         source=candidate.source,
@@ -1252,6 +1526,16 @@ def assemble_boi_handoff(
         python=python,
         wheel_probe=wheel_probe,
         abi_runtime_validator=abi_runtime_validator,
+    )
+    abi_probe_result = canonical_json_bytes(probe_results["abi22"])
+    wheel_probe_result = canonical_json_bytes(probe_results["python_wheel"])
+    probe_transcript = canonical_json_bytes(
+        {
+            "abi22": probe_results["abi22"],
+            "python_wheel": probe_results["python_wheel"],
+            "schema": "iroha.taira.linux_boi_probe_transcript",
+            "schema_version": 1,
+        }
     )
     if not output.is_absolute():
         _fail("BOI output directory must be an absolute path")
@@ -1266,6 +1550,7 @@ def assemble_boi_handoff(
         NATIVE_RECEIPT_JSON_PATH: candidate.native_receipt_json,
         QUALIFICATION_RECEIPT_PATH: candidate.qualification_receipt,
         PROTOCOL_RECEIPT_PATH: candidate.privacy_protocol_receipt,
+        PROBE_TRANSCRIPT_PATH: probe_transcript,
     }
     if any(not payload for payload in generated.values()):
         _fail("admitted candidate contains an empty required receipt")
@@ -1291,6 +1576,21 @@ def assemble_boi_handoff(
                     captured[spec.path],
                     executable=spec.executable,
                 )
+            _write_streamed(
+                candidate.archive.parent,
+                candidate.archive.name,
+                install_root / candidate_archive_path,
+                candidate.archive_info,
+                executable=False,
+            )
+            for relative in admission.FINAL_AUTHORITY_FILES:
+                _write_streamed(
+                    candidate.authority_dir,
+                    relative,
+                    install_root / CANDIDATE_AUTHORITY_DIRECTORY / relative,
+                    candidate.authority_files[relative],
+                    executable=False,
+                )
             for relative, payload in sorted(generated.items()):
                 target = install_root / relative
                 target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -1305,6 +1605,14 @@ def assemble_boi_handoff(
                     NATIVE_RECEIPT_JSON_PATH: "native-release-receipt-projection",
                     QUALIFICATION_RECEIPT_PATH: "four-peer-qualification-receipt",
                     PROTOCOL_RECEIPT_PATH: "exact12-four-peer-receipt",
+                    PROBE_TRANSCRIPT_PATH: "linux-native-probe-transcript",
+                    candidate_archive_path: "signed-candidate-archive",
+                    **{
+                        f"{CANDIDATE_AUTHORITY_DIRECTORY}/{relative}": (
+                            "signed-candidate-authority"
+                        )
+                        for relative in admission.FINAL_AUTHORITY_FILES
+                    },
                 }
             )
             rows = []
@@ -1321,6 +1629,7 @@ def assemble_boi_handoff(
             inventory = {
                 "artifacts": rows,
                 "candidate": {
+                    "archive_path": candidate_archive_path,
                     "archive_sha256": candidate.archive_info.sha256,
                     "artifact_handoff_sha256": candidate.artifact_handoff_sha256,
                     "boi_artifact_inventory_sha256": (
@@ -1334,21 +1643,10 @@ def assemble_boi_handoff(
                     "privacy_protocol_receipt_id": candidate.privacy_protocol_receipt_id,
                     "qualification_receipt_id": candidate.qualification_receipt_id,
                     "release_manifest_sha256": candidate.release_manifest_sha256,
+                    "authority_directory": CANDIDATE_AUTHORITY_DIRECTORY,
                     "validator_binary_sha256": candidate.validator_binary_sha256,
                 },
-                "contract": {
-                    "abi_version": 22,
-                    "availability_source": "torii-committed-capability-manifest",
-                    "jindo_assurance": "available-experimental",
-                    "jindo_missing_evidence": (
-                        "MissingDistributionWideKnowledgeSoundnessEvidence"
-                    ),
-                    "privacy_c_exports": list(abi22.APPROVED_PRIVACY_C_EXPORTS),
-                    "protocol_count": 12,
-                    "wallet_bundle_wire": "IPWB/1",
-                    "wallet_worker_wire": "IPWW/1",
-                    "witness_crosses_ffi": False,
-                },
+                "contract": _qualified_contract(),
                 "ready": True,
                 "schema": SCHEMA,
                 "schema_version": SCHEMA_VERSION,
@@ -1358,7 +1656,154 @@ def assemble_boi_handoff(
             exclusive_write_bytes(
                 install_root / OUTPUT_INVENTORY, inventory_payload, mode=0o600
             )
-            expected = sorted([OUTPUT_INVENTORY, *roles])
+            payload_rows = []
+            for relative in sorted([OUTPUT_INVENTORY, *roles]):
+                info = stable_hash_relative(install_root, relative)
+                payload_rows.append(
+                    {
+                        "path": relative,
+                        "sha256": info.sha256,
+                        "size": info.size,
+                    }
+                )
+            qualification_payload_inventory = (
+                json.dumps(
+                    {
+                        "files": payload_rows,
+                        "kind": "privacy-v1-boi-qualification-payload",
+                        "schema": QUALIFIED_HANDOFF_SCHEMA,
+                        "schema_version": 1,
+                    },
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("ascii")
+            exclusive_write_bytes(
+                install_root / QUALIFICATION_PAYLOAD_INVENTORY_PATH,
+                qualification_payload_inventory,
+                mode=0o600,
+            )
+            envelope = {
+                "candidate": {
+                    "archive_sha256": candidate.archive_info.sha256,
+                    "release_manifest_sha256": candidate.release_manifest_sha256,
+                    "signed_boi_artifact_inventory_sha256": (
+                        candidate.boi_artifact_inventory_sha256
+                    ),
+                },
+                "controller": {
+                    "closure_digest": controller_digest,
+                    "host_id": host_id,
+                    "installation_id": installation_id,
+                    "role": "linux-boi-qualification",
+                },
+                "expires_at_unix": expires_at,
+                "issued_at_unix": issued_at,
+                "payload": {
+                    "boi_inventory_sha256": hashlib.sha256(
+                        inventory_payload
+                    ).hexdigest(),
+                    "qualified_payload_inventory_sha256": hashlib.sha256(
+                        qualification_payload_inventory
+                    ).hexdigest(),
+                    "source_artifact_inventory_sha256": (
+                        candidate.boi_artifact_inventory_sha256
+                    ),
+                },
+                "probes": {
+                    "abi22_result_sha256": hashlib.sha256(
+                        abi_probe_result
+                    ).hexdigest(),
+                    "python_wheel_result_sha256": hashlib.sha256(
+                        wheel_probe_result
+                    ).hexdigest(),
+                    "transcript_sha256": hashlib.sha256(
+                        probe_transcript
+                    ).hexdigest(),
+                },
+                "replay_namespace": replay_namespace,
+                "schema": QUALIFICATION_ENVELOPE_SCHEMA,
+                "schema_version": QUALIFICATION_ENVELOPE_SCHEMA_VERSION,
+                "signer": {
+                    "algorithm": "ed25519",
+                    "public_key_fingerprint_sha256": qualification_fingerprint,
+                },
+                "source": source,
+                "workflow": {
+                    "run_attempt": run_attempt,
+                    "run_id": run_id,
+                },
+            }
+            qualification_envelope = canonical_json_bytes(envelope)
+            envelope_path = install_root / QUALIFICATION_ENVELOPE_PATH
+            signature_path = install_root / QUALIFICATION_SIGNATURE_PATH
+            public_key_path = install_root / QUALIFICATION_PUBLIC_KEY_PATH
+            envelope_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            exclusive_write_bytes(envelope_path, qualification_envelope, mode=0o600)
+            qualification_signer(
+                envelope_path,
+                qualification_external_signer,
+                qualification_signing_public_key,
+                qualification_fingerprint,
+                signature_path,
+                public_key_path,
+                release_manifest_verifier_path,
+                verifier_sha256,
+            )
+            embedded_public_key = stable_hash_relative(
+                install_root, QUALIFICATION_PUBLIC_KEY_PATH
+            )
+            embedded_signature = stable_hash_relative(
+                install_root, QUALIFICATION_SIGNATURE_PATH
+            )
+            if (
+                embedded_public_key.size != 32
+                or embedded_public_key.sha256 != qualification_fingerprint
+                or embedded_signature.size != 64
+            ):
+                _fail("BOI qualification signer returned a noncanonical identity")
+            transport_rows = []
+            transport_members = sorted(
+                [
+                    OUTPUT_INVENTORY,
+                    QUALIFICATION_PAYLOAD_INVENTORY_PATH,
+                    QUALIFICATION_ENVELOPE_PATH,
+                    QUALIFICATION_SIGNATURE_PATH,
+                    QUALIFICATION_PUBLIC_KEY_PATH,
+                    *roles,
+                ]
+            )
+            for relative in transport_members:
+                info = stable_hash_relative(install_root, relative)
+                transport_rows.append(
+                    {
+                        "path": relative,
+                        "sha256": info.sha256,
+                        "size": info.size,
+                    }
+                )
+            transport_payload = (
+                json.dumps(
+                    {
+                        "files": transport_rows,
+                        "kind": QUALIFIED_HANDOFF_KIND,
+                        "schema": QUALIFIED_HANDOFF_SCHEMA,
+                        "schema_version": 1,
+                    },
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("ascii")
+            exclusive_write_bytes(
+                install_root / QUALIFIED_HANDOFF_MANIFEST,
+                transport_payload,
+                mode=0o600,
+            )
+            expected = sorted([QUALIFIED_HANDOFF_MANIFEST, *transport_members])
             if scan_inventory_paths(install_root) != expected:
                 _fail(
                     "assembled BOI directory does not have the exact closed inventory"
@@ -1372,8 +1817,23 @@ def assemble_boi_handoff(
                 != hashlib.sha256(inventory_payload).hexdigest()
             ):
                 _fail("assembled BOI inventory changed after installation")
-            if stable_hash_path(candidate.archive) != candidate.archive_info:
-                _fail("candidate archive changed while the BOI handoff was assembled")
+            if (
+                stable_hash_relative(install_root, QUALIFIED_HANDOFF_MANIFEST).sha256
+                != hashlib.sha256(transport_payload).hexdigest()
+            ):
+                _fail("assembled BOI transport inventory changed after installation")
+            if (
+                stable_hash_relative(
+                    install_root, QUALIFICATION_PAYLOAD_INVENTORY_PATH
+                ).sha256
+                != hashlib.sha256(qualification_payload_inventory).hexdigest()
+                or stable_hash_relative(
+                    install_root, QUALIFICATION_ENVELOPE_PATH
+                ).sha256
+                != hashlib.sha256(qualification_envelope).hexdigest()
+            ):
+                _fail("assembled signed BOI qualification envelope changed")
+            _recheck_candidate_files(candidate)
             for current, directories, files in os.walk(install_root, topdown=False):
                 current_path = Path(current)
                 for name in files:
@@ -1420,15 +1880,692 @@ def assemble_boi_handoff(
                     _fail("BOI output parent changed during publication")
             finally:
                 os.close(parent_fd)
-        except (OSError, ReleaseArtifactError) as exc:
+        except (OSError, ReleaseArtifactError, ReleaseManifestSignatureError) as exc:
             raise BoiHandoffError(f"cannot install BOI handoff: {exc}") from exc
     return {
         "candidate_archive_sha256": candidate.archive_info.sha256,
         "inventory_sha256": hashlib.sha256(inventory_payload).hexdigest(),
+        "handoff_inventory_sha256": hashlib.sha256(transport_payload).hexdigest(),
         "output": str(output),
+        "probe_transcript_sha256": hashlib.sha256(probe_transcript).hexdigest(),
+        "qualification_receipt_id": _qualification_receipt_id(
+            qualification_envelope
+        ),
         "ready": True,
         "source": source,
     }
+
+
+def _qualified_contract() -> dict[str, object]:
+    return {
+        "abi_version": 22,
+        "availability_source": "torii-committed-capability-manifest",
+        "jindo_assurance": "available-experimental",
+        "jindo_missing_evidence": (
+            "MissingDistributionWideKnowledgeSoundnessEvidence"
+        ),
+        "privacy_c_exports": list(abi22.APPROVED_PRIVACY_C_EXPORTS),
+        "protocol_count": 12,
+        "wallet_bundle_wire": "IPWB/1",
+        "wallet_worker_wire": "IPWW/1",
+        "witness_crosses_ffi": False,
+    }
+
+
+def verify_qualified_boi_handoff(
+    root: Path,
+    *,
+    candidate_archive: Path,
+    candidate_authority_dir: Path,
+    expected_source: admission.SourceIdentity,
+    expected_receipt_id: str,
+    replay_ledger_path: Path,
+    trusted_signing_fingerprint: str,
+    trusted_qualification_public_key_path: Path,
+    trusted_qualification_signing_fingerprint: str,
+    expected_qualification_host_id: str,
+    expected_qualification_installation_id: str,
+    expected_controller_closure_digest: str,
+    expected_workflow_run_id: int,
+    expected_workflow_run_attempt: int,
+    release_manifest_verifier_path: Path,
+    trusted_release_manifest_verifier_sha256: str,
+    now_unix: int | None = None,
+    qualification_signature_verifier: Callable[..., Mapping[str, object]] = (
+        verify_release_manifest
+    ),
+) -> QualifiedBoiSnapshot:
+    """Independently authenticate and bind one closed qualified BOI handoff."""
+
+    root = _canonical_directory(Path(os.path.abspath(root)), "qualified BOI handoff")
+    external_archive = Path(os.path.abspath(candidate_archive))
+    external_authority = _canonical_directory(
+        Path(os.path.abspath(candidate_authority_dir)),
+        "deployment candidate authority",
+    )
+    external_archive_info = stable_hash_path(
+        external_archive, max_size=native_authority.MAX_ARCHIVE_LOGICAL_BYTES
+    )
+    qualification_fingerprint = _sha256(
+        trusted_qualification_signing_fingerprint,
+        "trusted BOI qualification signing fingerprint",
+    )
+    expected_host_id = _trust_id(
+        expected_qualification_host_id, "expected BOI qualification host ID"
+    )
+    expected_installation_id = _trust_id(
+        expected_qualification_installation_id,
+        "expected BOI qualification installation ID",
+    )
+    expected_controller_digest = _sha256(
+        expected_controller_closure_digest,
+        "expected BOI qualification controller closure digest",
+    )
+    expected_run_id = _positive_run_number(
+        expected_workflow_run_id, "expected workflow run ID", 20
+    )
+    expected_run_attempt = _positive_run_number(
+        expected_workflow_run_attempt, "expected workflow run attempt", 10
+    )
+    try:
+        if scan_inventory_paths(external_authority) != list(
+            admission.FINAL_AUTHORITY_FILES
+        ):
+            _fail("deployment candidate authority inventory is not exact")
+        external_authority_files = {
+            relative: stable_hash_relative(external_authority, relative)
+            for relative in admission.FINAL_AUTHORITY_FILES
+        }
+        manifest_info, manifest_payload = stable_read_relative(
+            root,
+            QUALIFIED_HANDOFF_MANIFEST,
+            max_size=MAX_HANDOFF_MANIFEST_BYTES,
+            return_payload=True,
+        )
+    except ReleaseArtifactError as exc:
+        raise BoiHandoffError(f"cannot capture qualified BOI handoff: {exc}") from exc
+    assert manifest_payload is not None
+    transport = _canonical_object(
+        manifest_payload, "qualified BOI handoff inventory", compact=True
+    )
+    if (
+        set(transport) != {"files", "kind", "schema", "schema_version"}
+        or transport.get("kind") != QUALIFIED_HANDOFF_KIND
+        or transport.get("schema") != QUALIFIED_HANDOFF_SCHEMA
+        or transport.get("schema_version") != 1
+    ):
+        _fail("qualified BOI handoff inventory identity is unsupported")
+    raw_transport_rows = transport.get("files")
+    if not isinstance(raw_transport_rows, list) or not raw_transport_rows:
+        _fail("qualified BOI handoff inventory is empty")
+    captured: dict[str, StableFile] = {
+        QUALIFIED_HANDOFF_MANIFEST: manifest_info
+    }
+    transport_paths: list[str] = []
+    for row in raw_transport_rows:
+        if not isinstance(row, dict) or set(row) != {"path", "sha256", "size"}:
+            _fail("qualified BOI handoff inventory row fields are not exact")
+        relative = row.get("path")
+        if (
+            not isinstance(relative, str)
+            or relative == QUALIFIED_HANDOFF_MANIFEST
+            or PurePosixPath(relative).is_absolute()
+            or PurePosixPath(relative).as_posix() != relative
+            or any(part in {"", ".", ".."} for part in PurePosixPath(relative).parts)
+        ):
+            _fail("qualified BOI handoff contains a noncanonical path")
+        try:
+            info = stable_hash_relative(root, relative)
+        except ReleaseArtifactError as exc:
+            raise BoiHandoffError(str(exc)) from exc
+        if (
+            row.get("sha256") != info.sha256
+            or row.get("size") != info.size
+            or info.size <= 0
+        ):
+            _fail(f"qualified BOI handoff row differs: {relative!r}")
+        transport_paths.append(relative)
+        captured[relative] = info
+    if transport_paths != sorted(set(transport_paths)):
+        _fail("qualified BOI handoff inventory paths are reordered or repeated")
+    try:
+        if scan_inventory_paths(root) != sorted(captured):
+            _fail("qualified BOI handoff tree is not the exact closed inventory")
+        _, inventory_payload = stable_read_relative(
+            root, OUTPUT_INVENTORY, max_size=MAX_HANDOFF_MANIFEST_BYTES,
+            return_payload=True,
+        )
+        _, qualification_payload_inventory = stable_read_relative(
+            root,
+            QUALIFICATION_PAYLOAD_INVENTORY_PATH,
+            max_size=MAX_HANDOFF_MANIFEST_BYTES,
+            return_payload=True,
+        )
+        _, qualification_envelope = stable_read_relative(
+            root,
+            QUALIFICATION_ENVELOPE_PATH,
+            max_size=MAX_HANDOFF_MANIFEST_BYTES,
+            return_payload=True,
+        )
+        _, probe_transcript = stable_read_relative(
+            root,
+            PROBE_TRANSCRIPT_PATH,
+            max_size=MAX_HANDOFF_MANIFEST_BYTES,
+            return_payload=True,
+        )
+        _, embedded_qualification_public_key = stable_read_relative(
+            root,
+            QUALIFICATION_PUBLIC_KEY_PATH,
+            max_size=32,
+            return_payload=True,
+        )
+    except ReleaseArtifactError as exc:
+        raise BoiHandoffError(str(exc)) from exc
+    assert inventory_payload is not None
+    assert qualification_payload_inventory is not None
+    assert qualification_envelope is not None
+    assert probe_transcript is not None
+    assert embedded_qualification_public_key is not None
+    trusted_qualification_key = Path(trusted_qualification_public_key_path)
+    try:
+        if (
+            not trusted_qualification_key.is_absolute()
+            or Path(os.path.abspath(trusted_qualification_key))
+            != trusted_qualification_key
+            or trusted_qualification_key.resolve(strict=True)
+            != trusted_qualification_key
+            or trusted_qualification_key.is_symlink()
+        ):
+            _fail("trusted BOI qualification public key path is not canonical")
+        trusted_qualification_key_state, trusted_qualification_key_payload = (
+            stable_read_path(trusted_qualification_key, max_size=32)
+        )
+    except ReleaseArtifactError as exc:
+        raise BoiHandoffError(
+            f"cannot capture trusted BOI qualification public key: {exc}"
+        ) from exc
+    if (
+        trusted_qualification_key_state.size != 32
+        or trusted_qualification_key_state.sha256 != qualification_fingerprint
+        or embedded_qualification_public_key != trusted_qualification_key_payload
+    ):
+        _fail("qualified BOI public key differs from the separately pinned key")
+    try:
+        signature_result = qualification_signature_verifier(
+            root / QUALIFICATION_ENVELOPE_PATH,
+            root / QUALIFICATION_SIGNATURE_PATH,
+            root / QUALIFICATION_PUBLIC_KEY_PATH,
+            qualification_fingerprint,
+            release_manifest_verifier_path,
+            trusted_release_manifest_verifier_sha256,
+        )
+    except ReleaseManifestSignatureError as exc:
+        raise BoiHandoffError(
+            f"BOI qualification envelope signature is invalid: {exc}"
+        ) from exc
+    if (
+        signature_result.get("signature_verified") is not True
+        or signature_result.get("signer_fingerprint_sha256")
+        != qualification_fingerprint
+        or signature_result.get("manifest_sha256")
+        != hashlib.sha256(qualification_envelope).hexdigest()
+    ):
+        _fail("BOI qualification signature verifier returned a mismatched result")
+    payload_transport = _canonical_object(
+        qualification_payload_inventory,
+        "signed BOI qualification payload inventory",
+        compact=True,
+    )
+    if (
+        set(payload_transport) != {"files", "kind", "schema", "schema_version"}
+        or payload_transport.get("kind")
+        != "privacy-v1-boi-qualification-payload"
+        or payload_transport.get("schema") != QUALIFIED_HANDOFF_SCHEMA
+        or payload_transport.get("schema_version") != 1
+    ):
+        _fail("signed BOI qualification payload inventory identity differs")
+    payload_rows = payload_transport.get("files")
+    if not isinstance(payload_rows, list) or not payload_rows:
+        _fail("signed BOI qualification payload inventory is empty")
+    payload_paths: list[str] = []
+    forbidden_payload_paths = {
+        QUALIFIED_HANDOFF_MANIFEST,
+        QUALIFICATION_PAYLOAD_INVENTORY_PATH,
+        QUALIFICATION_ENVELOPE_PATH,
+        QUALIFICATION_SIGNATURE_PATH,
+        QUALIFICATION_PUBLIC_KEY_PATH,
+    }
+    for row in payload_rows:
+        if not isinstance(row, dict) or set(row) != {"path", "sha256", "size"}:
+            _fail("signed BOI qualification payload row fields are not exact")
+        relative = row.get("path")
+        info = captured.get(relative) if isinstance(relative, str) else None
+        if (
+            info is None
+            or relative in forbidden_payload_paths
+            or row.get("sha256") != info.sha256
+            or row.get("size") != info.size
+        ):
+            _fail("signed BOI qualification payload row differs from exact bytes")
+        payload_paths.append(relative)
+    if payload_paths != sorted(set(payload_paths)):
+        _fail("signed BOI qualification payload paths are reordered or repeated")
+
+    envelope = _canonical_object(
+        qualification_envelope, "signed BOI qualification envelope"
+    )
+    envelope_fields = {
+        "candidate",
+        "controller",
+        "expires_at_unix",
+        "issued_at_unix",
+        "payload",
+        "probes",
+        "replay_namespace",
+        "schema",
+        "schema_version",
+        "signer",
+        "source",
+        "workflow",
+    }
+    if (
+        set(envelope) != envelope_fields
+        or envelope.get("schema") != QUALIFICATION_ENVELOPE_SCHEMA
+        or envelope.get("schema_version") != QUALIFICATION_ENVELOPE_SCHEMA_VERSION
+    ):
+        _fail("signed BOI qualification envelope fields differ")
+    controller = envelope.get("controller")
+    if not isinstance(controller, dict) or controller != {
+        "closure_digest": expected_controller_digest,
+        "host_id": expected_host_id,
+        "installation_id": expected_installation_id,
+        "role": "linux-boi-qualification",
+    }:
+        _fail("signed BOI qualification controller identity differs")
+    workflow = envelope.get("workflow")
+    if not isinstance(workflow, dict) or workflow != {
+        "run_attempt": expected_run_attempt,
+        "run_id": expected_run_id,
+    }:
+        _fail("signed BOI qualification workflow identity differs")
+    expected_replay_namespace = _qualification_replay_namespace(
+        expected_source.commit, expected_run_id, expected_run_attempt
+    )
+    if envelope.get("replay_namespace") != expected_replay_namespace:
+        _fail("signed BOI qualification replay namespace differs")
+    signer = envelope.get("signer")
+    if not isinstance(signer, dict) or signer != {
+        "algorithm": "ed25519",
+        "public_key_fingerprint_sha256": qualification_fingerprint,
+    }:
+        _fail("signed BOI qualification signer policy differs")
+    issued_at = envelope.get("issued_at_unix")
+    expires_at = envelope.get("expires_at_unix")
+    current_time = int(time.time()) if now_unix is None else now_unix
+    if (
+        not isinstance(current_time, int)
+        or isinstance(current_time, bool)
+        or current_time <= 0
+        or not isinstance(issued_at, int)
+        or isinstance(issued_at, bool)
+        or not isinstance(expires_at, int)
+        or isinstance(expires_at, bool)
+        or issued_at <= 0
+        or expires_at - issued_at != QUALIFICATION_LIFETIME_SECONDS
+        or issued_at > current_time + QUALIFICATION_CLOCK_SKEW_SECONDS
+        or current_time > expires_at
+    ):
+        _fail("signed BOI qualification envelope is expired or outside policy")
+    normalized_source = _source_identity(envelope.get("source"))
+    if normalized_source != _source_identity(expected_source.as_dict()):
+        _fail("signed BOI qualification source differs")
+
+    probe_value = _canonical_object(
+        probe_transcript, "signed BOI native probe transcript"
+    )
+    if (
+        set(probe_value) != {"abi22", "python_wheel", "schema", "schema_version"}
+        or probe_value.get("schema")
+        != "iroha.taira.linux_boi_probe_transcript"
+        or probe_value.get("schema_version") != 1
+    ):
+        _fail("signed BOI native probe transcript fields differ")
+    abi_probe = probe_value.get("abi22")
+    wheel_probe = probe_value.get("python_wheel")
+    abi_probe_fields = {
+        "abi_version",
+        "compiled_profile_catalog_sha256",
+        "library_sha256",
+        "privacy_c_exports",
+        "result",
+    }
+    wheel_probe_fields = {
+        "capability_manifest_sha256",
+        "compiled_profile_catalog_sha256",
+        "native_member",
+        "result",
+        "wheel_sha256",
+    }
+    if (
+        not isinstance(abi_probe, dict)
+        or set(abi_probe) != abi_probe_fields
+        or not isinstance(wheel_probe, dict)
+        or set(wheel_probe) != wheel_probe_fields
+    ):
+        _fail("signed BOI native probe result fields differ")
+    catalog_sha256 = _sha256(
+        abi_probe.get("compiled_profile_catalog_sha256"),
+        "signed standalone compiled catalog digest",
+    )
+    native_member, _controller_member = _wheel_layout(root, captured)
+    if (
+        abi_probe.get("abi_version") != 22
+        or abi_probe.get("library_sha256") != captured[ABI_LIBRARY_PATH].sha256
+        or abi_probe.get("privacy_c_exports")
+        != list(abi22.APPROVED_PRIVACY_C_EXPORTS)
+        or abi_probe.get("result") != "passed"
+        or wheel_probe.get("capability_manifest_sha256")
+        != captured[CAPABILITY_PATH].sha256
+        or wheel_probe.get("compiled_profile_catalog_sha256") != catalog_sha256
+        or wheel_probe.get("native_member") != native_member
+        or wheel_probe.get("result") != "passed"
+        or wheel_probe.get("wheel_sha256") != captured[WHEEL_PATH].sha256
+    ):
+        _fail("signed BOI native probe results differ from qualified artifacts")
+    probes = envelope.get("probes")
+    expected_probes = {
+        "abi22_result_sha256": hashlib.sha256(
+            canonical_json_bytes(abi_probe)
+        ).hexdigest(),
+        "python_wheel_result_sha256": hashlib.sha256(
+            canonical_json_bytes(wheel_probe)
+        ).hexdigest(),
+        "transcript_sha256": hashlib.sha256(probe_transcript).hexdigest(),
+    }
+    if not isinstance(probes, dict) or probes != expected_probes:
+        _fail("signed BOI probe transcript/result digests differ")
+    qualification_receipt_id = _qualification_receipt_id(
+        qualification_envelope
+    )
+    try:
+        replay_snapshot = admission.load_replay_ledger(
+            Path(os.path.abspath(replay_ledger_path))
+        )
+    except admission.TairaRolloutAdmissionError as exc:
+        raise BoiHandoffError(f"cannot inspect BOI replay ledger: {exc}") from exc
+    if qualification_receipt_id in replay_snapshot.consumed_receipt_ids:
+        _fail("signed BOI qualification receipt was already consumed")
+
+    inventory = _canonical_object(inventory_payload, "qualified BOI inventory")
+    if (
+        set(inventory)
+        != {"artifacts", "candidate", "contract", "ready", "schema", "schema_version", "source"}
+        or inventory.get("schema") != SCHEMA
+        or inventory.get("schema_version") != SCHEMA_VERSION
+        or inventory.get("ready") is not True
+        or inventory.get("contract") != _qualified_contract()
+    ):
+        _fail("qualified BOI semantic inventory identity differs")
+    inventory_source = _source_identity(inventory.get("source"))
+    if inventory_source != normalized_source:
+        _fail("qualified BOI handoff is bound to a different source")
+
+    candidate_value = inventory.get("candidate")
+    candidate_fields = {
+        "archive_path", "archive_sha256", "artifact_handoff_sha256",
+        "authority_directory", "boi_artifact_inventory_sha256",
+        "exact12_matrix_sha256", "linux_validator_binary_sha256",
+        "macos_validator_binary_sha256", "privacy_protocol_receipt_id",
+        "qualification_receipt_id", "release_manifest_sha256",
+        "validator_binary_sha256",
+    }
+    if not isinstance(candidate_value, dict) or set(candidate_value) != candidate_fields:
+        _fail("qualified BOI candidate fields are not exact")
+    embedded_archive_relative = candidate_value.get("archive_path")
+    if (
+        not isinstance(embedded_archive_relative, str)
+        or not embedded_archive_relative.startswith(CANDIDATE_ARCHIVE_DIRECTORY + "/")
+        or PurePosixPath(embedded_archive_relative).parent.as_posix()
+        != CANDIDATE_ARCHIVE_DIRECTORY
+    ):
+        _fail("qualified BOI candidate archive path is not exact")
+    if candidate_value.get("authority_directory") != CANDIDATE_AUTHORITY_DIRECTORY:
+        _fail("qualified BOI candidate authority path is not exact")
+    embedded_archive = root / embedded_archive_relative
+    embedded_authority = root / CANDIDATE_AUTHORITY_DIRECTORY
+    embedded_args = argparse.Namespace(
+        candidate_archive=embedded_archive,
+        candidate_authority_dir=embedded_authority,
+        candidate_replay_ledger=Path(os.path.abspath(replay_ledger_path)),
+        expected_source_commit=expected_source.commit,
+        expected_dpn_validator_release_commit=(
+            expected_source.dpn_validator_release_commit
+        ),
+        expected_cargo_lock_sha256=expected_source.cargo_lock_sha256,
+        expected_workspace_source_manifest_sha256=(
+            expected_source.workspace_source_manifest_sha256
+        ),
+        expected_receipt_id=expected_receipt_id,
+        trusted_signing_fingerprint=trusted_signing_fingerprint,
+        release_manifest_verifier=release_manifest_verifier_path,
+        trusted_release_manifest_verifier_sha256=(
+            trusted_release_manifest_verifier_sha256
+        ),
+        now_unix=now_unix,
+    )
+    embedded = authenticate_candidate(embedded_args)
+    if (
+        embedded.archive.name != external_archive.name
+        or embedded.archive_info.sha256 != external_archive_info.sha256
+        or embedded.archive_info.size != external_archive_info.size
+    ):
+        _fail("qualified BOI handoff contains a different signed candidate archive")
+    for relative in admission.FINAL_AUTHORITY_FILES:
+        inside = embedded.authority_files[relative]
+        outside = external_authority_files[relative]
+        if inside.sha256 != outside.sha256 or inside.size != outside.size:
+            _fail(f"qualified BOI candidate authority differs: {relative!r}")
+
+    expected_candidate = {
+        "archive_path": embedded_archive_relative,
+        "archive_sha256": embedded.archive_info.sha256,
+        "artifact_handoff_sha256": embedded.artifact_handoff_sha256,
+        "authority_directory": CANDIDATE_AUTHORITY_DIRECTORY,
+        "boi_artifact_inventory_sha256": embedded.boi_artifact_inventory_sha256,
+        "exact12_matrix_sha256": embedded.exact12_matrix_sha256,
+        "linux_validator_binary_sha256": embedded.native_validator_binary_sha256,
+        "macos_validator_binary_sha256": embedded.validator_binary_sha256,
+        "privacy_protocol_receipt_id": embedded.privacy_protocol_receipt_id,
+        "qualification_receipt_id": embedded.qualification_receipt_id,
+        "release_manifest_sha256": embedded.release_manifest_sha256,
+        "validator_binary_sha256": embedded.validator_binary_sha256,
+    }
+    if candidate_value != expected_candidate:
+        _fail("qualified BOI candidate binding differs from signed admission")
+    envelope_candidate = envelope.get("candidate")
+    expected_envelope_candidate = {
+        "archive_sha256": embedded.archive_info.sha256,
+        "release_manifest_sha256": embedded.release_manifest_sha256,
+        "signed_boi_artifact_inventory_sha256": (
+            embedded.boi_artifact_inventory_sha256
+        ),
+    }
+    if (
+        not isinstance(envelope_candidate, dict)
+        or envelope_candidate != expected_envelope_candidate
+    ):
+        _fail("signed BOI qualification candidate binding differs")
+    envelope_payload_binding = envelope.get("payload")
+    expected_payload_binding = {
+        "boi_inventory_sha256": hashlib.sha256(inventory_payload).hexdigest(),
+        "qualified_payload_inventory_sha256": hashlib.sha256(
+            qualification_payload_inventory
+        ).hexdigest(),
+        "source_artifact_inventory_sha256": (
+            embedded.boi_artifact_inventory_sha256
+        ),
+    }
+    if (
+        not isinstance(envelope_payload_binding, dict)
+        or envelope_payload_binding != expected_payload_binding
+    ):
+        _fail("signed BOI qualification payload binding differs")
+
+    expected_roles = {spec.path: spec.role for spec in ARTIFACT_SPECS}
+    expected_roles.update(
+        {
+            CANDIDATE_ADMISSION_PATH: "candidate-admission",
+            SOURCE_HANDOFF_COPY_PATH: "source-artifact-inventory",
+            NATIVE_RECEIPT_NORITO_PATH: "native-release-receipt-authoritative",
+            NATIVE_RECEIPT_JSON_PATH: "native-release-receipt-projection",
+            QUALIFICATION_RECEIPT_PATH: "four-peer-qualification-receipt",
+            PROTOCOL_RECEIPT_PATH: "exact12-four-peer-receipt",
+            PROBE_TRANSCRIPT_PATH: "linux-native-probe-transcript",
+            embedded_archive_relative: "signed-candidate-archive",
+            **{
+                f"{CANDIDATE_AUTHORITY_DIRECTORY}/{relative}": (
+                    "signed-candidate-authority"
+                )
+                for relative in admission.FINAL_AUTHORITY_FILES
+            },
+        }
+    )
+    raw_rows = inventory.get("artifacts")
+    if not isinstance(raw_rows, list) or len(raw_rows) != len(expected_roles):
+        _fail("qualified BOI semantic artifact count differs")
+    semantic_paths: list[str] = []
+    for row in raw_rows:
+        if not isinstance(row, dict) or set(row) != {"path", "role", "sha256", "size"}:
+            _fail("qualified BOI semantic artifact row fields are not exact")
+        relative = row.get("path")
+        if not isinstance(relative, str) or expected_roles.get(relative) != row.get("role"):
+            _fail("qualified BOI semantic artifact role differs")
+        info = captured.get(relative)
+        if info is None or row.get("sha256") != info.sha256 or row.get("size") != info.size:
+            _fail(f"qualified BOI semantic artifact bytes differ: {relative!r}")
+        semantic_paths.append(relative)
+    if semantic_paths != sorted(expected_roles):
+        _fail("qualified BOI semantic artifact paths are reordered or incomplete")
+    expected_payload_paths = {OUTPUT_INVENTORY, *expected_roles}
+    if set(payload_paths) != expected_payload_paths:
+        _fail("signed BOI qualification payload inventory is not exact")
+    expected_transport_paths = {
+        *expected_payload_paths,
+        QUALIFICATION_PAYLOAD_INVENTORY_PATH,
+        QUALIFICATION_ENVELOPE_PATH,
+        QUALIFICATION_SIGNATURE_PATH,
+        QUALIFICATION_PUBLIC_KEY_PATH,
+    }
+    if set(transport_paths) != expected_transport_paths:
+        _fail("qualified BOI transport and semantic inventories diverge")
+
+    try:
+        _, source_inventory_payload = stable_read_relative(
+            root, SOURCE_HANDOFF_COPY_PATH,
+            max_size=admission.MAX_BOI_ARTIFACT_INVENTORY_BYTES,
+            return_payload=True,
+        )
+        _, candidate_admission_payload = stable_read_relative(
+            root, CANDIDATE_ADMISSION_PATH, max_size=admission.MAX_JSON_BYTES,
+            return_payload=True,
+        )
+    except ReleaseArtifactError as exc:
+        raise BoiHandoffError(str(exc)) from exc
+    assert source_inventory_payload is not None
+    assert candidate_admission_payload is not None
+    if (
+        source_inventory_payload != embedded.boi_artifact_inventory
+        or hashlib.sha256(source_inventory_payload).hexdigest()
+        != embedded.boi_artifact_inventory_sha256
+    ):
+        _fail("qualified BOI source inventory differs from the signed candidate")
+    try:
+        source_inventory = admission._validate_boi_artifact_inventory(
+            source_inventory_payload,
+            expected_source=expected_source,
+            expected_exact12_matrix_sha256=embedded.exact12_matrix_sha256,
+        )
+    except admission.TairaRolloutAdmissionError as exc:
+        raise BoiHandoffError(str(exc)) from exc
+    semantic_by_path = {str(row["path"]): row for row in raw_rows}
+    source_rows = source_inventory.get("files")
+    if not isinstance(source_rows, list) or len(source_rows) != len(ARTIFACT_SPECS):
+        _fail("qualified BOI source inventory result is not exact")
+    for source_row in source_rows:
+        if not isinstance(source_row, dict):
+            _fail("qualified BOI source inventory row is malformed")
+        relative = str(source_row.get("path", ""))
+        semantic_row = semantic_by_path.get(relative)
+        if (
+            semantic_row is None
+            or semantic_row["sha256"] != source_row.get("sha256")
+            or semantic_row["size"] != source_row.get("size")
+        ):
+            _fail(f"qualified BOI source artifact differs: {relative!r}")
+    if candidate_admission_payload != _candidate_admission_payload(embedded):
+        _fail("qualified BOI admission projection differs from signed candidate")
+    receipt_pairs = {
+        QUALIFICATION_RECEIPT_PATH: embedded.qualification_receipt,
+        PROTOCOL_RECEIPT_PATH: embedded.privacy_protocol_receipt,
+        NATIVE_RECEIPT_NORITO_PATH: embedded.native_receipt_norito,
+        NATIVE_RECEIPT_JSON_PATH: embedded.native_receipt_json,
+    }
+    for relative, expected_payload in receipt_pairs.items():
+        try:
+            _, actual_payload = stable_read_relative(
+                root, relative, return_payload=True
+            )
+        except ReleaseArtifactError as exc:
+            raise BoiHandoffError(str(exc)) from exc
+        if actual_payload != expected_payload:
+            _fail(f"qualified BOI receipt differs from signed candidate: {relative!r}")
+
+    snapshot = QualifiedBoiSnapshot(
+        root=root,
+        files=captured,
+        handoff_inventory_sha256=manifest_info.sha256,
+        boi_inventory_sha256=captured[OUTPUT_INVENTORY].sha256,
+        candidate_archive_sha256=embedded.archive_info.sha256,
+        candidate_boi_artifact_inventory_sha256=(
+            embedded.boi_artifact_inventory_sha256
+        ),
+        candidate_release_manifest_sha256=embedded.release_manifest_sha256,
+        qualification_receipt_id=qualification_receipt_id,
+        probe_transcript_sha256=hashlib.sha256(probe_transcript).hexdigest(),
+        qualification_signer_fingerprint_sha256=qualification_fingerprint,
+        trusted_qualification_public_key=trusted_qualification_key,
+        trusted_qualification_public_key_state=(
+            trusted_qualification_key_state
+        ),
+        source=normalized_source,
+    )
+    recheck_qualified_boi_handoff(snapshot)
+    if stable_hash_path(external_archive) != external_archive_info:
+        _fail("deployment candidate archive changed during BOI verification")
+    for relative, before in external_authority_files.items():
+        if stable_hash_relative(external_authority, relative) != before:
+            _fail(f"deployment candidate authority changed: {relative!r}")
+    return snapshot
+
+
+def recheck_qualified_boi_handoff(snapshot: QualifiedBoiSnapshot) -> None:
+    """Reject any qualified-handoff path, byte, or ordering change after admission."""
+
+    try:
+        if scan_inventory_paths(snapshot.root) != sorted(snapshot.files):
+            _fail("qualified BOI handoff inventory changed after verification")
+        for relative, before in snapshot.files.items():
+            if stable_hash_relative(snapshot.root, relative) != before:
+                _fail(f"qualified BOI handoff changed: {relative!r}")
+        if (
+            stable_hash_path(
+                snapshot.trusted_qualification_public_key, max_size=32
+            )
+            != snapshot.trusted_qualification_public_key_state
+        ):
+            _fail("trusted BOI qualification public key changed after verification")
+    except ReleaseArtifactError as exc:
+        raise BoiHandoffError(f"cannot recheck qualified BOI handoff: {exc}") from exc
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -1443,6 +2580,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--expected-workspace-source-manifest-sha256", required=True)
     parser.add_argument("--expected-receipt-id", required=True)
     parser.add_argument("--trusted-signing-fingerprint", required=True)
+    parser.add_argument("--qualification-external-signer", type=Path, required=True)
+    parser.add_argument(
+        "--qualification-signing-public-key", type=Path, required=True
+    )
+    parser.add_argument(
+        "--trusted-qualification-signing-fingerprint", required=True
+    )
+    parser.add_argument("--qualification-host-id", required=True)
+    parser.add_argument("--qualification-installation-id", required=True)
+    parser.add_argument("--controller-closure-digest", required=True)
+    parser.add_argument("--workflow-run-id", type=int, required=True)
+    parser.add_argument("--workflow-run-attempt", type=int, required=True)
     parser.add_argument("--release-manifest-verifier", type=Path, required=True)
     parser.add_argument("--trusted-release-manifest-verifier-sha256", required=True)
     parser.add_argument("--python", default=sys.executable)
@@ -1460,6 +2609,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             Path(os.path.abspath(args.output)),
             candidate,
             python=args.python,
+            qualification_external_signer=args.qualification_external_signer,
+            qualification_signing_public_key=(
+                args.qualification_signing_public_key
+            ),
+            trusted_qualification_signing_fingerprint=(
+                args.trusted_qualification_signing_fingerprint
+            ),
+            qualification_host_id=args.qualification_host_id,
+            qualification_installation_id=args.qualification_installation_id,
+            controller_closure_digest=args.controller_closure_digest,
+            workflow_run_id=args.workflow_run_id,
+            workflow_run_attempt=args.workflow_run_attempt,
+            release_manifest_verifier_path=args.release_manifest_verifier,
+            trusted_release_manifest_verifier_sha256=(
+                args.trusted_release_manifest_verifier_sha256
+            ),
+            qualification_issued_at_unix=args.now_unix,
         )
     except (
         BoiHandoffError,

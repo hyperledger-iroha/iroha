@@ -535,19 +535,22 @@ mod tests {
             norito::json::from_json::<EscrowId>(&encoded).expect("decode escrow id JSON"),
             id
         );
-        assert!(
-            norito::json::from_json::<EscrowId>(&format!("[{encoded}]")).is_err(),
-            "the retired tuple-array JSON representation must be rejected"
-        );
         let raw_hex = hex::encode_upper(id.as_hash().as_ref());
-        assert!(
-            norito::json::from_json::<EscrowId>(&format!(r#""{raw_hex}""#)).is_err(),
-            "a raw-hex alias must not decode as EscrowId"
-        );
-        assert!(
-            norito::json::from_json::<EscrowId>(&format!(r#"{{"hash":{encoded}}}"#)).is_err(),
-            "an object alias must not decode as EscrowId"
-        );
+        for (label, alias) in [
+            ("tuple array", format!("[{encoded}]")),
+            ("nested array", format!("[[{encoded}]]")),
+            ("raw hex", format!(r#""{raw_hex}""#)),
+            ("lowercase literal", encoded.to_ascii_lowercase()),
+            ("lowercase checksum", encoded.replace("#434B", "#434b")),
+            ("Hash object", format!(r#"{{"Hash":{encoded}}}"#)),
+            ("hash object", format!(r#"{{"hash":{encoded}}}"#)),
+            ("EscrowId object", format!(r#"{{"EscrowId":{encoded}}}"#)),
+        ] {
+            assert!(
+                norito::json::from_json::<EscrowId>(&alias).is_err(),
+                "the {label} compatibility representation must be rejected"
+            );
+        }
 
         let nested_instruction =
             format!(r#"{{"escrow_id":[{encoded}],"expected_remaining_amount":"20"}}"#);

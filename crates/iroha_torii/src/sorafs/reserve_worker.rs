@@ -736,6 +736,7 @@ mod tests {
         ReserveTransactionForwarder, ReserveTransactionForwarderPolicyV1,
         ReserveTransactionProjectionV1, ReserveTransactionReconciliationV1,
     };
+    use tempfile::TempDir;
 
     use super::*;
 
@@ -915,16 +916,21 @@ mod tests {
         }
     }
 
-    fn forwarder() -> ReserveTransactionForwarder {
-        ReserveTransactionForwarder::in_memory(ReserveTransactionForwarderPolicyV1 {
-            max_pending: 32,
-            max_completed: 32,
-            max_dead_letters: 32,
-            max_attempts: 4,
-            max_transaction_bytes: 512 * 1024,
-            checkpoint_max_bytes: 4 * 1024 * 1024,
-        })
-        .expect("forwarder")
+    fn forwarder() -> (ReserveTransactionForwarder, TempDir) {
+        let state_dir = tempfile::tempdir().expect("reserve forwarder state directory");
+        let forwarder = ReserveTransactionForwarder::open(
+            state_dir.path(),
+            ReserveTransactionForwarderPolicyV1 {
+                max_pending: 32,
+                max_completed: 32,
+                max_dead_letters: 32,
+                max_attempts: 4,
+                max_transaction_bytes: 512 * 1024,
+                checkpoint_max_bytes: 4 * 1024 * 1024,
+            },
+        )
+        .expect("durable reserve forwarder");
+        (forwarder, state_dir)
     }
 
     fn retained_delivery(
@@ -934,7 +940,7 @@ mod tests {
         ReserveTransactionPendingV1,
         ReserveTransactionReconciliationV1,
     ) {
-        let forwarder = forwarder();
+        let (forwarder, _state_dir) = forwarder();
         let operation_id = forwarder
             .enqueue_unsigned_operation(operation, context)
             .expect("enqueue")

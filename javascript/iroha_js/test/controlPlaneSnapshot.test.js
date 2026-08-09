@@ -17,8 +17,8 @@ function sha256(filePath) {
 }
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
-const openapiPath = path.join(repoRoot, 'docs', 'source', 'soranet', 'control_plane_openapi.yaml');
-const rbacPath = path.join(repoRoot, 'docs', 'source', 'soranet', 'control_plane_rbac.yaml');
+const openapiPath = path.join(repoRoot, 'specs', 'soranet', 'control_plane_openapi.yaml');
+const rbacPath = path.join(repoRoot, 'specs', 'soranet', 'control_plane_rbac.yaml');
 
 const expected = {
   openapi: '1c8a52055aa687bf41221908491eb92e909402f5a51814ea8befb5ccaeb923b6',

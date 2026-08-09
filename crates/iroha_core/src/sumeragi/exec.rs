@@ -63,6 +63,7 @@ pub(crate) struct NativeAmxApplicationManifestEntryV1 {
 /// Canonical, bounded Native AMX application manifest for one executed block.
 #[derive(Clone, Debug)]
 pub(crate) struct NativeAmxApplicationManifestV1 {
+    executed_block_wire_len: u64,
     executed_block_wire_hash: Hash,
     entries: Vec<NativeAmxApplicationManifestEntryV1>,
     tree: MerkleTree<wire::NativeAmxApplicationManifestLeafV1>,
@@ -71,8 +72,9 @@ pub(crate) struct NativeAmxApplicationManifestV1 {
 impl NativeAmxApplicationManifestV1 {
     /// Build the canonical empty manifest for a result-bearing wire identity.
     #[must_use]
-    pub(crate) fn empty(executed_block_wire_hash: Hash) -> Self {
+    pub(crate) fn empty(executed_block_wire_len: u64, executed_block_wire_hash: Hash) -> Self {
         Self {
+            executed_block_wire_len,
             executed_block_wire_hash,
             entries: Vec::new(),
             tree: MerkleTree::default(),
@@ -85,18 +87,27 @@ impl NativeAmxApplicationManifestV1 {
     /// Native AMX role classifier. Every separate participant route appears at
     /// most once and its source/result members retain canonical block order.
     pub(crate) fn from_result_bearing_block(block: &SignedBlock) -> Result<Self, String> {
-        let executed_block_wire_hash = block
-            .executed_block_wire_hash()
-            .map_err(|error| format!("canonical executed block cannot be hashed: {error}"))?;
+        let executed_block_wire = block
+            .encode_wire()
+            .map_err(|error| format!("canonical executed block cannot be encoded: {error}"))?;
+        let executed_block_wire_len = u64::try_from(executed_block_wire.len())
+            .map_err(|_| "canonical executed block length does not fit u64".to_owned())?;
+        let executed_block_wire_hash = Hash::new(&executed_block_wire);
         let Some(bundle) = block.execution_context() else {
-            return Ok(Self::empty(executed_block_wire_hash));
+            return Ok(Self::empty(
+                executed_block_wire_len,
+                executed_block_wire_hash,
+            ));
         };
         if !bundle
             .external
             .iter()
             .any(|context| context.native_amx_receipt.is_some())
         {
-            return Ok(Self::empty(executed_block_wire_hash));
+            return Ok(Self::empty(
+                executed_block_wire_len,
+                executed_block_wire_hash,
+            ));
         }
 
         let entrypoints = block.external_entrypoints_cloned().collect::<Vec<_>>();
@@ -315,10 +326,17 @@ impl NativeAmxApplicationManifestV1 {
             .map(|entry| HashOf::new(&entry.leaf))
             .collect::<MerkleTree<_>>();
         Ok(Self {
+            executed_block_wire_len,
             executed_block_wire_hash,
             entries,
             tree,
         })
+    }
+
+    /// Exact canonical result-bearing block wire byte length.
+    #[must_use]
+    pub(crate) const fn executed_block_wire_len(&self) -> u64 {
+        self.executed_block_wire_len
     }
 
     /// Exact canonical result-bearing block wire hash.
@@ -466,13 +484,64 @@ pub fn try_post_state_from_witness(w: &ExecWitness) -> Result<Hash, &'static str
 
 /// Derive the exact execution commitment authenticated by Sumeragi-v2 votes.
 ///
-/// This is intentionally the only projection used by candidate validation and
-/// decided application. It consumes the actual `StateBlock` witness and uses
-/// the same bounded Kagemusha subtree builder as finality-proof generation.
-pub(crate) fn execution_commitment_from_witness(
+/// This is intentionally the only production projection used by candidate
+/// validation and decided application. It consumes both the actual
+/// `StateBlock` witness and the exact validated result-bearing block, so a
+/// caller cannot omit or substitute the compact merge-carrier identity.
+pub(crate) fn execution_commitment_from_validated_block(
     witness: &ExecWitness,
     native_amx_manifest: &NativeAmxApplicationManifestV1,
     lane_finality_manifest: &LaneFinalityManifestV1,
+    validated_block: &SignedBlock,
+) -> Result<wire::ExecutionCommitment, &'static str> {
+    let executed_block_wire = validated_block
+        .encode_wire()
+        .map_err(|_| "validated result-bearing block wire cannot be encoded")?;
+    let executed_block_wire_len = u64::try_from(executed_block_wire.len())
+        .map_err(|_| "validated result-bearing block wire length does not fit u64")?;
+    let executed_block_wire_hash = Hash::new(&executed_block_wire);
+    if executed_block_wire_len != native_amx_manifest.executed_block_wire_len()
+        || executed_block_wire_hash != native_amx_manifest.executed_block_wire_hash()
+    {
+        return Err("Native AMX manifest belongs to another validated block wire");
+    }
+    let merge_carrier = validated_block
+        .execution_context()
+        .and_then(|bundle| bundle.merge_entry.as_ref())
+        .map(|reference| wire::MergeCarrierCommitmentV1::new(reference.entry_hash));
+    execution_commitment_from_projection(
+        witness,
+        native_amx_manifest,
+        lane_finality_manifest,
+        merge_carrier,
+        executed_block_wire_len,
+        executed_block_wire_hash,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn execution_commitment_from_witness_for_tests(
+    witness: &ExecWitness,
+    native_amx_manifest: &NativeAmxApplicationManifestV1,
+) -> Result<wire::ExecutionCommitment, &'static str> {
+    let lane_finality_manifest = LaneFinalityManifestV1::empty();
+    execution_commitment_from_projection(
+        witness,
+        native_amx_manifest,
+        &lane_finality_manifest,
+        None,
+        native_amx_manifest.executed_block_wire_len(),
+        native_amx_manifest.executed_block_wire_hash(),
+    )
+}
+
+fn execution_commitment_from_projection(
+    witness: &ExecWitness,
+    native_amx_manifest: &NativeAmxApplicationManifestV1,
+    lane_finality_manifest: &LaneFinalityManifestV1,
+    merge_carrier: Option<wire::MergeCarrierCommitmentV1>,
+    executed_block_wire_len: u64,
+    executed_block_wire_hash: Hash,
 ) -> Result<wire::ExecutionCommitment, &'static str> {
     let (reads, writes) = witness_pairs(witness);
     let parent_state_root = parent_state_from_witness(witness);
@@ -488,7 +557,9 @@ pub(crate) fn execution_commitment_from_witness(
             native_amx_manifest.root(),
             native_amx_manifest.count(),
             lane_finality_manifest.commitment(),
-            native_amx_manifest.executed_block_wire_hash(),
+            merge_carrier,
+            executed_block_wire_len,
+            executed_block_wire_hash,
         )
         .map_err(|_| "Kagemusha V2 execution commitment is not canonical"),
         None => wire::ExecutionCommitment::new_with_manifests(
@@ -501,7 +572,9 @@ pub(crate) fn execution_commitment_from_witness(
             native_amx_manifest.root(),
             native_amx_manifest.count(),
             lane_finality_manifest.commitment(),
-            native_amx_manifest.executed_block_wire_hash(),
+            merge_carrier,
+            executed_block_wire_len,
+            executed_block_wire_hash,
         )
         .map_err(|_| "Sumeragi V2 execution commitment is not canonical"),
     }
@@ -535,7 +608,6 @@ mod tests {
 
     use iroha_crypto::{Algorithm, KeyPair, MerkleTreeCommitment, Signature, SignatureOf};
     use iroha_data_model::{
-        ChainId,
         account::AccountId,
         block::{
             BlockHeader, BlockSignature,
@@ -855,7 +927,6 @@ mod tests {
             fixture_key(0x31, Algorithm::Ed25519),
             fixture_key(0x32, Algorithm::Ed25519),
         ];
-        let chain_id = ChainId::from("native-manifest-exec-test");
         let network_id = crate::sumeragi::synthetic_network_id("native-manifest-exec-test");
         let transaction_time =
             TimeSource::new_fixed(Duration::from_millis(MANIFEST_APPLICATION_HEIGHT));
@@ -910,7 +981,7 @@ mod tests {
             &entrypoints,
             &source_ids,
         );
-        let chain_id_hash = Hash::new(chain_id.as_str().as_bytes());
+        let chain_id_hash = Hash::prehashed(*network_id.as_bytes());
         let coordinator_route = RoutingDecision::new(
             coordinator.proposal.descriptor.lane_id,
             coordinator.proposal.descriptor.dataspace_id,
@@ -1166,11 +1237,9 @@ mod tests {
         };
 
         let executed_block_wire_hash = Hash::new(b"executed block wire");
-        let native_manifest = NativeAmxApplicationManifestV1::empty(executed_block_wire_hash);
-        let lane_manifest = LaneFinalityManifestV1::empty();
-        let commitment =
-            execution_commitment_from_witness(&witness, &native_manifest, &lane_manifest)
-                .expect("valid top-up commitment");
+        let native_manifest = NativeAmxApplicationManifestV1::empty(1, executed_block_wire_hash);
+        let commitment = execution_commitment_from_witness_for_tests(&witness, &native_manifest)
+            .expect("valid top-up commitment");
         assert_eq!(commitment.topup_anchor_count, 1);
         assert!(commitment.topup_anchor_root.is_some());
         assert_eq!(commitment.validate(), Ok(()));

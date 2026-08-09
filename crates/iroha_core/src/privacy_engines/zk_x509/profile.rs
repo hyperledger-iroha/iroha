@@ -30,10 +30,12 @@ pub(crate) const ZK_X509_SUITE_V1: &[u8] = b"iroha-zk-x509-stark-p256-v0";
 pub(crate) const ZK_X509_SOURCE_PROFILE_V1: &[u8] =
     b"iroha-native-rust:strict-der:rfc5280-p256-sha256:private-chain-crl-ownership:goldilocks-stark:v1";
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Minimum admitted certificate-chain depth, including leaf and root.
 pub(crate) const ZK_X509_MIN_CHAIN_DEPTH_V1: usize = 2;
 /// Maximum admitted certificate-chain depth, including leaf and root.
 pub(crate) const ZK_X509_MAX_CHAIN_DEPTH_V1: usize = 3;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Maximum DER bytes in the private CRL witness.
 ///
 /// Unbounded parsing is deliberately excluded from a consensus circuit.
@@ -56,25 +58,30 @@ pub(crate) const ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1: usize = 256;
 /// Fixed uncompressed P-256 affine public-key width, including SEC1 prefix.
 pub(crate) const ZK_X509_UNCOMPRESSED_P256_BYTES_V1: usize = 65;
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// RFC 5280 client-authentication EKU OID.
 pub(crate) const ZK_X509_CLIENT_AUTHENTICATION_EKU_OID_V1: &str = "1.3.6.1.5.5.7.3.2";
+#[cfg(test)]
 /// Iroha document-signing EKU OID.
 ///
 /// The `2.25` UUID OID is UUIDv5(URL namespace,
 /// `https://hyperledger.github.io/iroha/eku/document-signing/v1`).
 pub(crate) const ZK_X509_DOCUMENT_SIGNING_EKU_OID_V1: &str =
     "2.25.27309815684091774780500832483404888315";
+#[cfg(test)]
 /// Iroha wallet-identity EKU OID.
 ///
 /// The `2.25` UUID OID is UUIDv5(URL namespace,
 /// `https://hyperledger.github.io/iroha/eku/wallet-identity/v1`).
 pub(crate) const ZK_X509_WALLET_IDENTITY_EKU_OID_V1: &str =
     "2.25.325405717892146366947968947126277329515";
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// DER content octets of the Iroha document-signing EKU OID.
 pub(crate) const ZK_X509_DOCUMENT_SIGNING_EKU_DER_VALUE_V1: &[u8] = &[
     0x69, 0xa9, 0x8b, 0xd6, 0xf7, 0xd8, 0x86, 0xaa, 0xc4, 0xb3, 0x8b, 0xcd, 0xbc, 0xba, 0xe7, 0x86,
     0x8c, 0xf1, 0x7b,
 ];
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// DER content octets of the Iroha wallet-identity EKU OID.
 pub(crate) const ZK_X509_WALLET_IDENTITY_EKU_DER_VALUE_V1: &[u8] = &[
     0x69, 0x83, 0xe9, 0xce, 0xee, 0xa4, 0xdc, 0xb4, 0xda, 0xe5, 0xdf, 0xbe, 0xf0, 0xac, 0xd6, 0xd0,
@@ -85,6 +92,7 @@ pub(crate) const ZK_X509_WALLET_IDENTITY_EKU_DER_VALUE_V1: &[u8] = &[
 pub(crate) const ZK_X509_HASH_FRAME_DOMAIN_V1: &[u8] = b"iroha.zk-x509.sha256.frame.v1";
 /// Domain for occupied CA leaves.
 pub(crate) const ZK_X509_CA_LEAF_DOMAIN_V1: &[u8] = b"iroha.zk-x509.ca.leaf.v1";
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Domain for empty CA leaves.
 pub(crate) const ZK_X509_CA_EMPTY_LEAF_DOMAIN_V1: &[u8] = b"iroha.zk-x509.ca.empty-leaf.v1";
 /// Domain for CA internal tree nodes.
@@ -306,12 +314,16 @@ pub(crate) use readiness_certificates::{
     resource_certificate_matches_source_v1, validate_resource_certificate_payload_v1,
 };
 use readiness_certificates::{
-    ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1, ZK_X509_RESOURCE_MAXIMUM_ELAPSED_MILLIS_V1,
+    ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1, ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1,
+    resource_certificate_is_pinned_v1, soundness_certificate_is_pinned_v1,
+};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use readiness_certificates::{
+    ZK_X509_RESOURCE_MAXIMUM_ELAPSED_MILLIS_V1,
     ZK_X509_RESOURCE_MAXIMUM_PEAK_ADDRESS_SPACE_BYTES_V1,
     ZK_X509_RESOURCE_MAXIMUM_PEAK_RSS_BYTES_V1, ZK_X509_RESOURCE_POSITIVE_ELAPSED_MILLIS_V1,
     ZK_X509_RESOURCE_POSITIVE_PEAK_ADDRESS_SPACE_BYTES_V1,
-    ZK_X509_RESOURCE_POSITIVE_PEAK_RSS_BYTES_V1, ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1,
-    resource_certificate_is_pinned_v1, soundness_certificate_is_pinned_v1,
+    ZK_X509_RESOURCE_POSITIVE_PEAK_RSS_BYTES_V1,
 };
 
 const fn digest_is_nonzero_v1(digest: [u8; 32]) -> bool {
@@ -350,6 +362,7 @@ const fn release_evidence_pins_are_complete_v1(
         && digests_differ_v1(expectations_norito_sha256, expectations_json_sha256)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy)]
 struct ZkX509ReleaseCapturePinsV1 {
     kat_proof_bytes: u32,
@@ -365,6 +378,7 @@ struct ZkX509ReleaseCapturePinsV1 {
     maximum_peak_address_space_bytes: u64,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const fn source_release_capture_pins_v1() -> ZkX509ReleaseCapturePinsV1 {
     ZkX509ReleaseCapturePinsV1 {
         kat_proof_bytes: ZK_X509_RELEASE_KAT_EXPECTED_PROOF_BYTES_V1,
@@ -381,6 +395,7 @@ const fn source_release_capture_pins_v1() -> ZkX509ReleaseCapturePinsV1 {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const fn native_release_capture_open_with_pins_v1(pins: ZkX509ReleaseCapturePinsV1) -> bool {
     pins.kat_proof_bytes == 0
         && !digest_is_nonzero_v1(pins.kat_proof_sha256)
@@ -410,6 +425,7 @@ const fn native_release_capture_pins_complete_v1(pins: ZkX509ReleaseCapturePinsV
         && pins.maximum_peak_address_space_bytes > 0
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const fn native_release_expectation_digests_match_with_pins_v1(
     expected_norito_sha256: [u8; 32],
     expected_json_sha256: [u8; 32],
@@ -423,6 +439,7 @@ const fn native_release_expectation_digests_match_with_pins_v1(
 }
 
 /// Whether every deterministic proof and native fixture pin is populated.
+#[cfg(test)]
 pub(crate) const fn zk_x509_release_evidence_pins_complete_v1() -> bool {
     release_evidence_pins_are_complete_v1(
         ZK_X509_RELEASE_KAT_EXPECTED_PROOF_BYTES_V1,
@@ -433,11 +450,13 @@ pub(crate) const fn zk_x509_release_evidence_pins_complete_v1() -> bool {
 }
 
 /// Whether the one-time native expectation capture corridor remains open.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) const fn zk_x509_native_release_expectation_capture_open_v1() -> bool {
     native_release_capture_open_with_pins_v1(source_release_capture_pins_v1())
 }
 
 /// Whether an expectation pair matches both compiled release pins exactly.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) const fn zk_x509_native_release_expectation_digests_match_v1(
     norito_sha256: [u8; 32],
     json_sha256: [u8; 32],

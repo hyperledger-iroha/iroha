@@ -31,7 +31,7 @@ OWNER_SPEC.loader.exec_module(pin_owner)
 SLICES = {
     "ios-arm64": (["arm64"], "ios", None),
     "ios-arm64_x86_64-simulator": (["arm64", "x86_64"], "ios", "simulator"),
-    "macos-arm64": (["arm64"], "macos", None),
+    "macos-arm64_x86_64": (["arm64", "x86_64"], "macos", None),
 }
 VALIDATOR_SCRIPT = REPO / "scripts/validate_norito_bridge_xcframework.py"
 VALIDATOR_SPEC = importlib.util.spec_from_file_location(
@@ -263,7 +263,11 @@ def validate(
         self.temporary.cleanup()
 
     def write_loader(self, hashes: dict[str, str]) -> None:
-        order = ("macos-arm64", "ios-arm64", "ios-arm64_x86_64-simulator")
+        order = (
+            "macos-arm64_x86_64",
+            "ios-arm64",
+            "ios-arm64_x86_64-simulator",
+        )
         self.loader.write_text(
             "    private static let expectedHashes: [String: String] = [\n"
             + "\n".join(
@@ -455,7 +459,11 @@ def validate(
                 f'    "{key}": "{self.old_hashes[key]}"'
                 f'{"," if index < 2 else ""}'.encode("ascii")
                 for index, key in enumerate(
-                    ("macos-arm64", "ios-arm64", "ios-arm64_x86_64-simulator")
+                    (
+                        "macos-arm64_x86_64",
+                        "ios-arm64",
+                        "ios-arm64_x86_64-simulator",
+                    )
                 )
             )
             + b"\n]\n"

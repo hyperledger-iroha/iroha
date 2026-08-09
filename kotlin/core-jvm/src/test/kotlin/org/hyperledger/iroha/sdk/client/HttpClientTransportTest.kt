@@ -980,10 +980,11 @@ class HttpClientTransportTest {
         }
     }
 
-
     @Test
     fun prepareContractCallPostsSecretFreeSelectorPayloadAndParsesDraft() {
-        val signingMessageB64 = Base64.getEncoder().encodeToString(ByteArray(32) { 7 })
+        val transactionPayload = sampleTransaction(7).encodedPayload()
+        val transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload)
+        val signingMessageB64 = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload))
         val executor = StubResponseExecutor(
             statusCode = 200,
             body = """
@@ -997,9 +998,7 @@ class HttpClientTransportTest {
                   "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
                   "entrypoint": "contribute",
                   "transaction_ttl_ms": 60000,
-                  "entrypoint_hash_hex": "${"77".repeat(32)}",
-                  "transaction_scaffold_b64": "AQID",
-                  "signed_transaction_b64": "AQID",
+                  "transaction_payload_b64": "$transactionPayloadB64",
                   "signing_message_b64": "$signingMessageB64",
                   "operation_receipt": {
                     "operation_kind": "contract_call",
@@ -1011,7 +1010,6 @@ class HttpClientTransportTest {
                     "code_hash_hex": "${"44".repeat(32)}",
                     "abi_hash_hex": "${"55".repeat(32)}",
                     "entrypoint": "contribute",
-                    "entrypoint_hash_hex": "${"77".repeat(32)}",
                     "gas_limit": 5000,
                     "gas_used": 17,
                     "fee_payment": {
@@ -1027,7 +1025,6 @@ class HttpClientTransportTest {
             executor = executor,
             config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
         )
-
         val response = transport.prepareContractCall(
             authority = "alice",
             feePayment = testFeePayment(5_000L),
@@ -1041,14 +1038,13 @@ class HttpClientTransportTest {
         assertEquals("router", response.dataspace)
         assertEquals("contribute", response.entrypoint)
         assertEquals(60_000L, response.transactionTtlMs)
-        assertEquals("77".repeat(32), response.entrypointHashHex)
+        assertEquals(null, response.entrypointHashHex)
         assertNull(response.pipelineStatus)
         assertEquals("contract_call", response.operationReceipt.operationKind)
         assertEquals(5_000L, response.operationReceipt.gasLimit)
         assertEquals(5_000L, response.operationReceipt.feePayment?.gasLimit)
         assertEquals("88".repeat(32), response.operationReceipt.payloadDigestHex)
-        assertEquals("AQID", response.transactionScaffoldB64)
-        assertEquals("AQID", response.signedTransactionB64)
+        assertEquals(transactionPayloadB64, response.transactionPayloadB64)
         assertEquals(signingMessageB64, response.signingMessageB64)
 
         val request = executor.lastRequest
@@ -1115,6 +1111,9 @@ class HttpClientTransportTest {
         val instructionBytes = byteArrayOf(1, 2, 3, 4)
         val proposalId = "aa".repeat(32)
         val multisigAccountId = testMultisigAccountId()
+        val transactionPayload = sampleTransaction(8).encodedPayload()
+        val transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload)
+        val signingMessageB64 = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload))
         val executor = StubResponseExecutor(
             statusCode = 200,
             body = """
@@ -1127,7 +1126,8 @@ class HttpClientTransportTest {
                   "tx_hash_hex": null,
                   "executed_tx_hash_hex": null,
                   "creation_time_ms": 123,
-                  "signing_message_b64": "AQID"
+                  "transaction_payload_b64": "$transactionPayloadB64",
+                  "signing_message_b64": "$signingMessageB64"
                 }
             """.trimIndent().toByteArray(StandardCharsets.UTF_8),
         )
@@ -1135,7 +1135,6 @@ class HttpClientTransportTest {
             executor = executor,
             config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
         )
-
         val response = transport.proposeMultisig(
             MultisigProposeRequest(
                 feePayment = testFeePayment(),
@@ -1156,7 +1155,8 @@ class HttpClientTransportTest {
         assertEquals(multisigAccountId, response.resolvedMultisigAccountId)
         assertEquals(false, response.submitted)
         assertEquals(proposalId, response.instructionsHash)
-        assertEquals("AQID", response.signingMessageB64)
+        assertEquals(transactionPayloadB64, response.transactionPayloadB64)
+        assertEquals(signingMessageB64, response.signingMessageB64)
 
         val request = executor.lastRequest
         assertEquals("POST", request.method)
@@ -1909,134 +1909,6 @@ class HttpClientTransportTest {
         """.trimIndent()
 
     @Test
-    fun getVpnProfileDeserializesNativeLeaseFields() {
-        val responseJson =
-            """
-                {
-                  "available": true,
-                  "relay_endpoint": "/dns/relay.example/udp/9443/quic",
-                  "supported_exit_classes": ["standard", "low-latency", "high-security"],
-                  "default_exit_class": "standard",
-                  "lease_secs": 600,
-                  "dns_push_interval_secs": 60,
-                  "meter_family": "soranet.vpn.standard",
-                  "route_pushes": ["0.0.0.0/0"],
-                  "excluded_routes": ["10.0.0.0/8"],
-                  "dns_servers": ["1.1.1.1"],
-                  "tunnel_addresses": ["10.208.0.2/32"],
-                  "mtu_bytes": 1280,
-                  "display_billing_label": "standard XOR",
-                  "operator_account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
-                  "lease_fee": "1000000.25",
-                  "settlement_grace_secs": 120,
-                  "flow_label_bits": 24,
-                  "padding_budget_ms": 15,
-                  "relay_id_hex": "$validEd25519PublicKeyHex",
-                  "descriptor_commit_hex": "${"cd".repeat(32)}",
-                  "tls_server_name": "relay.example",
-                  "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
-                  "relay_certificate_sha256_hex": "${"ef".repeat(32)}",
-                  "directory_snapshot_digest_hex": "${"42".repeat(32)}"
-                }
-            """.trimIndent()
-        val executor = StubResponseExecutor(
-            statusCode = 200,
-            body = responseJson.toByteArray(StandardCharsets.UTF_8),
-        )
-        val transport = HttpClientTransport.withExecutor(
-            executor = executor,
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
-        )
-
-        val profile = transport.getVpnProfile().join()
-
-        assertTrue(profile.available)
-        assertEquals("sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT", profile.operatorAccountId)
-        assertEquals("1000000.25", profile.leaseFee)
-        assertEquals(60L, profile.dnsPushIntervalSecs)
-        assertEquals(120L, profile.settlementGraceSecs)
-        assertEquals(validEd25519PublicKeyHex, profile.relayIdHex)
-        assertEquals("cd".repeat(32), profile.descriptorCommitHex)
-        assertEquals("relay.example", profile.tlsServerName)
-        assertEquals("ab".repeat(32), profile.relayTlsSpkiSha256Hex)
-        assertEquals("ef".repeat(32), profile.relayCertificateSha256Hex)
-        assertEquals("42".repeat(32), profile.directorySnapshotDigestHex)
-        assertEquals("GET", executor.lastRequest.method)
-        assertEquals("https://torii.example/v1/vpn/profile", executor.lastRequest.uri.toString())
-
-        val belowMinimum = responseJson.replace("\"dns_push_interval_secs\": 60", "\"dns_push_interval_secs\": 29")
-        assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseProfile(belowMinimum.toByteArray(StandardCharsets.UTF_8))
-        }
-        val missing = responseJson.lineSequence()
-            .filterNot { it.contains("\"dns_push_interval_secs\"") }
-            .joinToString("\n")
-        assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseProfile(missing.toByteArray(StandardCharsets.UTF_8))
-        }
-        val unknown = responseJson.replaceFirst("{", "{\"unexpected\":true,")
-        assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseProfile(unknown.toByteArray(StandardCharsets.UTF_8))
-        }
-        val uppercaseTlsPin = responseJson.replace("ab".repeat(32), "AB".repeat(32))
-        assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseProfile(uppercaseTlsPin.toByteArray(StandardCharsets.UTF_8))
-        }
-    }
-
-    @Test
-    fun vpnProfileRequiresHttpsAndValidatesTheAvailabilityBoundTrustTuple() {
-        val insecureExecutor = StubResponseExecutor(
-            statusCode = 200,
-            body = vpnProfileJson().toByteArray(StandardCharsets.UTF_8),
-        )
-        val insecureTransport = HttpClientTransport.withExecutor(
-            executor = insecureExecutor,
-            config = ClientConfig.builder().setBaseUri(URI.create("http://torii.example")).build(),
-        )
-        assertFailsWith<IllegalArgumentException> { insecureTransport.getVpnProfile() }
-
-        @Suppress("UNCHECKED_CAST")
-        fun profileObject(): MutableMap<String, Any?> =
-            (JsonParser.parse(vpnProfileJson()) as Map<String, Any?>).toMutableMap()
-
-        fun parse(payload: Map<String, Any?>): VpnProfile =
-            VpnJsonParser.parseProfile(
-                JsonEncoder.encode(payload).toByteArray(StandardCharsets.UTF_8),
-            )
-
-        val unavailable = profileObject().apply {
-            this["available"] = false
-            listOf(
-                "relay_endpoint",
-                "relay_id_hex",
-                "descriptor_commit_hex",
-                "tls_server_name",
-                "relay_tls_spki_sha256_hex",
-                "relay_certificate_sha256_hex",
-                "directory_snapshot_digest_hex",
-            ).forEach { this[it] = "" }
-        }
-        assertEquals("", parse(unavailable).relayIdHex)
-
-        val invalidValues = listOf(
-            "relay_id_hex" to "00".repeat(32),
-            "descriptor_commit_hex" to "00".repeat(32),
-            "descriptor_commit_hex" to "0x${"cd".repeat(32)}",
-            "tls_server_name" to "Relay.Example",
-            "tls_server_name" to "-relay.example",
-            "relay_endpoint" to "/dns4/Relay.Example/udp/443/quic",
-            "relay_endpoint" to "/dns4/relay.example/udp/0443/quic",
-            "relay_endpoint" to "/dns4/relay.example/tcp/443/quic",
-        )
-        invalidValues.forEach { (field, value) ->
-            assertFailsWith<IllegalStateException>(field) {
-                parse(profileObject().apply { this[field] = value })
-            }
-        }
-    }
-
-    @Test
     fun createVpnQuoteSignsCanonicalBodyAndParsesOpenLeaseInstruction() {
         val quoteId = "11".repeat(32)
         val meteringKey = validEd25519PublicKeyHex
@@ -2404,196 +2276,6 @@ class HttpClientTransportTest {
         assertEquals("DELETE", executor.requests[2].method)
         assertEquals("""{"client_voucher_hex":"beef","lease_id_hex":"$sessionId","relay_receipt_hex":"cafe"}""", readBody(executor.requests[3]))
         assertEquals("https://torii.example/v1/vpn/receipts", executor.requests[4].uri.toString())
-    }
-
-    @Test
-    fun vpnSessionParserRejectsNonCanonicalHelperTicketHex() {
-        val sessionId = "33".repeat(32)
-        val paymentTxHash = "44".repeat(32)
-        val valid = vpnHelperTicketHex()
-        val invalidValues = listOf(
-            "0x$valid",
-            valid.uppercase(),
-            valid.dropLast(2),
-        )
-
-        invalidValues.forEach { invalid ->
-            val payload = vpnSessionJson(sessionId, paymentTxHash).replace(valid, invalid)
-            assertFailsWith<IllegalStateException> {
-                VpnJsonParser.parseSession(payload.toByteArray(StandardCharsets.UTF_8))
-            }
-        }
-    }
-
-    @Test
-    fun vpnResponseParsersRejectNonCanonicalIdsHashesAndUnknownFields() {
-        val identifier = "ab".repeat(32)
-        val paymentTxHash = "cd".repeat(32)
-        val meteringKey = validEd25519PublicKeyHex
-        fun bytes(value: String): ByteArray = value.toByteArray(StandardCharsets.UTF_8)
-
-        val quote = vpnQuoteJson(identifier, meteringKey)
-        assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseQuote(bytes(quote.replace("\"quote_id\": \"$identifier\"", "\"quote_id\": \"0x$identifier\"")))
-        }
-        assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseQuote(bytes(quote.replace("aa".repeat(16), "AA".repeat(16))))
-        }
-        assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseQuote(bytes(quote.replaceFirst("{", "{\"unexpected\":true,")))
-        }
-        assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseQuote(
-                bytes(quote.replaceFirst("\"payload_hex\": \"cafe\"", "\"payload_hex\": \"cafe\", \"unexpected\": true")),
-            )
-        }
-
-        val session = vpnSessionJson(identifier, paymentTxHash)
-        assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseSession(bytes(session.replace("\"session_id\": \"$identifier\"", "\"session_id\": \"${identifier.uppercase()}\"")))
-        }
-        assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseSession(bytes(session.replace("\"payment_tx_hash\": \"$paymentTxHash\"", "\"payment_tx_hash\": \"0x$paymentTxHash\"")))
-        }
-        assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseSession(bytes(session.replaceFirst("{", "{\"unexpected\":true,")))
-        }
-
-        val receipt = vpnReceiptJson(identifier, paymentTxHash, settled = true)
-        assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseReceipt(bytes(receipt.replace("\"lease_id_hex\": \"$identifier\"", "\"lease_id_hex\": \"${identifier.uppercase()}\"")))
-        }
-        assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseReceipt(bytes(receipt.replace("\"payment_tx_hash\": \"$paymentTxHash\"", "\"payment_tx_hash\": \"0x$paymentTxHash\"")))
-        }
-        assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseReceipt(bytes(receipt.replaceFirst("{", "{\"unexpected\":true,")))
-        }
-        assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseReceiptList(bytes("""{"items":[$receipt],"total":1,"unexpected":true}"""))
-        }
-    }
-
-    @Test
-    fun vpnResponseParsersRejectMissingRequiredFieldsAndSchemaBounds() {
-        val identifier = "ab".repeat(32)
-        val paymentTxHash = "cd".repeat(32)
-        val meteringKey = validEd25519PublicKeyHex
-        val profile = vpnProfileJson()
-        val quote = vpnQuoteJson(identifier, meteringKey)
-        val session = vpnSessionJson(identifier, paymentTxHash)
-        val receipt = vpnReceiptJson(identifier, paymentTxHash, settled = true)
-        val receiptList = """{"items":[$receipt],"total":1}"""
-
-        @Suppress("UNCHECKED_CAST")
-        fun jsonObject(json: String): MutableMap<String, Any?> =
-            (JsonParser.parse(json) as Map<String, Any?>).toMutableMap()
-
-        fun mutated(json: String, field: String, value: Any?): ByteArray {
-            val root = jsonObject(json)
-            root[field] = value
-            return JsonEncoder.encode(root).toByteArray(StandardCharsets.UTF_8)
-        }
-
-        fun missing(json: String, field: String): ByteArray {
-            val root = jsonObject(json)
-            root.remove(field)
-            return JsonEncoder.encode(root).toByteArray(StandardCharsets.UTF_8)
-        }
-
-        val missingCases = listOf(
-            { VpnJsonParser.parseProfile(missing(profile, "relay_tls_spki_sha256_hex")) },
-            { VpnJsonParser.parseQuote(missing(quote, "open_lease_instruction")) },
-            { VpnJsonParser.parseSession(missing(session, "route_pushes")) },
-            { VpnJsonParser.parseReceipt(missing(receipt, "settle_lease_instruction")) },
-            { VpnJsonParser.parseReceiptList(missing(receiptList, "items")) },
-        )
-        missingCases.forEach { decode -> assertFailsWith<IllegalStateException> { decode() } }
-        assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseSession(mutated(session, "route_pushes", null))
-        }
-
-        val profileViolations = listOf(
-            "supported_exit_classes" to listOf("standard", "low-latency"),
-            "supported_exit_classes" to listOf("standard", "standard", "high-security"),
-            "default_exit_class" to "unsupported",
-            "lease_secs" to 0,
-            "lease_secs" to 4_294_967_296L,
-            "mtu_bytes" to 1_279,
-            "settlement_grace_secs" to 0,
-            "flow_label_bits" to 23,
-            "padding_budget_ms" to 0,
-        )
-        profileViolations.forEach { (field, value) ->
-            assertFailsWith<IllegalStateException> {
-                VpnJsonParser.parseProfile(mutated(profile, field, value))
-            }
-        }
-
-        assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseQuote(mutated(quote, "tx_instructions", emptyList<Any>()))
-        }
-        assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseSession(mutated(session, "status", "settled"))
-        }
-        listOf("status" to "active", "receipt_source" to "operator").forEach { (field, value) ->
-            assertFailsWith<IllegalStateException> {
-                VpnJsonParser.parseReceipt(mutated(receipt, field, value))
-            }
-        }
-        assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseReceipt(mutated(receipt, "tx_instructions", emptyList<Any>()))
-        }
-
-        val receiptObject = jsonObject(receipt)
-        assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseReceiptList(
-                mutated(receiptList, "items", List(25) { receiptObject }),
-            )
-        }
-        assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseReceiptList(mutated(receiptList, "total", 25))
-        }
-    }
-
-    @Test
-    fun vpnRoutesRejectWrongSuccessfulStatusCodes() {
-        val identifier = "33".repeat(32)
-        val paymentTxHash = "44".repeat(32)
-        val meteringKey = validEd25519PublicKeyHex
-        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_050L, "vpn-status-nonce")
-        val config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build()
-
-        fun assertRejected(status: Int, body: String, call: (HttpClientTransport) -> Unit) {
-            val transport = HttpClientTransport.withExecutor(
-                executor = StubResponseExecutor(status, body.toByteArray(StandardCharsets.UTF_8)),
-                config = config,
-            )
-            val error = assertFailsWith<java.util.concurrent.CompletionException> { call(transport) }
-            assertTrue(error.cause?.message?.contains("status $status") == true)
-        }
-
-        assertRejected(201, vpnProfileJson()) { it.getVpnProfile().join() }
-        assertRejected(200, vpnQuoteJson(identifier, meteringKey)) {
-            it.createVpnQuote(VpnQuoteCreateRequest("standard", "0x$meteringKey"), auth).join()
-        }
-        assertRejected(200, vpnSessionJson(identifier, paymentTxHash)) {
-            it.createVpnSession(VpnSessionCreateRequest("standard", identifier, "0x$paymentTxHash", meteringKey), auth).join()
-        }
-        assertRejected(201, vpnSessionJson(identifier, paymentTxHash)) {
-            it.getVpnSession(identifier, auth).join()
-        }
-        assertRejected(201, vpnReceiptJson(identifier, paymentTxHash, settled = false)) {
-            it.deleteVpnSession(identifier, auth).join()
-        }
-        assertRejected(200, vpnReceiptJson(identifier, paymentTxHash, settled = true)) {
-            it.submitVpnReceipt(VpnReceiptSubmitRequest("0xCAFE", "BEEF", "0x$identifier"), auth).join()
-        }
-        val receipt = vpnReceiptJson(identifier, paymentTxHash, settled = true)
-        assertRejected(201, """{"items":[$receipt],"total":1}""") {
-            it.listVpnReceipts(auth).join()
-        }
     }
 
     @Test

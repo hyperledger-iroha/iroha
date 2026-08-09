@@ -583,7 +583,7 @@ fn assert_bootle_lantern_matrix_boundaries(record: &BootleLanternIssuerPolicyV1)
     monomial_first_column[0].coefficients[0] = 1;
     invalid = record.clone();
     invalid.issuer_public_matrix =
-        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(monomial_first_column)
+        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&monomial_first_column)
             .expect("canonical monomial multiplication matrix shape");
     redigest_bootle_lantern_policy(&mut invalid);
     assert_eq!(
@@ -610,7 +610,7 @@ fn assert_bootle_lantern_matrix_boundaries(record: &BootleLanternIssuerPolicyV1)
     }
     invalid = record.clone();
     invalid.issuer_public_matrix =
-        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(sparse_first_column)
+        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&sparse_first_column)
             .expect("canonical sparse multiplication matrix shape");
     redigest_bootle_lantern_policy(&mut invalid);
     assert_eq!(
@@ -665,7 +665,7 @@ fn bootle_lantern_r512_matrix_constructor_is_exact_and_mutation_closed() {
     let mut short_first_column = first_column.clone();
     short_first_column[7].coefficients.pop();
     assert!(matches!(
-        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(short_first_column),
+        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&short_first_column),
         Err(
             BootleLanternIssuerPolicyValidationErrorV1::InvalidPolynomialCoefficientCount {
                 polynomial: 56,
@@ -678,7 +678,7 @@ fn bootle_lantern_r512_matrix_constructor_is_exact_and_mutation_closed() {
     noncanonical_first_column[7].coefficients[63] = BOOTLE_LANTERN_APPLICATION_MODULUS_V1;
     assert!(matches!(
         BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(
-            noncanonical_first_column
+            &noncanonical_first_column
         ),
         Err(
             BootleLanternIssuerPolicyValidationErrorV1::NonCanonicalMatrixCoefficient {
@@ -689,9 +689,8 @@ fn bootle_lantern_r512_matrix_constructor_is_exact_and_mutation_closed() {
             }
         )
     ));
-    let matrix =
-        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(first_column.clone())
-            .expect("canonical dense degree-512 public-key matrix");
+    let matrix = BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&first_column)
+        .expect("canonical dense degree-512 public-key matrix");
     matrix
         .validate_r512_multiplication_structure_v1()
         .expect("constructed matrix passes its structural validator");

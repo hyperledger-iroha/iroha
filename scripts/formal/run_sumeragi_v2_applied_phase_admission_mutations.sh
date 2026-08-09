@@ -4,9 +4,9 @@ set -euo pipefail
 readonly TLA2TOOLS_VERSION="1.7.4"
 readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
-source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 if [[ -n "${JAVA_BIN:-}" ]]; then
   resolved_java_bin="$("${REPO_ROOT}/scripts/formal/resolve_java.sh" "$JAVA_BIN")"
 else
@@ -59,7 +59,6 @@ run_case() {
   local log="${run_dir}/${label}.log"
   local actual_status
   local expected_diagnostic
-  local expected_diagnostic_count=0
   local primary_diagnostic_count
   set +e
   (
@@ -75,50 +74,49 @@ run_case() {
     exit 1
   fi
   if [[ "$expected_status" -eq 0 ]]; then
-    sumeragi_v2_tlc_assert_fixed_success "$label" "$log" "$actual_status"
-  else
-    sumeragi_v2_tlc_assert_terminal "$label" "$log"
-  fi
-  for marker in "$@"; do
-    case "$marker" in
-      "Invariant "*)
-        expected_diagnostic="Error: ${marker}"
-        sumeragi_v2_tlc_assert_exact_line \
-          "$label" "$log" "$expected_diagnostic"
-        expected_diagnostic_count=$((expected_diagnostic_count + 1))
-        ;;
-      "Action property "*|"Temporal properties were violated.")
-        expected_diagnostic="Error: ${marker}"
-        sumeragi_v2_tlc_assert_exact_line \
-          "$label" "$log" "$expected_diagnostic"
-        expected_diagnostic_count=$((expected_diagnostic_count + 1))
-        ;;
-      *)
-        if ! grep -Fq "$marker" "$log"; then
-          echo "${label} missed expected marker: ${marker}" >&2
-          cat "$log" >&2
-          exit 1
-        fi
-        ;;
-    esac
-  done
-  if [[ "$expected_status" -ne 0 ]]; then
-    [[ "$expected_diagnostic_count" -eq 1 ]] || {
-      echo "${label} did not declare exactly one failure diagnostic" >&2
-      cat "$log" >&2
+    [[ "$#" == 2 ]] || {
+      echo "${label} fixed case must declare version and success markers" >&2
       exit 1
     }
+    sumeragi_v2_tlc_assert_fixed_success "$label" "$log" "$actual_status"
+    for marker in "$@"; do
+      grep -Fq "$marker" "$log" || {
+        echo "${label} missed expected marker: ${marker}" >&2
+        cat "$log" >&2
+        exit 1
+      }
+    done
+  elif [[ "$expected_status" -eq 12 ]]; then
+    [[ "$#" == 3 ]] || {
+      echo "${label} mutation must declare version, diagnostic, and coverage markers" >&2
+      exit 1
+    }
+    grep -Fq "$1" "$log" || {
+      echo "${label} missed expected version marker: $1" >&2
+      exit 1
+    }
+    expected_diagnostic="Error: $2"
+    sumeragi_v2_tlc_assert_exact_line "$label" "$log" "$expected_diagnostic"
+    sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"
+    sumeragi_v2_tlc_assert_terminal "$label" "$log"
     primary_diagnostic_count="$(
       grep -Ec \
         "$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN" \
         "$log" || true
     )"
     [[ "$primary_diagnostic_count" -eq 1 ]] || {
-      echo "${label} emitted ${primary_diagnostic_count} primary failure diagnostics" >&2
+      echo "${label} emitted ${primary_diagnostic_count} primary diagnostics" >&2
       cat "$log" >&2
       exit 1
     }
-    sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"
+    if ! grep -Fq "$3" "$log"; then
+      echo "${label} missed expected coverage marker: $3" >&2
+      cat "$log" >&2
+      exit 1
+    fi
+  else
+    echo "${label} declared unsupported TLC status ${expected_status}" >&2
+    exit 1
   fi
   echo "[tlc] ${label}: expected status ${expected_status}"
 }

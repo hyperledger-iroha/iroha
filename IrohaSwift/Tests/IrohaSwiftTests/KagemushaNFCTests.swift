@@ -344,7 +344,7 @@ final class KagemushaNFCTests: XCTestCase {
 
     func testCardStateMachineReadsRequestAndRejectsInvalidWriteSequences() throws {
         let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
-        let request = try offer.project(
+        _ = try offer.project(
             chainDiscriminant: SccpV1.tairaI105DiscriminantV1
         ).request
         let machine = try KagemushaNFCCardStateMachine(chainDiscriminant: SccpV1.tairaI105DiscriminantV1, receiveRequest: offer)

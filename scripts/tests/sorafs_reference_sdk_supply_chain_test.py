@@ -653,8 +653,8 @@ def test_rejects_symlinked_top_level_source(tmp_path: Path) -> None:
     paths["release_rehearsal"].replace(target)
     try:
         os.symlink(target, paths["release_rehearsal"])
-    except (OSError, NotImplementedError):  # pragma: no cover - platform policy
-        pytest.skip("symlinks unavailable")
+    except (OSError, NotImplementedError) as error:  # pragma: no cover - platform policy
+        pytest.fail(f"release security gate requires symlink support: {error}")
 
     result, errors = validate(tmp_path)
 
@@ -668,8 +668,8 @@ def test_rejects_symlinked_indexed_file(tmp_path: Path) -> None:
     paths["source_sbom"].replace(real)
     try:
         os.symlink(real, paths["source_sbom"])
-    except (OSError, NotImplementedError):  # pragma: no cover - platform policy
-        pytest.skip("symlinks unavailable")
+    except (OSError, NotImplementedError) as error:  # pragma: no cover - platform policy
+        pytest.fail(f"release security gate requires symlink support: {error}")
     payload = read_json(paths["sbom_index"])
     payload["source_sbom"]["sha256"] = hashlib.sha256(real.read_bytes()).hexdigest()
     write_json(paths["sbom_index"], payload)
@@ -687,8 +687,8 @@ def test_rejects_symlinked_intermediate_directory(tmp_path: Path) -> None:
     raw.replace(actual_raw)
     try:
         os.symlink(actual_raw, raw)
-    except (OSError, NotImplementedError):  # pragma: no cover - platform policy
-        pytest.skip("symlinks unavailable")
+    except (OSError, NotImplementedError) as error:  # pragma: no cover - platform policy
+        pytest.fail(f"release security gate requires symlink support: {error}")
 
     result, errors = validate(tmp_path)
 
@@ -702,8 +702,8 @@ def test_rejects_symlinked_source_root(tmp_path: Path) -> None:
     linked_root = tmp_path / "linked"
     try:
         os.symlink(real_root, linked_root)
-    except (OSError, NotImplementedError):  # pragma: no cover - platform policy
-        pytest.skip("symlinks unavailable")
+    except (OSError, NotImplementedError) as error:  # pragma: no cover - platform policy
+        pytest.fail(f"release security gate requires symlink support: {error}")
 
     result, errors = validate(linked_root)
 
@@ -778,8 +778,8 @@ def test_rejects_hard_linked_indexed_files(tmp_path: Path) -> None:
     second.unlink()
     try:
         os.link(first, second)
-    except (OSError, NotImplementedError):  # pragma: no cover - platform policy
-        pytest.skip("hard links unavailable")
+    except (OSError, NotImplementedError) as error:  # pragma: no cover - platform policy
+        pytest.fail(f"release security gate requires hard-link support: {error}")
     update_reference(
         tmp_path,
         paths["sbom_index"],

@@ -188,12 +188,12 @@ function replacePayloadMetadata(payload, archive) {
 function replacePayloadField(payload, fieldIndex, archive) {
   const fields = [];
   let offset = 0;
-  for (let index = 0; index < 8; index += 1) {
+  for (let index = 0; index < 9; index += 1) {
     const decoded = readField(payload, offset);
     fields.push(decoded.value);
     offset = decoded.next;
   }
-  assert.equal(offset, payload.length, "test payload must contain exactly eight fields");
+  assert.equal(offset, payload.length, "test payload must contain exactly nine fields");
   fields[fieldIndex] = archive;
   return struct(fields);
 }

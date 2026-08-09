@@ -783,7 +783,7 @@ pub mod kura {
 
     use iroha_config_base::util::Bytes;
 
-    use crate::kura::FsyncMode;
+    use crate::{kura::FsyncMode, parameters::actual::KuraReplicaAdvertPolicy};
 
     /// Directory for Kura storage relative to the node working directory.
     pub const STORE_DIR: &str = "./storage";
@@ -795,6 +795,20 @@ pub mod kura {
     pub const ROSTER_SIDECAR_RETENTION: NonZeroUsize = nonzero!(512_usize);
     /// Distinct remote peers that must advertise a canonical block before local body eviction.
     pub const EVICTION_REQUIRED_REPLICAS: NonZeroUsize = nonzero!(3_usize);
+    /// Number of authenticated historical advert keys retained immediately before the protected
+    /// in-memory block tail.
+    pub const REPLICA_ADVERT_EVICTABLE_WINDOW: NonZeroUsize = nonzero!(4_096_usize);
+    /// Default lifetime of one authenticated remote replica observation.
+    pub const REPLICA_ADVERT_TTL: Duration = Duration::from_secs(60 * 60);
+    /// Default cadence for proactively refreshing selected-keeper replica adverts.
+    pub const REPLICA_ADVERT_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
+    /// Complete default authenticated replica-advert policy.
+    pub const REPLICA_ADVERT_POLICY: KuraReplicaAdvertPolicy = KuraReplicaAdvertPolicy {
+        eviction_required_replicas: EVICTION_REQUIRED_REPLICAS,
+        evictable_window: REPLICA_ADVERT_EVICTABLE_WINDOW,
+        ttl: REPLICA_ADVERT_TTL,
+        refresh_interval: REPLICA_ADVERT_REFRESH_INTERVAL,
+    };
     /// Default number of merge-ledger entries cached in memory.
     pub const MERGE_LEDGER_CACHE_CAPACITY: usize = 256;
     /// Default fsync policy for block persistence.
@@ -1294,6 +1308,12 @@ pub mod sorafs {
             pub const MAX_SUBMIT_ATTEMPTS: u16 = 8;
             /// Maximum canonical checkpoint size.
             pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(32 * 1024 * 1024);
+            /// Maximum checkpoint-plus-minimal-terminal-wrapper archive artifact size.
+            pub const PANEL_NOTIFICATION_ARCHIVE_MAX_BYTES: Bytes<u64> = Bytes(40 * 1024 * 1024);
+            /// Minimum canonical archive artifact size admitted by V1.
+            pub const PANEL_NOTIFICATION_ARCHIVE_MIN_BYTES_V1: u64 = 1024 * 1024;
+            /// Hard canonical archive artifact ceiling admitted by V1.
+            pub const PANEL_NOTIFICATION_ARCHIVE_MAX_BYTES_LIMIT_V1: u64 = 64 * 1024 * 1024;
             /// Finalized reconciliation and deadline-maintenance cadence.
             pub const WORKER_INTERVAL_MS: u64 = 1_000;
             /// Maximum native maintenance actions emitted in one scan.
@@ -1391,6 +1411,30 @@ pub mod sorafs {
                 PathBuf::from("./storage/sorafs/reputation")
             }
         }
+        /// Finalized reserve-event transparency scanner defaults.
+        pub mod reserve_transparency_runtime {
+            use std::path::PathBuf;
+
+            use iroha_config_base::util::Bytes;
+
+            /// The scanner is opt-in with the committed reputation archive.
+            pub const ENABLED: bool = false;
+            /// Normal exact-anchor scan cadence.
+            pub const POLL_INTERVAL_MS: u64 = 1_000;
+            /// Maximum bounded retry delay after transient unavailability.
+            pub const RETRY_MAX_INTERVAL_MS: u64 = 30_000;
+            /// Maximum reserve events requested from one immutable page.
+            pub const PAGE_ITEMS: u32 = 64;
+            /// Maximum immutable pages consumed by one scanner tick.
+            pub const MAX_PAGES_PER_TICK: u32 = 64;
+            /// Maximum canonical scanner checkpoint bytes.
+            pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024);
+
+            /// Default private state root used only while the scanner is disabled.
+            pub fn state_dir() -> PathBuf {
+                PathBuf::from("./storage/sorafs/reserve-transparency")
+            }
+        }
         /// Finalized-ledger hedging/billing supervisor defaults.
         pub mod hedging_billing_runtime {
             use std::path::PathBuf;
@@ -1430,6 +1474,8 @@ pub mod sorafs {
             pub const MAX_SOURCE_JOBS_PER_TICK: usize = 16;
             /// Maximum governed source providers considered for one assignment.
             pub const MAX_SOURCE_PROVIDERS: usize = 1_024;
+            /// Hard deadline ceiling for one authenticated source operation.
+            pub const SOURCE_OPERATION_TIMEOUT_MS_LIMIT_V1: u64 = 24 * 60 * 60 * 1_000;
             /// Timeout for authenticated source fetch, verification, and storage.
             pub const SOURCE_OPERATION_TIMEOUT_MS: u64 = 5 * 60_000;
             /// Durable source-lease renewal cadence.
@@ -1720,6 +1766,8 @@ pub mod sorafs {
 
             /// The public publisher is opt-in until endpoints and secret paths are configured.
             pub const ENABLED: bool = false;
+            /// Head publication mode (`signed_http` or `ipns`).
+            pub const HEAD_MODE: &str = "signed_http";
             /// Poll interval for filesystem feed reconciliation.
             pub const POLL_INTERVAL_SECS: u64 = 5;
             /// Endpoint TCP/TLS connection timeout.
@@ -1730,13 +1778,12 @@ pub mod sorafs {
             pub const DNS_TIMEOUT_MS: u64 = 2_000;
             /// Maximum accepted remote response body.
             pub const MAX_RESPONSE_BYTES: Bytes<u64> = Bytes(4 * 1024 * 1024);
-            /// Maximum local block, head, or CAR payload sent in one request.
+            /// Maximum local block, head, CAR, or block-prefix archive request.
             ///
-            /// Keep this synchronized with
-            /// `sorafs_manifest::GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1`:
-            /// 128 MiB of canonical signing payload plus a checked 64 KiB
-            /// block-signature/envelope allowance.
-            pub const MAX_REQUEST_BYTES: Bytes<u64> = Bytes((128 * 1024 * 1024) + (64 * 1024));
+            /// Covers the canonical block ceiling (128 MiB plus a 64 KiB
+            /// signature allowance), the 1 MiB archive wrapper, and 64 KiB
+            /// of deterministic multipart framing.
+            pub const MAX_REQUEST_BYTES: Bytes<u64> = Bytes((129 * 1024 * 1024) + (128 * 1024));
             /// Maximum future clock skew accepted for blocks and heads.
             pub const MAX_FUTURE_SKEW_SECS: u64 = 60;
             /// Maximum lifetime accepted for one signed outbound request envelope.
@@ -1977,6 +2024,14 @@ pub mod sorafs {
             pub const DEFAULT_RATE_LIMIT_BYTES: u64 = 8 * 1024 * 1024; // 8 MiB/s
             /// Default allowed requests per minute for token refresh.
             pub const DEFAULT_REQUESTS_PER_MINUTE: u32 = 120;
+            /// Maximum durable callback rows admitted by the external gateway owner.
+            pub const ADMISSION_MAX_PENDING: u32 = 65_536;
+            /// Maximum active token quota windows admitted by the external gateway owner.
+            pub const ADMISSION_MAX_TRACKED_TOKENS: u32 = 65_536;
+            /// Maximum ordered callback rows replayed by one reconciliation tick.
+            pub const ADMISSION_RECONCILE_MAX_ITEMS: u32 = 256;
+            /// Maximum lifetime of one external concurrency lease.
+            pub const ADMISSION_LEASE_TTL_MS: u64 = 120_000;
         }
     }
 
@@ -3033,6 +3088,11 @@ pub mod torii {
     pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_DEAD_LETTERS: usize = 1_024;
     /// Default maximum canonical appeal-finance checkpoint size.
     pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MAX_BYTES: u64 = 64 * 1024 * 1024;
+    /// Minimum canonical appeal-finance checkpoint size admitted by V1.
+    pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MIN_BYTES_V1: u64 = 4 * 1024;
+    /// Hard canonical appeal-finance checkpoint ceiling admitted by V1.
+    pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MAX_BYTES_LIMIT_V1: u64 =
+        512 * 1024 * 1024;
 
     /// Canonical first-release appeal-finance asset and policy defaults.
     pub mod sorafs_appeal_finance {

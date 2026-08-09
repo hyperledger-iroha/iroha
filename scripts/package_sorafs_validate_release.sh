@@ -22,7 +22,6 @@ Options:
   --source-commit <hex>  Required reviewed full source commit.
   --source-date-epoch <epoch>
                          Required canonical release SOURCE_DATE_EPOCH.
-  --skip-smoke           Skip committed-fixture smoke checks.
   --help                 Show this help and exit.
 
 The packager is an unsigned deterministic artifact/checksum producer. Retired
@@ -163,7 +162,6 @@ target_dir=""
 version=""
 source_commit=""
 source_date_epoch_arg=""
-skip_smoke=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -211,10 +209,6 @@ while [[ $# -gt 0 ]]; do
       require_option_value "$1" "${2-}"
       source_date_epoch_arg="$2"
       shift 2
-      ;;
-    --skip-smoke)
-      skip_smoke=1
-      shift
       ;;
     --help|-h)
       usage
@@ -335,35 +329,43 @@ python3 "${workspace}/scripts/capture_release_command.py" \
   --executable-relative "$packaged_binary_name" \
   -- --help
 
-if [[ "$skip_smoke" -eq 0 ]]; then
-  python3 "${workspace}/scripts/capture_release_command.py" \
-    --output "${stage_dir}/smoke.advert.json" \
-    --executable-root "$stage_dir" \
-    --executable-relative "$packaged_binary_name" \
-    -- advert \
-      --input "${workspace}/fixtures/sorafs_manifest/provider_admission/advert_v1.to" \
-      --now 120 \
-      --generated-at 123 \
-      --format json
-  python3 "${workspace}/scripts/capture_release_command.py" \
-    --output "${stage_dir}/smoke.bundle.json" \
-    --executable-root "$stage_dir" \
-    --executable-relative "$packaged_binary_name" \
-    -- bundle \
-      --bundle "${workspace}/fixtures/sorafs_manifest" \
-      --now 120 \
-      --generated-at 123 \
-      --format json
-fi
+python3 "${workspace}/scripts/capture_release_command.py" \
+  --output "${stage_dir}/smoke.advert.json" \
+  --executable-root "$stage_dir" \
+  --executable-relative "$packaged_binary_name" \
+  --require-validation-outcome-ok-v1 \
+  --expected-validation-code SFS-OK-000 \
+  --expected-generated-at 123 \
+  --required-telemetry-tag sorafs.reference.advert \
+  --required-telemetry-tag sorafs.reference.code.SFS-OK-000 \
+  -- advert \
+    --input "${workspace}/fixtures/sorafs_manifest/provider_admission/advert_v1.to" \
+    --now 120 \
+    --generated-at 123 \
+    --format json
+python3 "${workspace}/scripts/capture_release_command.py" \
+  --output "${stage_dir}/smoke.bundle.json" \
+  --executable-root "$stage_dir" \
+  --executable-relative "$packaged_binary_name" \
+  --require-validation-outcome-ok-v1 \
+  --expected-validation-code SFS-PDP-DIAG-000 \
+  --expected-generated-at 123 \
+  --required-telemetry-tag sorafs.reference.bundle \
+  --required-telemetry-tag sorafs.reference.pdp \
+  --required-telemetry-tag sorafs.reference.code.SFS-PDP-DIAG-000 \
+  -- bundle \
+    --bundle "${workspace}/fixtures/sorafs_manifest" \
+    --now 120 \
+    --generated-at 123 \
+    --format json
 
 stage_inventory=(
   "HELP.txt"
   "include/sorafs_reference.h"
+  "smoke.advert.json"
+  "smoke.bundle.json"
   "$packaged_binary_name"
 )
-if [[ "$skip_smoke" -eq 0 ]]; then
-  stage_inventory+=("smoke.advert.json" "smoke.bundle.json")
-fi
 archive_command=(
   python3 "${workspace}/scripts/build_release_tar_gz.py"
   --stage-root "$stage_dir"
@@ -407,7 +409,6 @@ export SORAFS_VALIDATE_PACKAGE_COMMIT="$source_commit"
 SORAFS_VALIDATE_PACKAGE_ARCHIVE="$(basename "$archive_path")"
 export SORAFS_VALIDATE_PACKAGE_ARCHIVE
 export SORAFS_VALIDATE_PACKAGE_ARCHIVE_SHA="$archive_sha"
-export SORAFS_VALIDATE_PACKAGE_SMOKE="$skip_smoke"
 export SORAFS_VALIDATE_PACKAGE_BINARY="$packaged_binary_name"
 export SORAFS_VALIDATE_PACKAGE_STAGE_INVENTORY="$stage_inventory_json"
 export SORAFS_VALIDATE_PACKAGE_SOURCE_DATE_EPOCH="$source_date_epoch"
@@ -430,20 +431,18 @@ inventory = json.loads(os.environ["SORAFS_VALIDATE_PACKAGE_STAGE_INVENTORY"])
 stage_files = [
     {"path": path, "sha256": inventory[path]} for path in sorted(inventory)
 ]
-smoke_checks = []
-if os.environ["SORAFS_VALIDATE_PACKAGE_SMOKE"] == "0":
-    smoke_checks = [
-        {
-            "command": "sorafs-validate advert",
-            "output": "smoke.advert.json",
-            "sha256": inventory["smoke.advert.json"],
-        },
-        {
-            "command": "sorafs-validate bundle",
-            "output": "smoke.bundle.json",
-            "sha256": inventory["smoke.bundle.json"],
-        },
-    ]
+smoke_checks = [
+    {
+        "command": "sorafs-validate advert",
+        "output": "smoke.advert.json",
+        "sha256": inventory["smoke.advert.json"],
+    },
+    {
+        "command": "sorafs-validate bundle",
+        "output": "smoke.bundle.json",
+        "sha256": inventory["smoke.bundle.json"],
+    },
+]
 
 epoch = parse_source_date_epoch(
     os.environ["SORAFS_VALIDATE_PACKAGE_SOURCE_DATE_EPOCH"]
@@ -465,7 +464,7 @@ manifest = {
     "ffi_header": "include/sorafs_reference.h",
     "ffi_header_sha256": inventory["include/sorafs_reference.h"],
     "stage_files": stage_files,
-    "smoke_checks": os.environ["SORAFS_VALIDATE_PACKAGE_SMOKE"] == "0",
+    "smoke_checks": True,
     "smoke_outputs": smoke_checks,
 }
 exclusive_write_bytes(

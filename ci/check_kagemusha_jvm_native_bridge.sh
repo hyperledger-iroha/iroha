@@ -9,8 +9,10 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 SOURCE_SEAL="$ROOT_DIR/scripts/norito_bridge_source_seal.py"
 ABI22_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi22_artifact.py"
 HERMETIC_RUNNER="$ROOT_DIR/scripts/run_mobile_hermetic_command.py"
+LOCALNET_DEPLOYER="$ROOT_DIR/scripts/deploy_localnet.sh"
 PINNED_TOOLCHAIN="1.93.1"
 REQUIRED_NATIVE_ASSERTION="The release JNI gate requires a freshly built connect_norito_bridge ABI 22 library"
+LOCALNET_TEST_CLASS="org.hyperledger.iroha.sdk.client.ZkAssetShieldLocalnetTest"
 
 fail() {
   printf '[kagemusha-jvm-native] ERROR: %s\n' "$*" >&2
@@ -29,6 +31,7 @@ for required_file in \
   "$SOURCE_SEAL" \
   "$ABI22_ARTIFACT_CHECKER" \
   "$HERMETIC_RUNNER" \
+  "$LOCALNET_DEPLOYER" \
   "$ROOT_DIR/rust-toolchain.toml" \
   "$ROOT_DIR/kotlin/gradlew" \
   "$ROOT_DIR/java/iroha_android/gradlew"; do
@@ -144,16 +147,22 @@ if [[ "$HOST_OS" == "Darwin" ]]; then
       LANG=C.UTF-8 LC_ALL=C.UTF-8 DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
       /usr/bin/xcrun --find nm
   )"
-  JAVA_HOME_DIR="$(
-    /usr/bin/env -i HOME="$USER_HOME_DIR" PATH=/usr/bin:/bin TMPDIR=/tmp \
-      LANG=C.UTF-8 LC_ALL=C.UTF-8 /usr/libexec/java_home -v 21
-  )"
+  if [[ -n "${NORITO_MOBILE_JAVA_HOME:-}" ]]; then
+    JAVA_HOME_DIR="$NORITO_MOBILE_JAVA_HOME"
+  else
+    JAVA_HOME_DIR="$(
+      /usr/bin/env -i HOME="$USER_HOME_DIR" PATH=/usr/bin:/bin TMPDIR=/tmp \
+        LANG=C.UTF-8 LC_ALL=C.UTF-8 /usr/libexec/java_home -v 21
+    )"
+  fi
 else
   NM_BINARY="/usr/bin/nm"
   JAVA_HOME_DIR="${NORITO_MOBILE_JAVA_HOME:-}"
   [[ -n "$JAVA_HOME_DIR" ]] \
     || fail "NORITO_MOBILE_JAVA_HOME must pin the setup-java JDK on non-macOS hosts"
 fi
+[[ "$JAVA_HOME_DIR" == /* && -d "$JAVA_HOME_DIR" && ! -L "$JAVA_HOME_DIR" ]] \
+  || fail "NORITO_MOBILE_JAVA_HOME or the macOS Java locator must provide an absolute regular JDK directory"
 NM_BINARY="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$NM_BINARY")"
 JAVA_HOME_DIR="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$JAVA_HOME_DIR")"
 JAVA_BINARY="$JAVA_HOME_DIR/bin/java"
@@ -244,10 +253,80 @@ if [[ "${KAGEMUSHA_JVM_NATIVE_TOOL_RESOLUTION_ONLY:-0}" == "1" ]]; then
 fi
 
 BUILD_SESSION="$(/usr/bin/mktemp -d "${MOBILE_TMPDIR%/}/kagemusha-jvm-native.XXXXXX")"
-cleanup() {
-  rm -rf -- "$BUILD_SESSION"
+LOCALNET_DIR="$BUILD_SESSION/zk-asset-shield-localnet"
+LOCALNET_STOPPED=0
+EVIDENCE_DIR="${KAGEMUSHA_JVM_NATIVE_EVIDENCE_DIR:-}"
+
+stop_localnet() {
+  local pidfiles=()
+  if [[ "$LOCALNET_STOPPED" == "1" || ! -d "$LOCALNET_DIR" ]]; then
+    LOCALNET_STOPPED=1
+    return 0
+  fi
+  shopt -s nullglob
+  pidfiles=("$LOCALNET_DIR"/peer*.pid)
+  shopt -u nullglob
+  if (( ${#pidfiles[@]} == 0 )); then
+    LOCALNET_STOPPED=1
+    return 0
+  fi
+  if [[ ! -f "$LOCALNET_DIR/stop.sh" || -L "$LOCALNET_DIR/stop.sh" ]]; then
+    printf '[kagemusha-jvm-native] ERROR: localnet stop script is unavailable; preserving %s\n' \
+      "$BUILD_SESSION" >&2
+    return 1
+  fi
+  if ! (cd "$LOCALNET_DIR" && /bin/bash ./stop.sh); then
+    printf '[kagemusha-jvm-native] ERROR: localnet stop script failed; preserving %s\n' \
+      "$BUILD_SESSION" >&2
+    return 1
+  fi
+  shopt -s nullglob
+  pidfiles=("$LOCALNET_DIR"/peer*.pid)
+  shopt -u nullglob
+  if (( ${#pidfiles[@]} != 0 )); then
+    printf '[kagemusha-jvm-native] ERROR: localnet teardown left owned pidfiles; preserving %s\n' \
+      "$BUILD_SESSION" >&2
+    printf '  %s\n' "${pidfiles[@]}" >&2
+    return 1
+  fi
+  LOCALNET_STOPPED=1
 }
-trap cleanup EXIT HUP INT TERM
+
+cleanup() {
+  local status=$?
+  local preserve=0
+  trap - EXIT HUP INT TERM
+  if ! stop_localnet; then
+    status=1
+    preserve=1
+  fi
+  if [[ "$preserve" == "0" ]]; then
+    rm -rf -- "$BUILD_SESSION"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+if [[ -n "$EVIDENCE_DIR" ]]; then
+  [[ "$EVIDENCE_DIR" == /* ]] \
+    || fail "KAGEMUSHA_JVM_NATIVE_EVIDENCE_DIR must be absolute"
+  if [[ -e "$EVIDENCE_DIR" ]]; then
+    [[ -d "$EVIDENCE_DIR" && ! -L "$EVIDENCE_DIR" ]] \
+      || fail "KAGEMUSHA_JVM_NATIVE_EVIDENCE_DIR must be a non-symbolic directory"
+  else
+    mkdir -p -- "$EVIDENCE_DIR"
+  fi
+  EVIDENCE_DIR="$(
+    "$PYTHON_BINARY" -I -S -c \
+      'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+      "$EVIDENCE_DIR"
+  )"
+  case "$EVIDENCE_DIR/" in
+    "$BUILD_SESSION/"*) fail "native evidence directory must be outside the ephemeral build session" ;;
+  esac
+fi
 EMPTY_NATIVE_DIR="$BUILD_SESSION/no-native"
 CARGO_TARGET_DIR="$BUILD_SESSION/cargo-target"
 mkdir -p "$EMPTY_NATIVE_DIR" "$CARGO_TARGET_DIR"
@@ -457,6 +536,34 @@ run_exact_gradle() {
   )
 }
 
+run_exact_gradle_localnet() {
+  local working_directory="$1"
+  local native_directory="$2"
+  shift 2
+  (
+    cd "$working_directory"
+    "$PYTHON_BINARY" -I -S "$HERMETIC_RUNNER" \
+      --profile gradle-jvm-localnet \
+      --set "ANDROID_HOME=$MOBILE_ANDROID_HOME" \
+      --set "ANDROID_SDK_ROOT=$MOBILE_ANDROID_HOME" \
+      --set "DYLD_LIBRARY_PATH=$native_directory" \
+      --set "GRADLE_USER_HOME=$MOBILE_GRADLE_HOME" \
+      --set "HOME=$USER_HOME_DIR" \
+      --set "IROHA_LOCALNET_DIR=$LOCALNET_DIR" \
+      --set "IROHA_LOCALNET_TEST=1" \
+      --set "IROHA_NATIVE_LIBRARY_PATH=$native_directory" \
+      --set "IROHA_REQUIRE_KAGEMUSHA_NATIVE=1" \
+      --set "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION=1" \
+      --set "JAVA_HOME=$JAVA_HOME_DIR" \
+      --set "LANG=C.UTF-8" \
+      --set "LC_ALL=C.UTF-8" \
+      --set "LD_LIBRARY_PATH=$native_directory" \
+      --set "PATH=$JAVA_HOME_DIR/bin:/usr/bin:/bin" \
+      --set "TMPDIR=$MOBILE_TMPDIR" \
+      -- "$@"
+  )
+}
+
 run_expected_missing_native_failure() {
   local label="$1"
   local working_directory="$2"
@@ -579,6 +686,116 @@ if missing or present_forbidden:
     )
 PY
 
+printf '[kagemusha-jvm-native] building fresh four-peer localnet tools for %s\n' \
+  "$HOST_TRIPLE" >&2
+"$PYTHON_BINARY" -I -S "$HERMETIC_RUNNER" \
+  --profile host-cargo \
+  --set "CARGO=$CARGO_BINARY" \
+  --set "CARGO_HOME=$MOBILE_CARGO_HOME" \
+  --set "CARGO_INCREMENTAL=0" \
+  --set "CARGO_NET_OFFLINE=true" \
+  --set "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" \
+  --set "HOME=$USER_HOME_DIR" \
+  --set "LANG=C.UTF-8" \
+  --set "LC_ALL=C.UTF-8" \
+  --set "NORITO_SKIP_BINDINGS_SYNC=1" \
+  --set "PATH=$CARGO_PATH" \
+  --set "RUSTC=$RUSTC_BINARY" \
+  --set "RUSTUP_HOME=$MOBILE_RUSTUP_HOME" \
+  --set "TMPDIR=$MOBILE_TMPDIR" \
+  -- "$CARGO_BINARY" build --locked --offline --target "$HOST_TRIPLE" \
+    -p iroha_kagami -p irohad -p iroha_cli \
+    --bin kagami --bin irohad --bin iroha
+source_seal verify --root "$ROOT_DIR" --platform android --snapshot "$SOURCE_SNAPSHOT"
+
+LOCALNET_BIN_DIR="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug"
+KAGAMI_BINARY="$LOCALNET_BIN_DIR/kagami"
+IROHAD_BINARY="$LOCALNET_BIN_DIR/irohad"
+IROHA_CLI_BINARY="$LOCALNET_BIN_DIR/iroha"
+for localnet_binary in "$KAGAMI_BINARY" "$IROHAD_BINARY" "$IROHA_CLI_BINARY"; do
+  [[ -f "$localnet_binary" && ! -L "$localnet_binary" && -x "$localnet_binary" ]] \
+    || fail "fresh localnet binary is unavailable: $localnet_binary"
+done
+
+printf '[kagemusha-jvm-native] deploying fresh four-peer confidential localnet\n' >&2
+/usr/bin/env -i \
+  CARGO_HOME="$MOBILE_CARGO_HOME" \
+  CARGO_TARGET_DIR="$CARGO_TARGET_DIR" \
+  HOME="$USER_HOME_DIR" \
+  IROHA_BIN="$IROHA_CLI_BINARY" \
+  IROHA_DIR="$ROOT_DIR" \
+  IROHAD_BIN="$IROHAD_BINARY" \
+  KAGAMI_BIN="$KAGAMI_BINARY" \
+  LANG=C.UTF-8 \
+  LC_ALL=C.UTF-8 \
+  PATH="${PYTHON_BINARY%/*}:$CARGO_PATH" \
+  PYTHON_BIN="$PYTHON_BINARY" \
+  RUSTUP_HOME="$MOBILE_RUSTUP_HOME" \
+  RUST_LOG=warn \
+  SKIP_TOOL_BUILD=true \
+  TMPDIR="$MOBILE_TMPDIR" \
+  /bin/bash "$LOCALNET_DEPLOYER" \
+    --out-dir "$LOCALNET_DIR" \
+    --peers 4 \
+    --no-build \
+    --target-dir "$CARGO_TARGET_DIR" \
+    --timeout 120 \
+    --logger-level warn \
+    --kura-blocks-in-memory 32
+
+verify_four_peer_localnet() {
+  local configs=()
+  local pidfiles=()
+  local command_line config_path healthy peer_index pid torii_address
+  shopt -s nullglob
+  configs=("$LOCALNET_DIR"/peer*.toml)
+  pidfiles=("$LOCALNET_DIR"/peer*.pid)
+  shopt -u nullglob
+  (( ${#configs[@]} == 4 )) \
+    || fail "localnet must expose exactly four peer configs; found ${#configs[@]}"
+  (( ${#pidfiles[@]} == 4 )) \
+    || fail "localnet must expose exactly four live peer pidfiles; found ${#pidfiles[@]}"
+  for peer_index in 0 1 2 3; do
+    config_path="$LOCALNET_DIR/peer${peer_index}.toml"
+    [[ -f "$config_path" && ! -L "$config_path" ]] \
+      || fail "localnet peer config is unavailable: $config_path"
+    [[ -f "$LOCALNET_DIR/peer${peer_index}.pid" \
+      && ! -L "$LOCALNET_DIR/peer${peer_index}.pid" ]] \
+      || fail "localnet peer pidfile is unavailable: peer${peer_index}.pid"
+    pid="$(<"$LOCALNET_DIR/peer${peer_index}.pid")"
+    [[ "$pid" =~ ^[0-9]+$ ]] \
+      || fail "localnet peer${peer_index} pid is noncanonical"
+    command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    [[ -n "$command_line" ]] \
+      || fail "localnet peer${peer_index} is not running"
+    if [[ "$command_line" != *"--config $config_path"* \
+      && "$command_line" != *"--config=$config_path"* ]]; then
+      fail "localnet peer${peer_index} pid does not belong to its generated config"
+    fi
+    torii_address="$(
+      "$PYTHON_BINARY" -I -S -c \
+        'import sys,tomllib; value=tomllib.load(open(sys.argv[1], "rb"))["torii"]["address"]; print(value)' \
+        "$config_path"
+    )"
+    [[ "$torii_address" =~ ^127\.0\.0\.1:[1-9][0-9]{0,4}$ ]] \
+      || fail "localnet peer${peer_index} Torii address is not canonical loopback"
+    healthy=0
+    for _ in {1..30}; do
+      if /usr/bin/curl -fsS --connect-timeout 2 --max-time 2 \
+          "http://${torii_address}/health" >/dev/null; then
+        healthy=1
+        break
+      fi
+      /bin/sleep 1
+    done
+    [[ "$healthy" == "1" ]] \
+      || fail "localnet peer${peer_index} Torii health check failed"
+  done
+}
+
+verify_four_peer_localnet
+LOCALNET_STOPPED=0
+
 run_full_suite() {
   local label="$1"
   local working_directory="$2"
@@ -587,8 +804,174 @@ run_full_suite() {
   run_exact_gradle "$working_directory" "$NATIVE_LIBRARY_DIR" "$@"
 }
 
-run_full_suite kotlin "$ROOT_DIR/kotlin" \
+printf '[kagemusha-jvm-native] running complete Kotlin suite against four-peer localnet\n' >&2
+run_exact_gradle_localnet "$ROOT_DIR/kotlin" "$NATIVE_LIBRARY_DIR" \
   "$ROOT_DIR/kotlin/gradlew" --no-daemon --rerun-tasks :core-jvm:test --console=plain
+stop_localnet || fail "four-peer localnet teardown failed"
+
+KOTLIN_RESULT_DIR="$ROOT_DIR/kotlin/core-jvm/build/test-results/test"
+KOTLIN_LOCALNET_JUNIT="$KOTLIN_RESULT_DIR/TEST-${LOCALNET_TEST_CLASS}.xml"
+"$PYTHON_BINARY" -I -S - \
+  "$KOTLIN_RESULT_DIR" \
+  "$KOTLIN_LOCALNET_JUNIT" \
+  "$NATIVE_EVIDENCE" \
+  "$EVIDENCE_DIR" \
+  "$HOST_TRIPLE" <<'PY'
+from pathlib import Path
+import hashlib
+import json
+import os
+import stat
+import sys
+import xml.etree.ElementTree as ET
+
+result_dir = Path(sys.argv[1])
+target_report = Path(sys.argv[2])
+native_manifest_path = Path(sys.argv[3])
+evidence_dir = Path(sys.argv[4]) if sys.argv[4] else None
+host_target = sys.argv[5]
+expected_class = "org.hyperledger.iroha.sdk.client.ZkAssetShieldLocalnetTest"
+
+
+def regular_bytes(path: Path, label: str, maximum: int) -> bytes:
+    try:
+        metadata = path.lstat()
+    except OSError as error:
+        raise SystemExit(f"{label} is unavailable: {path}: {error}") from error
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or metadata.st_size <= 0
+        or metadata.st_size > maximum
+    ):
+        raise SystemExit(f"{label} must be one bounded non-symbolic regular file")
+    payload = path.read_bytes()
+    if len(payload) != metadata.st_size:
+        raise SystemExit(f"{label} changed while it was read")
+    return payload
+
+
+def suite_counts(root: ET.Element, label: str) -> dict[str, int]:
+    try:
+        counts = {
+            key: int(root.attrib.get(key, "0"))
+            for key in ("tests", "skipped", "failures", "errors")
+        }
+    except ValueError as error:
+        raise SystemExit(f"{label} contains non-integer JUnit counters") from error
+    if any(value < 0 for value in counts.values()):
+        raise SystemExit(f"{label} contains negative JUnit counters")
+    return counts
+
+
+target_bytes = regular_bytes(target_report, "Kotlin localnet JUnit report", 4 * 1024 * 1024)
+try:
+    target_root = ET.fromstring(target_bytes)
+except ET.ParseError as error:
+    raise SystemExit(f"Kotlin localnet JUnit report is invalid: {error}") from error
+if target_root.tag != "testsuite" or target_root.attrib.get("name") != expected_class:
+    raise SystemExit("Kotlin localnet JUnit report names the wrong test suite")
+target_counts = suite_counts(target_root, "Kotlin localnet JUnit report")
+expected_counts = {"tests": 1, "skipped": 0, "failures": 0, "errors": 0}
+if target_counts != expected_counts:
+    raise SystemExit(
+        "Kotlin localnet JUnit counters are not release-ready "
+        f"(expected={expected_counts}, actual={target_counts})"
+    )
+cases = list(target_root.findall("testcase"))
+if len(cases) != 1 or cases[0].attrib.get("classname") != expected_class:
+    raise SystemExit("Kotlin localnet JUnit must contain exactly one canonical testcase")
+if any(cases[0].find(tag) is not None for tag in ("skipped", "failure", "error")):
+    raise SystemExit("Kotlin localnet testcase contains a skipped or failed outcome")
+
+reports = sorted(result_dir.glob("TEST-*.xml"))
+if not reports or target_report not in reports:
+    raise SystemExit("complete Kotlin JUnit inventory is unavailable")
+aggregate = {"tests": 0, "skipped": 0, "failures": 0, "errors": 0}
+for report in reports:
+    report_bytes = regular_bytes(report, "Kotlin JUnit report", 4 * 1024 * 1024)
+    try:
+        root = ET.fromstring(report_bytes)
+    except ET.ParseError as error:
+        raise SystemExit(f"Kotlin JUnit report is invalid: {report}: {error}") from error
+    if root.tag != "testsuite":
+        raise SystemExit(f"Kotlin JUnit report has an unexpected root: {report}")
+    counts = suite_counts(root, f"Kotlin JUnit report {report.name}")
+    outcome_nodes = {
+        key: sum(1 for _ in root.iter(tag))
+        for key, tag in (("skipped", "skipped"), ("failures", "failure"), ("errors", "error"))
+    }
+    if len(root.findall("testcase")) != counts["tests"] or any(
+        outcome_nodes[key] != counts[key] for key in outcome_nodes
+    ):
+        raise SystemExit(f"Kotlin JUnit counters do not match outcome nodes: {report}")
+    for key, value in counts.items():
+        aggregate[key] += value
+if aggregate["skipped"] != 0:
+    raise SystemExit(
+        "complete Kotlin release suite may not contain skipped tests; "
+        f"found {aggregate['skipped']}"
+    )
+if aggregate["failures"] != 0 or aggregate["errors"] != 0:
+    raise SystemExit(f"complete Kotlin release suite contains failed outcomes: {aggregate}")
+
+native_bytes = regular_bytes(native_manifest_path, "native ABI-22 evidence", 64 * 1024)
+try:
+    native = json.loads(native_bytes)
+except (UnicodeDecodeError, json.JSONDecodeError) as error:
+    raise SystemExit(f"native ABI-22 evidence is invalid: {error}") from error
+if (
+    type(native) is not dict
+    or native.get("sdk") != "c-jni"
+    or native.get("target") != host_target
+    or native.get("bridge_abi_version") != 22
+    or native.get("source_tree_clean") is not True
+):
+    raise SystemExit("native ABI-22 evidence does not match the exercised JNI artifact")
+
+if evidence_dir is not None:
+    metadata = evidence_dir.lstat()
+    if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        raise SystemExit("external evidence destination is not a non-symbolic directory")
+
+    def write_exclusive(name: str, payload: bytes) -> None:
+        path = evidence_dir / name
+        descriptor = os.open(
+            path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        try:
+            with os.fdopen(descriptor, "wb", closefd=False) as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+        finally:
+            os.close(descriptor)
+
+    summary = {
+        "aggregate": aggregate,
+        "host_target": host_target,
+        "junit_sha256": hashlib.sha256(target_bytes).hexdigest(),
+        "native_artifact_sha256": native["artifact_sha256"],
+        "native_bridge_abi_version": native["bridge_abi_version"],
+        "peer_count": 4,
+        "schema": "iroha.kotlin-zk-asset-localnet-evidence.v1",
+        "source_commit": native["source_commit"],
+        "status": "passed",
+        "target_suite": {"name": expected_class, **target_counts},
+        "teardown_complete": True,
+    }
+    summary_bytes = (
+        json.dumps(summary, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode("utf-8")
+    write_exclusive("zk-asset-shield-localnet.junit.xml", target_bytes)
+    write_exclusive("c-jni-native-abi22.json", native_bytes)
+    write_exclusive("zk-asset-shield-localnet-summary.json", summary_bytes)
+PY
+
 run_full_suite java "$ROOT_DIR/java/iroha_android" \
   "$ROOT_DIR/java/iroha_android/gradlew" --no-daemon --rerun-tasks test --console=plain
 source_seal verify --root "$ROOT_DIR" --platform android --snapshot "$SOURCE_SNAPSHOT"

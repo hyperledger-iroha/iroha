@@ -1,40 +1,55 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="${PRIVACY_SWIFT_SDK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+ROOT_DIR="${PRIVACY_SWIFT_SDK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
 SWIFTC_BIN="${PRIVACY_SWIFT_SDK_SWIFTC_BIN:-swiftc}"
 SWIFT_BIN="${PRIVACY_SWIFT_SDK_SWIFT_BIN:-swift}"
 FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
-PYTHON_BIN="${PRIVACY_SWIFT_SDK_PYTHON_BIN:-python3}"
+PYTHON_BIN="${MOBILE_SDK_PYTHON_BINARY:-${PRIVACY_SWIFT_SDK_PYTHON_BIN:-}}"
+APPLE_ARTIFACT_CHECKER="${ROOT_DIR}/scripts/check_mobile_sdk_artifacts.sh"
 
-[[ "${MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT:-}" == "1" ]] || {
-  echo "error: privacy Swift tests require an external authenticated XCFramework" >&2
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  echo "error: privacy Swift native tests require an Apple macOS host" >&2
   exit 1
-}
-[[ -n "${MOBILE_SDK_APPLE_ARTIFACT_DIR:-}" && \
-  "${MOBILE_SDK_APPLE_ARTIFACT_DIR}" == /* ]] || {
-  echo "error: MOBILE_SDK_APPLE_ARTIFACT_DIR must be an absolute external directory" >&2
+fi
+if [[ "${MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT:-}" != "1" ]]; then
+  echo "error: MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1 is required" >&2
   exit 1
-}
-[[ -n "${MOBILE_SDK_SWIFT_SCRATCH_DIR:-}" && \
-  "${MOBILE_SDK_SWIFT_SCRATCH_DIR}" == /* ]] || {
-  echo "error: MOBILE_SDK_SWIFT_SCRATCH_DIR must be an absolute external directory" >&2
+fi
+if [[ -z "${MOBILE_SDK_APPLE_ARTIFACT_DIR:-}" || \
+  -z "${MOBILE_SDK_SWIFT_SCRATCH_DIR:-}" || \
+  -z "${MOBILE_SDK_PYTHON_BINARY:-}" || \
+  -z "${PYTHON_BIN}" ]]; then
+  echo "error: authenticated external Apple artifact, Swift scratch, and Python paths are required" >&2
   exit 1
-}
-case "${MOBILE_SDK_APPLE_ARTIFACT_DIR}/" in
+fi
+if ! APPLE_ARTIFACT_DIRECTORY="$(cd "${MOBILE_SDK_APPLE_ARTIFACT_DIR}" && pwd -P)"; then
+  echo "error: privacy Swift Apple artifact directory is unavailable" >&2
+  exit 1
+fi
+if ! SWIFT_SCRATCH_DIRECTORY="$(cd "${MOBILE_SDK_SWIFT_SCRATCH_DIR}" && pwd -P)"; then
+  echo "error: privacy Swift scratch directory is unavailable" >&2
+  exit 1
+fi
+if [[ "${MOBILE_SDK_APPLE_ARTIFACT_DIR}" != "${APPLE_ARTIFACT_DIRECTORY}" || \
+  "${MOBILE_SDK_SWIFT_SCRATCH_DIR}" != "${SWIFT_SCRATCH_DIRECTORY}" ]]; then
+  echo "error: privacy Swift artifact and scratch paths must already be canonical" >&2
+  exit 1
+fi
+case "${APPLE_ARTIFACT_DIRECTORY}/" in
   "${ROOT_DIR}/"*)
-    echo "error: privacy Swift XCFramework must remain outside the source tree" >&2
+    echo "error: privacy Swift Apple artifact directory must be outside the source tree" >&2
     exit 1
     ;;
 esac
-case "${MOBILE_SDK_SWIFT_SCRATCH_DIR}/" in
+case "${SWIFT_SCRATCH_DIRECTORY}/" in
   "${ROOT_DIR}/"*)
     echo "error: privacy Swift scratch output must remain outside the source tree" >&2
     exit 1
     ;;
 esac
-[[ -d "${MOBILE_SDK_APPLE_ARTIFACT_DIR}/NoritoBridge.xcframework" && \
-  ! -L "${MOBILE_SDK_APPLE_ARTIFACT_DIR}/NoritoBridge.xcframework" ]] || {
+[[ -d "${APPLE_ARTIFACT_DIRECTORY}/NoritoBridge.xcframework" && \
+  ! -L "${APPLE_ARTIFACT_DIRECTORY}/NoritoBridge.xcframework" ]] || {
   echo "error: freshly built external NoritoBridge.xcframework is unavailable" >&2
   exit 1
 }
@@ -57,7 +72,10 @@ xcodebuild -version
 
 cd "${ROOT_DIR}"
 
-bash scripts/check_mobile_sdk_artifacts.sh --apple-only
+MOBILE_SDK_APPLE_ARTIFACT_DIR="${APPLE_ARTIFACT_DIRECTORY}" \
+MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1 \
+MOBILE_SDK_PYTHON_BINARY="${PYTHON_BIN}" \
+  bash "${APPLE_ARTIFACT_CHECKER}" --apple-only
 
 "${SWIFTC_BIN}" --version
 "${SWIFTC_BIN}" -parse -parse-as-library \
@@ -77,9 +95,10 @@ bash scripts/check_mobile_sdk_artifacts.sh --apple-only
   IrohaSwift/Tests/IrohaSwiftTests/ProofAttachmentNoritoTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/MusubiInstructionsV1Tests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/SorafsOrchestratorParityTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift
 
 "${SWIFT_BIN}" test \
   --package-path IrohaSwift \
   --disable-automatic-resolution \
-  --scratch-path "${MOBILE_SDK_SWIFT_SCRATCH_DIR}"
+  --scratch-path "${SWIFT_SCRATCH_DIRECTORY}"

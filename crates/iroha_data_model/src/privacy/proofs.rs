@@ -1790,7 +1790,7 @@ mod exact12_fixture {
                 .collect(),
         });
         let issuer_public_matrix =
-            BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(first_column)
+            BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&first_column)
                 .expect("canonical degree-512 multiplication matrix");
         let allowed_values = (0..BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1)
             .map(|index| BootleLanternAllowedAttributeValuesV1 {

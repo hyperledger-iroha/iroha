@@ -5316,7 +5316,7 @@ fn offline_kura_config(store_dir: PathBuf) -> KuraConfig {
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
         block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
-        eviction_required_replicas: defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }
 
@@ -9446,34 +9446,7 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn rollback_failure_classifier_accepts_rejection_or_inconclusive_confirmation() {
-        assert!(is_expected_rollback_failure_text(
-            "settlement leg requires 10000 units"
-        ));
-        assert!(is_expected_rollback_failure_text(
-            "haven't got tx confirmation within 600s (configured with `transaction.status_timeout_ms`)"
-        ));
-        assert!(is_expected_rollback_failure_text(
-            "timed out waiting for committed transaction outcome"
-        ));
-        assert!(!is_expected_rollback_failure_text(
-            "transaction applied successfully"
-        ));
-    }
-
-    #[test]
-    fn render_rejection_reason_includes_debug_details_when_display_is_generic() {
-        let reason = TransactionRejectionReason::LimitCheck(TransactionLimitError {
-            reason: "cross-dataspace route limit exceeded".to_owned(),
-        });
-
-        let rendered = render_rejection_reason(&reason);
-
-        assert!(rendered.contains("Failed to validate transaction limits"));
-        assert!(rendered.contains("details:"));
-        assert!(rendered.contains("cross-dataspace route limit exceeded"));
-    }
+    include!("cross_dataspace_localnet/rejection_classifier_tests.rs");
 
     #[test]
     fn fanout_header_helper_accepts_local_and_proxy_without_singular_route() {
@@ -9536,40 +9509,5 @@ mod tests {
         );
     }
 
-    #[test]
-    fn routed_header_string_reads_present_headers_and_ignores_absent_ones() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-iroha-routed-by", HeaderValue::from_static("proxy"));
-        headers.insert(
-            "x-iroha-invalid",
-            HeaderValue::from_bytes(&[0xFF]).expect("binary header value"),
-        );
-
-        assert_eq!(
-            routed_header_string(&headers, "x-iroha-routed-by"),
-            Some("proxy".to_owned())
-        );
-        assert_eq!(
-            routed_header_string(&headers, "x-iroha-route-lane-id"),
-            None
-        );
-        assert_eq!(routed_header_string(&headers, "x-iroha-invalid"), None);
-    }
-
-    #[derive(Debug)]
-    struct DisplayOnlyTxError;
-
-    impl Display for DisplayOnlyTxError {
-        fn fmt(&self, formatter: &mut Formatter<'_>) -> FmtResult {
-            formatter.write_str("route probe failed")
-        }
-    }
-
-    #[test]
-    fn render_error_with_debug_keeps_display_and_debug_context() {
-        assert_eq!(
-            render_error_with_debug(&DisplayOnlyTxError),
-            "route probe failed (DisplayOnlyTxError)"
-        );
-    }
+    include!("cross_dataspace_localnet/error_render_test.rs");
 }

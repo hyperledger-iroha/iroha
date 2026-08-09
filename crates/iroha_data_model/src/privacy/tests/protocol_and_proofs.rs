@@ -2002,6 +2002,11 @@ fn zk_ams_ristretto_wire_types_and_action_tags_are_closed() {
 #[test]
 fn context_rejects_unusable_chain_ids_and_action_indexes() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
+    assert_eq!(
+        usize::try_from(PRIVACY_MAX_CHAIN_ID_BYTES_V1).expect("privacy chain-id bound fits usize"),
+        crate::id::MAX_CHAIN_ID_BYTES,
+        "privacy transcripts and canonical ChainId admission must share one byte bound"
+    );
     assert!("".parse::<ChainId>().is_err());
     assert!(
         "x".repeat(crate::id::MAX_CHAIN_ID_BYTES + 1)

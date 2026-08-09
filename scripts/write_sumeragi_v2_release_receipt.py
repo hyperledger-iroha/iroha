@@ -49,6 +49,11 @@ finally:
 LocalnetManifestError = _LOCALNET_MANIFEST_MODULE.LocalnetManifestError
 canonical_localnet_manifest = _LOCALNET_MANIFEST_MODULE.canonical_localnet_manifest
 
+_RELEASE_RECEIPT_COMPONENT_FILES = (
+    "write_sumeragi_v2_release_receipt_formal_artifacts.py",
+    "write_sumeragi_v2_release_receipt_corridor_log.py",
+)
+
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 _OBJECT_ID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _SSH_FINGERPRINT_RE = re.compile(r"SHA256:[A-Za-z0-9+/]{43}")
@@ -229,7 +234,7 @@ _APALACHE_REFINEMENT_RESULTS = (
         "native-application-evidence",
         "SumeragiV2NativeApplicationEvidence",
         "multilane_native_application_evidence_fixed.cfg",
-        "5",
+        "8",
     ),
     (
         "autonomous-reservation-carrier",
@@ -241,6 +246,12 @@ _APALACHE_REFINEMENT_RESULTS = (
         "queue-plan-admission-registry",
         "SumeragiV2QueuePlanAdmissionRegistry",
         "multilane_queue_plan_admission_registry_fixed.cfg",
+        "8",
+    ),
+    (
+        "kura-replica-retention",
+        "SumeragiV2KuraReplicaRetention",
+        "kura_replica_retention_fixed.cfg",
         "8",
     ),
 )
@@ -379,28 +390,28 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 829
-_G_UNIT_TEST_COUNT = 309
+_PRODUCTION_TEST_COUNT = 837
+_G_UNIT_TEST_COUNT = 524
 _G_UNIT_GROUPS = (
     (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        115,
+        318,
         "lib",
     ),
     (
         "required_multilane_queue_journal_focus_tests",
         "g-unit-iroha-core-queue-journal",
         "iroha_core",
-        137,
+        143,
         "lib",
     ),
     (
         "required_multilane_config_lib_focus_tests",
         "g-unit-iroha-config-lib",
         "iroha_config",
-        3,
+        9,
         "lib",
     ),
     (
@@ -450,7 +461,7 @@ _PRODUCTION_MODULES = (
     (
         "production-kura-progress-durability",
         "kura::tests",
-        13,
+        14,
     ),
     (
         "production-kura-lane-geometry",
@@ -499,7 +510,12 @@ _PRODUCTION_MODULES = (
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 34),
+    (
+        "production-v2-lifecycle-recovery",
+        "sumeragi::v2_lifecycle_recovery::tests",
+        5,
+    ),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 36),
     ("production-v2-worker", "sumeragi::v2_worker::tests", 132),
     (
         "production-v2-watchdog",
@@ -602,20 +618,21 @@ _TAIRA_CONTRACT_TESTS = (
     "taira_public_localnet::release_execution_profile_rejects_non_exact_offline_values",
     "taira_public_localnet::simulation_summary_json_records_release_profile_and_status_evidence",
 )
-_JS_STATUS_PATTERN = (
-    "getSumeragiStatusTyped (validates and normalizes authoritative v2 status|"
-    "accepts the local-control liveness blocker|accepts the unsafe-proposal ignore reason|"
-    "accepts all twelve ignore reasons at the bound)"
-)
-_PYTHON_STATUS_TESTS = (
-    "python/iroha_torii_client/tests/test_client.py::"
-    "test_get_sumeragi_status_parses_authoritative_v2_snapshot",
-    "python/iroha_torii_client/tests/test_client.py::"
-    "test_get_sumeragi_status_accepts_local_control_pending_liveness_blocker",
-    "python/iroha_torii_client/tests/test_client.py::"
-    "test_get_sumeragi_status_accepts_unsafe_proposal_ignore_reason",
-    "python/iroha_torii_client/tests/test_client.py::"
-    "test_get_sumeragi_status_accepts_all_twelve_ignore_reasons_at_the_bound",
+_RUST_SDK_DIAGNOSTICS_TESTS = (
+    "client::tests::get_sumeragi_status_prefers_norito_and_handles_json",
+    "client::tests::get_sumeragi_status_rejects_unknown_json_fields",
+    "client::tests::get_sumeragi_status_rejects_structurally_impossible_norito_and_json",
+    "client::tests::get_sumeragi_status_json_requests_json_and_falls_back_to_norito",
+    "client::tests::get_sumeragi_diagnostics_verifies_lane_relay_envelopes",
+    "client::tests::get_sumeragi_diagnostics_rejects_invalid_lane_relay_hash",
+    "client::tests::get_sumeragi_diagnostics_rejects_malformed_autonomous_execution",
+    "client::tests::get_sumeragi_diagnostics_rejects_duplicate_autonomous_execution_identity",
+    "client::tests::get_sumeragi_diagnostics_rejects_malformed_native_amx_receipts_in_every_container",
+    "client::tests::get_sumeragi_diagnostics_rejects_malformed_json_payload",
+    "client::tests::get_sumeragi_diagnostics_rejects_json_payload_missing_required_fields",
+    "client::tests::get_sumeragi_diagnostics_rejects_unknown_json_fields",
+    "client::tests::get_sumeragi_diagnostics_rejects_zero_npos_seed",
+    "client::tests::get_sumeragi_diagnostics_accepts_json_payload_without_content_type_header",
 )
 _CROSS_SDK_TESTS = (
     "sumeragi_v2_cross_sdk_fixtures::shared_sdk_accept_fixtures_are_exact_current_rust_encodings",
@@ -623,14 +640,60 @@ _CROSS_SDK_TESTS = (
 )
 _NATIVE_AMX_GROUPED_PARITY_HARNESS = "ci/run_native_amx_v2_grouped_sdk_parity.sh"
 _NATIVE_AMX_GROUPED_FIXTURE = "fixtures/sumeragi_v2/native_amx_v2_grouped.json"
-_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 51
+_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 55
 _NATIVE_AMX_GROUPED_PARITY_SUITES = (
     ("openapi", 7),
-    ("python", 58),
-    ("javascript", 56),
+    ("python", 62),
+    ("javascript", 59),
     ("swift", 4),
     ("kotlin", 6),
     ("java", 5),
+)
+_SUMERAGI_SDK_DIAGNOSTICS_HARNESS = "ci/run_sumeragi_v2_sdk_diagnostics.sh"
+_SUMERAGI_SDK_DIAGNOSTICS_SUITES = (
+    ("python", 114),
+    ("javascript", 88),
+    ("swift", 17),
+    ("kotlin", 15),
+    ("java", 10),
+)
+_SUMERAGI_SDK_DIAGNOSTICS_SUITE_SOURCE_PATHS = (
+    "ci/run_sumeragi_v2_sdk_diagnostics.sh",
+    "ci/native_amx_v2_grouped_gradle_init.gradle",
+    "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+    "python/iroha_python/src/iroha_python/client.py",
+    "python/iroha_torii_client/tests/test_client.py",
+    "python/iroha_torii_client/client.py",
+    "javascript/iroha_js/test/sumeragiDiagnosticsContract.test.js",
+    "javascript/iroha_js/test/toriiClient.test.js",
+    "javascript/iroha_js/src/toriiClient.js",
+    "javascript/iroha_js/scripts/build-dist.mjs",
+    "javascript/iroha_js/package.json",
+    "javascript/iroha_js/package-lock.json",
+    "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
+    "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
+    "IrohaSwift/Package.swift",
+    "IrohaSwift/Package.resolved",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/"
+    "SumeragiDiagnosticsModelsTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/"
+    "HttpClientTransportTest.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/"
+    "SumeragiDiagnosticsModels.kt",
+    "kotlin/core-jvm/build.gradle.kts",
+    "kotlin/settings.gradle.kts",
+    "kotlin/gradlew",
+    "kotlin/gradle/wrapper/gradle-wrapper.jar",
+    "kotlin/gradle/wrapper/gradle-wrapper.properties",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/"
+    "SumeragiDiagnosticsModelsTests.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/"
+    "SumeragiDiagnosticsModels.java",
+    "java/iroha_android/core/build.gradle.kts",
+    "java/iroha_android/settings.gradle.kts",
+    "java/iroha_android/gradlew",
+    "java/iroha_android/gradle/wrapper/gradle-wrapper.jar",
+    "java/iroha_android/gradle/wrapper/gradle-wrapper.properties",
 )
 _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS = (
     "ci/run_native_amx_v2_grouped_sdk_parity.sh",
@@ -694,20 +757,25 @@ _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS = (
     "artifacts/openapi/torii.json",
     "artifacts/openapi/versions/current/torii.json",
 )
-_JS_STATUS_TESTS = (
-    "getSumeragiStatusTyped validates and normalizes authoritative v2 status",
-    "getSumeragiStatusTyped accepts the local-control liveness blocker",
-    "getSumeragiStatusTyped accepts the unsafe-proposal ignore reason",
-    "getSumeragiStatusTyped accepts all twelve ignore reasons at the bound",
-)
-
-
 def _native_amx_grouped_suite_source_manifest(repo_root: Path) -> str:
     digest = hashlib.sha256()
     for relative_path in _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS:
         source = _bounded_path_contract(
             repo_root / relative_path,
             f"grouped Native AMX V2 suite source {relative_path}",
+            maximum_bytes=_MAX_TOOL_BYTES,
+            require_single_link=False,
+        )
+        digest.update(f"{relative_path}\t{source.sha256}\n".encode())
+    return digest.hexdigest()
+
+
+def _sumeragi_sdk_diagnostics_suite_source_manifest(repo_root: Path) -> str:
+    digest = hashlib.sha256()
+    for relative_path in _SUMERAGI_SDK_DIAGNOSTICS_SUITE_SOURCE_PATHS:
+        source = _bounded_path_contract(
+            repo_root / relative_path,
+            f"Sumeragi v2 SDK diagnostics suite source {relative_path}",
             maximum_bytes=_MAX_TOOL_BYTES,
             require_single_link=False,
         )
@@ -998,23 +1066,26 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
         )
         for surface, count in _NATIVE_AMX_GROUPED_PARITY_SUITES
     )
+    legs.append(
+        (
+            "sumeragi-diagnostics-rust",
+            "cargo-exact",
+            len(_RUST_SDK_DIAGNOSTICS_TESTS),
+            "cargo test --locked --offline -p iroha --lib "
+            "client::tests::get_sumeragi_ -- --test-threads=1",
+        )
+    )
     legs.extend(
         (
-            (
-                "status-javascript",
-                "node",
-                4,
-                "node --test --test-reporter=tap "
-                f"--test-name-pattern={_JS_STATUS_PATTERN} "
-                "javascript/iroha_js/test/toriiClient.test.js",
-            ),
-            (
-                "status-python",
-                "pytest",
-                4,
-                "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
-                "-q -p no:cacheprovider " + " ".join(_PYTHON_STATUS_TESTS),
-            ),
+            f"sumeragi-diagnostics-{surface}",
+            "sdk-diagnostics",
+            count,
+            f"bash {_SUMERAGI_SDK_DIAGNOSTICS_HARNESS} {surface}",
+        )
+        for surface, count in _SUMERAGI_SDK_DIAGNOSTICS_SUITES
+    )
+    legs.extend(
+        (
             (
                 "preflight-source-seal",
                 "pytest",
@@ -1093,10 +1164,11 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-release-receipt",
                 "pytest",
-                316,
+                320,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_release_receipt_test.py "
+                "pytests/scripts/sumeragi_v2_release_receipt_components_test.py "
                 "pytests/scripts/sumeragi_v2_prebuilt_bundle_test.py "
                 "pytests/scripts/sumeragi_v2_prebuilt_bundle_shell_test.py",
             ),
@@ -1112,12 +1184,26 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-proof-fidelity",
                 "pytest",
-                3676,
+                4249,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_proof_ledger_test.py "
                 "pytests/scripts/sumeragi_v2_verus_evidence_test.py "
-                "pytests/scripts/sumeragi_v2_tlc_trace_normalizer_test.py",
+                "pytests/scripts/sumeragi_v2_tlc_trace_normalizer_test.py "
+                "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+                "test_inflight_composed_contract_rejects_legacy_layout_only_claim "
+                "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+                "test_inflight_composed_contract_rejects_state_order_weakening "
+                "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+                "test_inflight_composed_contract_rejects_snapshot_nonstutter_mapping "
+                "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+                "test_inflight_composed_contract_rejects_missing_direct_release_action "
+                "pytests/scripts/sumeragi_v2_multilane_models_tail_test.py::"
+                "test_inflight_composed_contract_rejects_tla_snapshot_nonstutter_mapping "
+                "pytests/scripts/sumeragi_v2_multilane_models_tail_test.py::"
+                "test_inflight_composed_contract_rejects_verus_snapshot_stutter_proof_removal "
+                "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+                "test_inflight_layout_contract_rejects_membership_only_lane_authorship",
             ),
             (
                 "preflight-formal-launcher",
@@ -4102,67 +4188,49 @@ def _artifact(snapshot: EvidenceSnapshot | PathContract) -> dict[str, str]:
     return {"path": str(snapshot.path), "sha256": snapshot.sha256}
 
 
-def _validate_multilane_apalache_evidence(
-    snapshot: EvidenceSnapshot, sealed_source_manifest: str
-) -> None:
-    data = snapshot.data
+def _execute_release_receipt_component(filename: str) -> None:
+    """Execute one reviewed receipt component in this module namespace."""
+
     if (
-        len(data) > _MAX_SCALING_JSON_BYTES
-        or not data.endswith(b"\n")
-        or b"\r" in data
-        or b"\0" in data
+        filename not in _RELEASE_RECEIPT_COMPONENT_FILES
+        or Path(filename).name != filename
     ):
-        raise ReceiptError(
-            "formal multilane Apalache evidence is not bounded LF-only TSV"
-        )
+        raise RuntimeError(f"invalid release receipt component: {filename!r}")
+    path = Path(__file__).with_name(filename)
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError(f"release receipt component is unavailable: {path}")
     try:
-        lines = data.decode("utf-8").splitlines()
-    except UnicodeDecodeError as error:
-        raise ReceiptError(
-            "formal multilane Apalache evidence is not UTF-8"
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise RuntimeError(
+            f"release receipt component could not be read: {path}"
         ) from error
-    expected_header = [
-        "schema_version\t1",
-        "backend\tapalache",
-        f"version\t{_APALACHE_VERSION}",
-        f"launcher_sha256\t{_APALACHE_LAUNCHER_SHA256}",
-        f"jar_sha256\t{_APALACHE_JAR_SHA256}",
-        f"source_manifest_sha256\t{sealed_source_manifest}",
-        f"result_count\t{len(_APALACHE_RESULTS)}",
-    ]
-    if len(lines) != len(expected_header) + len(_APALACHE_RESULTS):
-        raise ReceiptError(
-            "formal multilane Apalache evidence has the wrong result inventory"
-        )
-    if lines[: len(expected_header)] != expected_header:
-        raise ReceiptError(
-            "formal multilane Apalache evidence header is not the exact pinned profile"
-        )
-    for index, expected in enumerate(_APALACHE_RESULTS):
-        fields = lines[len(expected_header) + index].split("\t")
-        expected_prefix = ("result", *expected, "NoError")
-        if (
-            len(fields) != 9
-            or tuple(fields[:6]) != expected_prefix
-            or any(_DIGEST_RE.fullmatch(value) is None for value in fields[6:])
-        ):
-            raise ReceiptError(
-                "formal multilane Apalache evidence result "
-                f"{index} is not exact source-bound NoError evidence"
-            )
+    exec(compile(source, str(path), "exec"), globals())
 
 
+for _release_receipt_component in _RELEASE_RECEIPT_COMPONENT_FILES:
+    _execute_release_receipt_component(_release_receipt_component)
+
+for _release_receipt_symbol in (
+    "_validate_multilane_apalache_evidence",
+    "_validate_formal_snapshot_replays",
+    "_formal_artifacts",
+    "_test_count_from_log",
+):
+    if not callable(globals().get(_release_receipt_symbol)):
+        raise RuntimeError(
+            "release receipt component lacks required symbol "
+            f"{_release_receipt_symbol}"
+        )
 def _tlaps_resource_int(value: Any, name: str, *, minimum: int = 0) -> int:
     if type(value) is not int or value < minimum:
         raise ReceiptError(f"{name} is not one bounded integer")
     return value
 
-
 def _tlaps_resource_float(value: Any, name: str) -> float:
     if type(value) is not float or not math.isfinite(value) or value < 0.0:
         raise ReceiptError(f"{name} is not one finite non-negative decimal")
     return value
-
 
 def _tlaps_resource_timestamp(value: Any, name: str) -> datetime:
     if (
@@ -4174,7 +4242,6 @@ def _tlaps_resource_timestamp(value: Any, name: str) -> datetime:
         return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ")
     except ValueError as error:
         raise ReceiptError(f"{name} is not one valid UTC timestamp") from error
-
 
 def _validate_tlaps_resource_evidence(
     jsonl_snapshot: EvidenceSnapshot,
@@ -4504,107 +4571,7 @@ def _validate_tlaps_resource_evidence(
             "TLAPS resource summary peaks do not match the authenticated sample stream"
         )
 
-
-def _validate_formal_snapshot_replays(
-    *,
-    snapshots: dict[str, EvidenceSnapshot],
-    checker: Path,
-    checker_environment: dict[str, str],
-    repo_root: Path,
-) -> None:
-    """Run retained formal validators over private copies of captured bytes."""
-
-    replay_keys = (
-        "ledger",
-        "evidence",
-        "verus_evidence",
-        "verus_log",
-        "cross_tool_evidence",
-    )
-    with tempfile.TemporaryDirectory(
-        prefix="sumeragi-v2-formal-snapshot-replay-"
-    ) as temporary:
-        replay_root = Path(temporary).resolve(strict=True)
-        replay_paths: dict[str, Path] = {}
-        for key in replay_keys:
-            snapshot = snapshots[key]
-            destination = replay_root / snapshot.path.name
-            try:
-                destination.write_bytes(snapshot.data)
-                destination.chmod(0o400)
-            except OSError as error:
-                raise ReceiptError(
-                    "formal snapshot replay could not materialize captured evidence"
-                ) from error
-            replay_paths[key] = destination
-
-        cross_tool_status, cross_tool_stdout, _ = _run_bounded_python_validator(
-            checker,
-            [
-                "--ledger",
-                str(replay_paths["ledger"]),
-                "--print-cross-tool-obligations",
-            ],
-            cwd=repo_root,
-            environment=checker_environment,
-            name="archived formal cross-tool validator",
-        )
-        if cross_tool_status != 0:
-            raise ReceiptError(
-                "archived formal ledger has an invalid cross-tool evidence requirement"
-            )
-        if not cross_tool_stdout.strip():
-            raise ReceiptError(
-                "archived formal release ledger does not require cross-tool evidence"
-            )
-
-        verus_checker = (
-            repo_root / "scripts" / "formal" / "sumeragi_v2_verus_evidence.py"
-        )
-        verus_status, _, _ = _run_bounded_python_validator(
-            verus_checker,
-            [
-                "validate",
-                "--root",
-                str(repo_root),
-                "--evidence",
-                str(replay_paths["verus_evidence"]),
-                "--log",
-                str(replay_paths["verus_log"]),
-            ],
-            cwd=repo_root,
-            environment=checker_environment,
-            name="archived formal Verus validator",
-        )
-        if verus_status != 0:
-            raise ReceiptError("archived formal Verus evidence failed validation")
-
-        status, _, _ = _run_bounded_python_validator(
-            checker,
-            [
-                "--ledger",
-                str(replay_paths["ledger"]),
-                "--release",
-                "--evidence",
-                str(replay_paths["evidence"]),
-                "--verus-evidence",
-                str(replay_paths["verus_evidence"]),
-                "--verus-log",
-                str(replay_paths["verus_log"]),
-                "--cross-tool-evidence",
-                str(replay_paths["cross_tool_evidence"]),
-            ],
-            cwd=repo_root,
-            environment=checker_environment,
-            name="archived formal release validator",
-        )
-        if status != 0:
-            raise ReceiptError(
-                "archived formal ledger/evidence failed release validation"
-            )
-
-
-def _formal_artifacts(
+def _formal_artifacts_with_tlaps_resource_validation(
     completion: EvidenceSnapshot,
     fields: dict[str, str],
     sealed: dict[str, Any],
@@ -4836,91 +4803,9 @@ def _formal_artifacts(
     )
 
 
-def _test_count_from_log(lines: list[str], kind: str, name: str) -> int:
-    if kind == "cargo-focus":
-        running = [line for line in lines if line == "running 1 test"]
-        results = [
-            line
-            for line in lines
-            if re.fullmatch(
-                r"test result: ok\. 1 passed; 0 failed; 0 ignored; "
-                r"0 measured; [0-9]+ filtered out; finished in .+",
-                line,
-            )
-            is not None
-        ]
-        if not running or len(running) != len(results):
-            raise ReceiptError(
-                f"{name} has an ambiguous Cargo transcript for focused tests"
-            )
-        return len(results)
-    if kind.startswith("cargo-"):
-        running = [
-            match
-            for line in lines
-            if (match := re.fullmatch(r"running ([0-9]+) tests?", line))
-        ]
-        results = [
-            match
-            for line in lines
-            if (
-                match := re.fullmatch(
-                    r"test result: ok\. ([0-9]+) passed; 0 failed; 0 ignored; "
-                    r"0 measured; [0-9]+ filtered out; finished in .+",
-                    line,
-                )
-            )
-        ]
-        if (
-            len(running) != 1
-            or len(results) != 1
-            or running[0].group(1) != results[0].group(1)
-        ):
-            raise ReceiptError(f"{name} has an ambiguous Cargo transcript")
-        return int(results[0].group(1))
-    if kind == "pytest":
-        matches = [
-            match
-            for line in lines
-            if (
-                match := re.fullmatch(
-                    r"([0-9]+) passed in [0-9]+(?:\.[0-9]+)?s", line
-                )
-            )
-        ]
-        if len(matches) != 1:
-            raise ReceiptError(f"{name} has an ambiguous pytest transcript")
-        return int(matches[0].group(1))
-    if kind == "node":
-        matches = [
-            match
-            for line in lines
-            if (match := re.fullmatch(r"# pass ([0-9]+)", line))
-        ]
-        if len(matches) != 1 or lines.count("# fail 0") != 1:
-            raise ReceiptError(f"{name} has an ambiguous Node transcript")
-        return int(matches[0].group(1))
-    if kind == "native-amx-sdk":
-        matches = [
-            match
-            for line in lines
-            if (
-                match := re.fullmatch(
-                    r"native-amx-v2-grouped-parity surface=[a-z]+ "
-                    r"tests=([0-9]+) fixture_sha256=[0-9a-f]{64} "
-                    r"suite_source_manifest_sha256=[0-9a-f]{64}",
-                    line,
-                )
-            )
-        ]
-        if len(matches) != 1:
-            raise ReceiptError(
-                f"{name} has an ambiguous grouped Native AMX V2 SDK transcript"
-            )
-        return int(matches[0].group(1))
-    if kind == "command":
-        return 0
-    raise ReceiptError(f"{name} has unknown leg kind {kind}")
+# The formal-artifact component remains the canonical lexical owner; the
+# incoming resource-stream validator strengthens its runtime implementation.
+_formal_artifacts = _formal_artifacts_with_tlaps_resource_validation
 
 
 def _prebuilt_directory(path: Path, name: str) -> Path:
@@ -5594,6 +5479,7 @@ def _corridor_artifacts(
         "status-rust": (_DATA_STATUS_TEST,),
         "lane-certificate-rust": (_DATA_LANE_CERTIFICATE_TEST,),
         "cross-sdk-rust": _CROSS_SDK_TESTS,
+        "sumeragi-diagnostics-rust": _RUST_SDK_DIAGNOSTICS_TESTS,
     }
     exact_cargo_tests.update(
         {
@@ -5673,15 +5559,6 @@ def _corridor_artifacts(
                     raise ReceiptError(
                         f"corridor exact Cargo leg {leg_id} lacks its named test"
                     )
-        if kind == "node":
-            for test_index, test in enumerate(_JS_STATUS_TESTS, 1):
-                if (
-                    lines.count(f"# Subtest: {test}") != 1
-                    or lines.count(f"ok {test_index} - {test}") != 1
-                ):
-                    raise ReceiptError(
-                        "corridor Node leg lacks its exact TAP subtest result"
-                    )
         if kind == "native-amx-sdk":
             surface = leg_id.removeprefix("native-amx-grouped-")
             expected_marker = (
@@ -5696,6 +5573,18 @@ def _corridor_artifacts(
                 raise ReceiptError(
                     f"corridor grouped Native AMX V2 {surface} leg is not "
                     "bound to the exact fixture and suite sources"
+                )
+        if kind == "sdk-diagnostics":
+            surface = leg_id.removeprefix("sumeragi-diagnostics-")
+            expected_marker = (
+                f"sumeragi-v2-sdk-diagnostics surface={surface} "
+                f"tests={observed} suite_source_manifest_sha256="
+                f"{_sumeragi_sdk_diagnostics_suite_source_manifest(repo_root)}"
+            )
+            if lines.count(expected_marker) != 1:
+                raise ReceiptError(
+                    f"corridor Sumeragi v2 SDK diagnostics {surface} leg is "
+                    "not bound to the exact suite sources"
                 )
         logs.append(_snapshot_contract(log))
     manifest_path = Path(fields["prebuilt_manifest_path"])
@@ -7151,6 +7040,7 @@ def build_receipt(
         formal_verus_log,
         formal_multilane_apalache_evidence,
         formal_cross_tool_evidence,
+        formal_production_trace_extraction_evidence,
         formal_harness_lock,
         formal_toolchain,
         formal_tlaps_resource_jsonl,
@@ -7414,6 +7304,9 @@ def build_receipt(
                 formal_multilane_apalache_evidence
             ),
             "formal_cross_tool_evidence": _artifact(formal_cross_tool_evidence),
+            "formal_production_trace_extraction_evidence": _artifact(
+                formal_production_trace_extraction_evidence
+            ),
             "formal_harness_lock": _artifact(formal_harness_lock),
             "formal_toolchain": _artifact(formal_toolchain),
             "formal_tlaps_resource_jsonl": _artifact(formal_tlaps_resource_jsonl),
@@ -7765,6 +7658,7 @@ def _snapshot_receipt_inputs(
                 "formal_verus_log",
                 "formal_multilane_apalache_evidence",
                 "formal_cross_tool_evidence",
+                "formal_production_trace_extraction_evidence",
                 "formal_harness_lock",
                 "formal_toolchain",
                 "formal_tlaps_resource_jsonl",

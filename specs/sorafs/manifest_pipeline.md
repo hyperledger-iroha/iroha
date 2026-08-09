@@ -99,29 +99,39 @@ mode-`0600` runtime file. The Android codegen replay uses a documented public
 TEST-ONLY seed created inside its private temporary directory and deletes it
 with that directory; it is never included in generated reports or fixtures.
 
-When submitting through Torii, pass the exact canonical Norito-encoded
-`ManifestV1` as base64 in `manifest_payload` on
-`POST /v1/sorafs/pin/register` to run the same full manifest
-validator before the registration transaction is queued. Torii derives the
-manifest digest, chunk-plan digest, root CID, chunker descriptor, content
-length, and pin policy from those bytes; the request has no parallel summary
-fields that can disagree. The payload must use the single canonical first-release Norito
-layout and a positive retention epoch later than submission; legacy flag
-layouts, inert commitments, and inline chunker profiles fail before queueing.
-`manifest_payload` is mandatory in the first release. Torii places those exact
-canonical bytes in `RegisterPinManifest`, and consensus decodes and revalidates
-the full manifest before deriving its digest, chunk-plan digest, root CID,
-chunker, content length, and pin policy. Direct instruction submission therefore cannot bypass Torii's
-manifest checks. When governance requires council signatures, registration
-remains pending, without a published alias
+When submitting through Torii, construct one exact-network canonical
+`SignedTransaction` containing exactly one `RegisterPinManifest`. Its
+`manifest_payload` is the exact canonical Norito-encoded `ManifestV1`; there is
+no JSON registration DTO, parallel summary field, or caller-selected
+`submitted_epoch`. `POST /v1/sorafs/pin/register` verifies the transaction
+signature, network identity, sole instruction, and bounded manifest before
+queue admission. Torii and consensus derive the manifest digest, chunk-plan
+digest, root CID, chunker descriptor, content length, and pin policy only from
+those bytes. The payload must use the single canonical first-release Norito
+layout and declare a retention epoch later than the consensus-derived
+submission epoch; legacy flag layouts, inert commitments, and inline chunker
+profiles fail closed.
+
+Consensus decodes and revalidates the full manifest, derives the submission
+epoch from the executing block timestamp, enforces global/per-account count and
+byte ceilings plus lineage depth/fanout, writes deterministic expiry and status
+indexes, collects the configured public-pin fee from the authenticated
+authority, and then publishes the record atomically. Direct instruction
+submission therefore cannot bypass these checks. When governance requires
+council signatures, registration remains pending, without a published alias
 or replication order, until an authenticated account relays the actual bounded
 threshold council envelope through `ApprovePinManifest`. A digest without its
 envelope is never sufficient for the first approval, and a later replay cannot
-replace the stored envelope commitment. Approval must occur before retention
-expiry, and alias publication waits until every fallible automatic-order step
-has succeeded. Public registrations may include an alias only when the
+replace the stored envelope commitment. Core derives the approval epoch from
+consensus time; approval must occur before retention expiry, and alias
+publication waits until every fallible automatic-order step has succeeded.
+Registration is a paid public operation for authenticated accounts and requires
+no general pin permission token. It may include an alias only when the
 submitting authority carries `CanBindSorafsAlias`; its canonical bounded proof
-must commit to the exact content root plus submission and retention epochs.
+must commit to the exact content root plus the consensus-derived submission
+epoch and declared retention epoch. Core likewise derives manual retirement
+time from consensus, and automatic expiry consumes the authenticated expiry
+index at consensus time while releasing the manifest's resource charge.
 
 The first release accepts only the exact 36-byte binary root CID layout
 `CIDv1 | dag-cbor | BLAKE3-256 | 32-byte digest`; non-canonical varints, other

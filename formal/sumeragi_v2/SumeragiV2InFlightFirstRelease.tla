@@ -5,8 +5,13 @@ EXTENDS Naturals, FiniteSets
 Finite safety kernel for the first-release, in-flight lane carrier path.
 
 The accepted schema V2 carried by the Rust `LaneExecutablePayloadV1`
-container is represented by `payloadBinding`: each validator holds the
-*preimage* of the selected `QueuePlanAdmissionBindingV2`, not only a digest.
+container is represented by `payloadBinding`. A validator is mapped to
+`BindingA` only where authenticated custody of the selected FIFO-ordered
+conjunction of exact `QueuePlanAdmissionBindingV2` preimages is established.
+The production projection is the canonical reservation-group hash covering
+every complete key in that order. Init establishes that custody for the
+selected producer; it deliberately does not assert knowledge by every
+validator.
 
 QueuePlan journal V4 has individual Put records, not a batch-Put frame.
 `SelectQueuePlanV4Conjunction` therefore observes that every exact claim in
@@ -19,8 +24,11 @@ is
  READY signature -> durable READY QC -> lane commit -> atomic WSV carrier
  application.
 
-Reservation Commit, QueuePlan tombstoning, ForgetCommit, and post-WSV
-sidecar/index repairs happen only after atomic WSV application.  The release
+Reservation Commit, QueuePlan tombstoning, and ForgetCommit each advance one
+canonical ordered key at a time after atomic WSV application. Their durable
+key sets may expose mixed prefixes after a crash; the broad queue state changes
+only when the corresponding prefix is complete. Post-WSV sidecar/index repairs
+remain stuttering. The release
 path separately models Kura retirement/ReleasePending claim prefixes, the
 Queue PrepareRelease barrier, Released claim prefixes, and Queue
 CompleteRelease/FIFO restoration/ForgetRelease.  Prefix counters are durable
@@ -31,8 +39,10 @@ crashed validator's copies; durable Kura/input/QC and release-prefix facts
 remain recoverable.
 
 The model has a producer and two independently crashing replicated carriers.
-It deliberately contains no Rust projection and no refinement theorem: TLC
-and Apalache can establish only the bounded abstract transition system below.
+Its three-validator states embed into the 1..128-validator fixed-width
+Rust/Verus `ProductionInFlightFirstReleaseStateProjection` and transition
+kernel. TLC and Apalache still establish only this bounded abstract transition
+system; a production trace-extraction theorem remains a separate obligation.
 ***************************************************************************)
 
 CONSTANTS
@@ -65,6 +75,8 @@ Modes ==
    "ReservationCommitBeforeCarrier",
    "PlanTombstoneBeforeReservationCommit",
    "ForgetCommitBeforePlanTombstone",
+   "CommitPrefixSkippedKey",
+   "CommitPrefixDecrease",
    "ReleasePendingBeforeRetirement",
    "ReleasePrepareBeforePending",
    "ReleasedClaimsBeforePrepare",
@@ -79,14 +91,25 @@ OptionalValidator == Validators \union {"None"}
 QueuePlanStates == {"Absent", "SelectedConjunction", "Tombstoned"}
 ReservationStates ==
   {"Absent", "Live", "Committed", "CommitForgotten",
-   "ReleasePrepared", "ReleaseCompleted", "ReleaseForgotten"}
-CommitReservationStates == {"Committed", "CommitForgotten"}
+   "ReleasePrepared", "ReleaseCompleted", "ReleaseForgotten",
+   "DirectReleased"}
 PreparedReleaseStates ==
   {"ReleasePrepared", "ReleaseCompleted", "ReleaseForgotten"}
 CompletedReleaseStates == {"ReleaseCompleted", "ReleaseForgotten"}
-ReadyQuorum == 2
+FifoRestoredReservationStates ==
+  CompletedReleaseStates \union {"DirectReleased"}
+\* Canonical strict two-thirds count threshold for this fixed cardinality:
+\* 3 - ((3 - 1) \div 3) = 3.
+ReadyQuorum == 3
 SelectedBatchSize ==
   IF Mode = "OversizeSelectedQueuePlan" THEN 4097 ELSE 2
+
+PrefixThrough(prefix) ==
+  IF prefix = 0 THEN {} ELSE 1..prefix
+
+CanonicalKeyPrefix(keys, bound) ==
+  /\ keys \subseteq PrefixThrough(bound)
+  /\ keys = PrefixThrough(Cardinality(keys))
 
 Configuration ==
   /\ Mode \in Modes
@@ -116,7 +139,8 @@ Init ==
   /\ Configuration
   /\ ownership = [p \in Validators |->
        IF p = Producer THEN "ProducerSelected" ELSE "ReplicatedCarrier"]
-  /\ payloadBinding = [p \in Validators |-> BindingA]
+  /\ payloadBinding = [p \in Validators |->
+       IF p = Producer THEN BindingA ELSE "None"]
   /\ queue =
        [plan |-> "Absent",
         selectedCount |-> 0,
@@ -137,7 +161,9 @@ Init ==
         everReadyAuthorized |-> {},
         readySigned |-> {},
         everReadyQcDurable |-> FALSE,
-        everReservationCommitted |-> FALSE,
+        reservationCommittedKeys |-> {},
+        queuePlanTombstonedKeys |-> {},
+        reservationCommitForgottenKeys |-> {},
         pendingHighWater |-> 0,
         releasedHighWater |-> 0]
   /\ decision =
@@ -278,6 +304,55 @@ Recover(p) ==
                  release>>
 
 (***************************************************************************
+Reservation snapshot replay reconstructs process-local indexes from V5 bytes
+that are already represented by the abstract durable owner. It is therefore
+a named stutter, not a second reservation acquisition.
+***************************************************************************)
+RecoverReservationSnapshot ==
+  UNCHANGED vars
+
+(***************************************************************************
+Direct abort/orphan release is a real journal action outside the ordered
+four-stage lane release. It ends with ordinary FIFO ownership and may not
+masquerade as a Commit cleanup or ordered-release transition. The retired
+lane-wide removal tag is absent from the current V5 operation schema; its old
+bootstrap claim and operation bytes fail closed instead of entering this
+relation.
+***************************************************************************)
+ReleaseReservationDirect ==
+  /\ queue.plan = "SelectedConjunction"
+  /\ queue.reservation = "Live"
+  /\ decision.laneCommitOwner = "None"
+  /\ decision.releaseOwner = "None"
+  /\ queue' = [queue EXCEPT !.reservation = "DirectReleased"]
+  /\ release' = [release EXCEPT !.fifoRestored = TRUE]
+  /\ UNCHANGED <<ownership, payloadBinding, carrier, session, history, decision>>
+
+(***************************************************************************
+After `Recover` clears one local crash marker, exact durable Kura payload
+ownership may restore only that validator's volatile body custody. The frozen
+producer alone regains producer liveness. READY authorization and every
+durable/economic fact remain unchanged, and terminal or retired work cannot be
+resurrected.
+***************************************************************************)
+RehydrateLocalKuraCustody(p) ==
+  /\ p \in Validators
+  /\ p \notin session.crashed
+  /\ p \in carrier.kuraActive
+  /\ p \notin session.bodies
+  /\ ~release.kuraRetired
+  /\ ~decision.wsvCommitted
+  /\ decision.releaseOwner = "None"
+  /\ queue.reservation
+       \notin {"CommitForgotten", "ReleaseForgotten", "DirectReleased"}
+  /\ session' =
+       [session EXCEPT
+          !.bodies = @ \union {p},
+          !.producerAlive = IF p = Producer THEN TRUE ELSE @]
+  /\ UNCHANGED <<ownership, payloadBinding, queue, carrier, history, decision,
+                 release>>
+
+(***************************************************************************
 LaneCommit is the lane consensus decision.  It is intentionally distinct from
 the post-carrier reservation journal Commit action below.
 ***************************************************************************)
@@ -312,30 +387,76 @@ ApplyCarrier(p) ==
   /\ UNCHANGED <<ownership, payloadBinding, queue, carrier, session, history,
                  release>>
 
-PersistReservationCommitted ==
-  /\ queue.reservation = "Live"
+PersistReservationCommitted(key) ==
   /\ decision.laneCommitOwner # "None"
   /\ (decision.wsvCommitted \/ Mode = "ReservationCommitBeforeCarrier")
-  /\ queue' = [queue EXCEPT !.reservation = "Committed"]
-  /\ history' =
-       [history EXCEPT !.everReservationCommitted = TRUE]
+  /\ IF Mode = "CommitPrefixDecrease" /\ queue.reservation = "Committed"
+        THEN
+          /\ queue.reservation = "Committed"
+          /\ history.queuePlanTombstonedKeys = {}
+          /\ history.reservationCommitForgottenKeys = {}
+          /\ Cardinality(history.reservationCommittedKeys) = queue.selectedCount
+          /\ key = 1
+          /\ queue' = [queue EXCEPT !.reservation = "Live"]
+          /\ history' =
+               [history EXCEPT
+                  !.reservationCommittedKeys = @ \ {key}]
+        ELSE
+          LET nextKey ==
+                Cardinality(history.reservationCommittedKeys)
+                  + (IF Mode = "CommitPrefixSkippedKey" THEN 2 ELSE 1)
+          IN
+            /\ queue.reservation = "Live"
+            /\ nextKey \in PrefixThrough(queue.selectedCount)
+            /\ key = nextKey
+            /\ queue' =
+                 [queue EXCEPT
+                    !.reservation =
+                       IF nextKey = queue.selectedCount
+                       THEN "Committed"
+                       ELSE "Live"]
+            /\ history' =
+                 [history EXCEPT
+                    !.reservationCommittedKeys = @ \union {key}]
   /\ UNCHANGED <<ownership, payloadBinding, carrier, session, decision, release>>
 
-PersistPlanTombstone ==
+PersistPlanTombstone(key) ==
   /\ queue.plan = "SelectedConjunction"
+  /\ (Cardinality(history.reservationCommittedKeys) = queue.selectedCount
+      \/ Mode = "PlanTombstoneBeforeReservationCommit")
   /\ (queue.reservation = "Committed"
       \/ Mode = "PlanTombstoneBeforeReservationCommit")
-  /\ queue' = [queue EXCEPT !.plan = "Tombstoned"]
-  /\ UNCHANGED <<ownership, payloadBinding, carrier, session, history, decision,
-                 release>>
+  /\ key = Cardinality(history.queuePlanTombstonedKeys) + 1
+  /\ key \in PrefixThrough(queue.selectedCount)
+  /\ queue' =
+       [queue EXCEPT
+          !.plan =
+             IF key = queue.selectedCount
+             THEN "Tombstoned"
+             ELSE "SelectedConjunction"]
+  /\ history' =
+       [history EXCEPT
+          !.queuePlanTombstonedKeys = @ \union {key}]
+  /\ UNCHANGED <<ownership, payloadBinding, carrier, session, decision, release>>
 
-ForgetReservationCommit ==
+ForgetReservationCommit(key) ==
   /\ queue.reservation = "Committed"
+  /\ (Cardinality(history.queuePlanTombstonedKeys) = queue.selectedCount
+      \/ Mode = "ForgetCommitBeforePlanTombstone")
   /\ (queue.plan = "Tombstoned"
       \/ Mode = "ForgetCommitBeforePlanTombstone")
-  /\ queue' = [queue EXCEPT !.reservation = "CommitForgotten"]
-  /\ UNCHANGED <<ownership, payloadBinding, carrier, session, history, decision,
-                 release>>
+  /\ key = Cardinality(history.reservationCommitForgottenKeys) + 1
+  /\ key \in PrefixThrough(queue.selectedCount)
+  /\ queue' =
+       [queue EXCEPT
+          !.reservation =
+             IF key = queue.selectedCount
+             THEN "CommitForgotten"
+             ELSE "Committed"]
+  /\ history' =
+       [history EXCEPT
+          !.reservationCommitForgottenKeys = @ \union {key}]
+  /\ UNCHANGED <<ownership, payloadBinding, carrier, session, decision, release>>
 
 (***************************************************************************
 Four-stage ordered release:
@@ -421,8 +542,8 @@ RepairPostCarrierEvidence ==
 
 ConflictingPayloadBindingMutation ==
   /\ Mode = "PayloadBindingConflict"
-  /\ payloadBinding[ReplicaTwo] = BindingA
-  /\ payloadBinding' = [payloadBinding EXCEPT ![ReplicaTwo] = BindingB]
+  /\ payloadBinding[Producer] = BindingA
+  /\ payloadBinding' = [payloadBinding EXCEPT ![Producer] = BindingB]
   /\ UNCHANGED <<ownership, queue, carrier, session, history, decision, release>>
 
 Next ==
@@ -438,11 +559,15 @@ Next ==
   \/ PersistReadyQc
   \/ \E p \in Validators: Crash(p)
   \/ \E p \in Validators: Recover(p)
+  \/ RecoverReservationSnapshot
+  \/ ReleaseReservationDirect
+  \/ \E p \in Validators: RehydrateLocalKuraCustody(p)
   \/ \E p \in Validators: LaneCommit(p)
   \/ \E p \in Validators: ApplyCarrier(p)
-  \/ PersistReservationCommitted
-  \/ PersistPlanTombstone
-  \/ ForgetReservationCommit
+  \/ \E key \in PrefixThrough(SelectedBatchSize):
+       PersistReservationCommitted(key)
+  \/ \E key \in PrefixThrough(SelectedBatchSize): PersistPlanTombstone(key)
+  \/ \E key \in PrefixThrough(SelectedBatchSize): ForgetReservationCommit(key)
   \/ \E p \in Validators: PersistKuraRetirement(p)
   \/ AdvanceReleasePendingPrefix
   \/ PrepareReservationRelease
@@ -456,7 +581,7 @@ Next ==
 FirstReleaseTypeInvariant ==
   /\ Configuration
   /\ ownership \in [Validators -> Ownership]
-  /\ payloadBinding \in [Validators -> {BindingA, BindingB}]
+  /\ payloadBinding \in [Validators -> OptionalBinding]
   /\ queue \in
        [plan: QueuePlanStates,
         selectedCount: Nat,
@@ -477,7 +602,9 @@ FirstReleaseTypeInvariant ==
         everReadyAuthorized: SUBSET Validators,
         readySigned: SUBSET Validators,
         everReadyQcDurable: BOOLEAN,
-        everReservationCommitted: BOOLEAN,
+        reservationCommittedKeys: SUBSET PrefixThrough(queue.selectedCount),
+        queuePlanTombstonedKeys: SUBSET PrefixThrough(queue.selectedCount),
+        reservationCommitForgottenKeys: SUBSET PrefixThrough(queue.selectedCount),
         pendingHighWater: Nat,
         releasedHighWater: Nat]
   /\ decision \in
@@ -495,7 +622,9 @@ FirstReleaseTypeInvariant ==
         fifoRestored: BOOLEAN]
 
 MLPayloadSchemaV2CarriesExactAdmissionPreimage ==
-  \A p \in Validators: payloadBinding[p] = BindingA
+  /\ payloadBinding[Producer] = BindingA
+  /\ \A p \in Validators:
+       payloadBinding[p] = "None" \/ payloadBinding[p] = BindingA
 
 MLValidatorCarrierOwnership ==
   /\ ownership[Producer] = "ProducerSelected"
@@ -557,15 +686,47 @@ MLExactlyOnceCarrierApplication ==
        /\ decision.appliedBy \in carrier.inputDurable
 
 MLPostCarrierCommitCleanupOrder ==
-  /\ history.everReservationCommitted => decision.wsvCommitted
-  /\ queue.reservation \in CommitReservationStates =>
+  /\ CanonicalKeyPrefix(
+       history.reservationCommittedKeys,
+       queue.selectedCount)
+  /\ CanonicalKeyPrefix(
+       history.queuePlanTombstonedKeys,
+       queue.selectedCount)
+  /\ CanonicalKeyPrefix(
+       history.reservationCommitForgottenKeys,
+       queue.selectedCount)
+  /\ history.queuePlanTombstonedKeys
+       \subseteq history.reservationCommittedKeys
+  /\ history.reservationCommitForgottenKeys
+       \subseteq history.queuePlanTombstonedKeys
+  /\ history.reservationCommittedKeys # {} =>
        /\ decision.wsvCommitted
        /\ decision.laneCommitOwner # "None"
+  /\ queue.reservation = "Committed" =>
+       /\ decision.wsvCommitted
+       /\ decision.laneCommitOwner # "None"
+       /\ Cardinality(history.reservationCommittedKeys) = queue.selectedCount
+       /\ Cardinality(history.reservationCommitForgottenKeys)
+            < queue.selectedCount
+  /\ queue.reservation = "Live" =>
+       /\ Cardinality(history.reservationCommittedKeys) < queue.selectedCount
+       /\ history.queuePlanTombstonedKeys = {}
+       /\ history.reservationCommitForgottenKeys = {}
+  /\ queue.reservation
+       \notin {"Live", "Committed", "CommitForgotten"} =>
+       /\ history.reservationCommittedKeys = {}
+       /\ history.queuePlanTombstonedKeys = {}
+       /\ history.reservationCommitForgottenKeys = {}
   /\ queue.plan = "Tombstoned" =>
-       /\ history.everReservationCommitted
-       /\ queue.reservation \in CommitReservationStates
+       Cardinality(history.queuePlanTombstonedKeys) = queue.selectedCount
+  /\ queue.plan = "SelectedConjunction" =>
+       Cardinality(history.queuePlanTombstonedKeys) < queue.selectedCount
   /\ queue.reservation = "CommitForgotten" =>
-       queue.plan = "Tombstoned"
+       /\ queue.plan = "Tombstoned"
+       /\ Cardinality(history.reservationCommittedKeys) = queue.selectedCount
+       /\ Cardinality(history.queuePlanTombstonedKeys) = queue.selectedCount
+       /\ Cardinality(history.reservationCommitForgottenKeys)
+            = queue.selectedCount
 
 MLReleasePrefixesRecoverable ==
   /\ release.pendingPrefix <= queue.selectedCount
@@ -589,8 +750,10 @@ MLReleaseStageOrder ==
   /\ queue.reservation \in CompletedReleaseStates =>
        release.releasedPrefix = queue.selectedCount
   /\ release.fifoRestored =>
-       queue.reservation \in CompletedReleaseStates
+       queue.reservation \in FifoRestoredReservationStates
   /\ queue.reservation = "ReleaseForgotten" =>
+       release.fifoRestored
+  /\ queue.reservation = "DirectReleased" =>
        release.fifoRestored
 
 MLQueuePlanV4SelectedConjunctionBound4096 ==

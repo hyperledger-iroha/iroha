@@ -2375,7 +2375,7 @@ mod tests {
             fsync_interval: kura::FSYNC_INTERVAL,
             block_sync_roster_retention: kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas: kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: kura::REPLICA_ADVERT_POLICY,
         }
     }
 

@@ -61,6 +61,7 @@ const _: () = assert!(
 );
 
 /// Compute the exact encoded outer-envelope length without allocation.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) const fn zk_x509_credential_envelope_encoded_len_v1(
     main_aggregate_bytes: usize,
     ca_subproof_bytes: usize,
@@ -176,10 +177,12 @@ pub(crate) enum ZkX509CredentialProofErrorV1 {
     CrossSubproofMismatch,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn append_u16_v1(output: &mut Vec<u8>, value: u16) {
     output.extend_from_slice(&value.to_be_bytes());
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn append_u32_v1(output: &mut Vec<u8>, value: u32) {
     output.extend_from_slice(&value.to_be_bytes());
 }
@@ -260,6 +263,7 @@ fn read_subproof_v1<'a>(
 }
 
 /// Encode exactly one main aggregate followed by exactly one `X5C1` proof.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn encode_zk_x509_credential_envelope_v1(
     public: ZkX509CredentialPublicBindingV1,
     main_aggregate: &[u8],
@@ -414,6 +418,7 @@ pub(crate) fn validate_cross_subproof_binding_v1(
 ///
 /// The two callbacks are cryptographic verifier boundaries, not witness
 /// providers. Each must return terminals reconstructed from proof openings.
+#[cfg(test)]
 pub(crate) fn verify_zk_x509_credential_envelope_with_v1<MainVerifier, CaVerifier>(
     expected_public: ZkX509CredentialPublicBindingV1,
     encoded: &[u8],

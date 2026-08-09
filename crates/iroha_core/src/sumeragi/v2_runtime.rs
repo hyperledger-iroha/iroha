@@ -1479,7 +1479,7 @@ impl RuntimeCandidateCausalOrigin {
 
     /// Whether two exact carriers identify one lifecycle despite diagnostic
     /// process-generation retagging.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn same_lifecycle(&self, other: &Self) -> bool {
         self.validate_exact() && other.validate_exact() && self.lifecycle_key == other.lifecycle_key
     }
@@ -5283,7 +5283,7 @@ struct BoundedIngress<C> {
 }
 
 impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     fn new(config: RuntimeQueueConfig) -> Self {
         Self::with_lifecycle_ordinals(
             config,
@@ -8011,7 +8011,7 @@ impl BoundedIngress<AdapterCommand> {
     /// suppression. Once the queued occurrence leaves, a later retransmission
     /// may be admitted and checked against the adapter's generation-aware
     /// delivery records in the usual way.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     fn enqueue_authenticated_with_ingress_ownership(
         &mut self,
         tag: EventTag,
@@ -8139,7 +8139,7 @@ impl BoundedIngress<AdapterCommand> {
         self.commit_canonical_body_available(reservation)
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     fn reserve_canonical_body_available(
         &mut self,
         tag: EventTag,
@@ -12077,7 +12077,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     /// authenticated ingress or derived deferred continuation whose source
     /// occurrence is at or after this continuation's frozen cut is physically
     /// later and cannot resurrect an older logical queue position.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     fn minimum_active_lifecycle_ordinal_for_deferred(
         &self,
         target: &RuntimeDeferredLifecycleOwnership,
@@ -18075,10 +18075,11 @@ mod tests {
             block_hash: HashOf::from_untyped_unchecked(Hash::new([marker, 5])),
             payload_hash: Hash::new([marker, 6]),
         };
-        let execution_commitment = wire::ExecutionCommitment::without_topups(
+        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new([marker, 7]),
             Hash::new([marker, 8]),
             Hash::new([marker, 9]),
+            1,
             Hash::new([marker, 10]),
         );
         let signers = vec![0, 1, 2];
@@ -18338,12 +18339,14 @@ mod tests {
         );
 
         let mut changed_statement = certificate;
-        changed_statement.execution_commitment = wire::ExecutionCommitment::without_topups(
-            Hash::new(b"changed candidate parent state"),
-            Hash::new(b"changed candidate post state"),
-            Hash::new(b"changed candidate ordinary writes"),
-            Hash::new(b"changed candidate block wire"),
-        );
+        changed_statement.execution_commitment =
+            wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"changed candidate parent state"),
+                Hash::new(b"changed candidate post state"),
+                Hash::new(b"changed candidate ordinary writes"),
+                1,
+                Hash::new(b"changed candidate block wire"),
+            );
         let changed_apply = AdapterEffect::Apply {
             tag,
             subject: changed_statement.subject,
@@ -18504,12 +18507,14 @@ mod tests {
         );
 
         let mut wrong_certificate = certificate;
-        wrong_certificate.execution_commitment = wire::ExecutionCommitment::without_topups(
-            Hash::new(b"foreign pipeline parent state"),
-            Hash::new(b"foreign pipeline post state"),
-            Hash::new(b"foreign pipeline ordinary writes"),
-            Hash::new(b"foreign pipeline executed block"),
-        );
+        wrong_certificate.execution_commitment =
+            wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"foreign pipeline parent state"),
+                Hash::new(b"foreign pipeline post state"),
+                Hash::new(b"foreign pipeline ordinary writes"),
+                1,
+                Hash::new(b"foreign pipeline executed block"),
+            );
         let wrong_apply = AdapterEffect::Apply {
             tag,
             subject: wrong_certificate.subject,
@@ -18669,12 +18674,14 @@ mod tests {
         rejects(changed_context, commit.subject, "context drift");
 
         let mut changed_commitment = commit;
-        changed_commitment.execution_commitment = wire::ExecutionCommitment::without_topups(
-            Hash::new(b"foreign refinement parent state"),
-            Hash::new(b"foreign refinement post state"),
-            Hash::new(b"foreign refinement ordinary writes"),
-            Hash::new(b"foreign refinement executed block"),
-        );
+        changed_commitment.execution_commitment =
+            wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"foreign refinement parent state"),
+                Hash::new(b"foreign refinement post state"),
+                Hash::new(b"foreign refinement ordinary writes"),
+                1,
+                Hash::new(b"foreign refinement executed block"),
+            );
         let changed_commitment_subject = changed_commitment.subject;
         rejects(
             changed_commitment,
@@ -18741,12 +18748,14 @@ mod tests {
         );
 
         let mut changed_commitment = prepare;
-        changed_commitment.execution_commitment = Some(wire::ExecutionCommitment::without_topups(
-            Hash::new(b"foreign fetch parent state"),
-            Hash::new(b"foreign fetch post state"),
-            Hash::new(b"foreign fetch writes"),
-            Hash::new(b"foreign fetch block"),
-        ));
+        changed_commitment.execution_commitment =
+            Some(wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"foreign fetch parent state"),
+                Hash::new(b"foreign fetch post state"),
+                Hash::new(b"foreign fetch writes"),
+                1,
+                Hash::new(b"foreign fetch block"),
+            ));
         assert_eq!(
             prepare.fetch_authority_relation_to(changed_commitment),
             None,
@@ -18786,10 +18795,11 @@ mod tests {
             manifest.round,
             Some(manifest.subject),
             Some(wire::GlobalPhase::Commit),
-            Some(wire::ExecutionCommitment::without_topups(
+            Some(wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"manifest parent state"),
                 Hash::new(b"manifest post state"),
                 Hash::new(b"manifest writes"),
+                1,
                 Hash::new(b"manifest executed block"),
             )),
         );
@@ -26052,10 +26062,11 @@ mod tests {
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"coalesced-progress-block")),
             payload_hash: Hash::new(b"coalesced-progress-payload"),
         };
-        let execution_commitment = wire::ExecutionCommitment::without_topups(
+        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"coalesced parent state"),
             Hash::new(b"coalesced post state"),
             Hash::new(b"coalesced ordinary writes"),
+            1,
             Hash::new(b"coalesced executed block wire"),
         );
         let payload = wire::ConsensusMessageV2Payload::QuorumCertificate(wire::QuorumCertificate {
@@ -28530,10 +28541,11 @@ mod tests {
                 proposal_round: round,
                 phase: wire::GlobalPhase::Prepare,
                 subject,
-                execution_commitment: wire::ExecutionCommitment::without_topups(
+                execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
                     Hash::new(b"capacity parent state"),
                     Hash::new(b"capacity post state"),
                     Hash::new(b"capacity ordinary writes"),
+                    1,
                     Hash::new(b"capacity executed block wire"),
                 ),
                 signer: 0,
@@ -29563,10 +29575,11 @@ mod tests {
             proposal_round: manifest.round,
             phase: wire::GlobalPhase::Commit,
             subject: manifest.subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups(
+            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"terminal upgrade parent state"),
                 Hash::new(b"terminal upgrade post state"),
                 Hash::new(b"terminal upgrade writes"),
+                1,
                 Hash::new(b"terminal upgrade block"),
             ),
             signers: Vec::new(),
@@ -30488,10 +30501,11 @@ mod tests {
         let exact_validated = ValidatedBodyReceipt::for_test(durable.clone());
         let conflicting_validated = ValidatedBodyReceipt::for_test_with_commitment(
             durable,
-            wire::ExecutionCommitment::without_topups(
+            wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"conflicting parent state"),
                 Hash::new(b"conflicting post state"),
                 Hash::new(b"conflicting ordinary writes"),
+                1,
                 Hash::new(b"conflicting executed body"),
             ),
         );
@@ -31285,12 +31299,14 @@ mod tests {
         );
 
         let mut conflicting_prepare = prepare;
-        conflicting_prepare.execution_commitment = wire::ExecutionCommitment::without_topups(
-            Hash::new(b"conflicting queued parent state"),
-            Hash::new(b"conflicting queued post state"),
-            Hash::new(b"conflicting queued writes"),
-            Hash::new(b"conflicting queued block"),
-        );
+        conflicting_prepare.execution_commitment =
+            wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"conflicting queued parent state"),
+                Hash::new(b"conflicting queued post state"),
+                Hash::new(b"conflicting queued writes"),
+                1,
+                Hash::new(b"conflicting queued block"),
+            );
         let conflicting_fetch = AdapterEffect::FetchBody {
             tag,
             round: manifest.round,
@@ -31462,12 +31478,14 @@ mod tests {
         assert!(!runtime.fail_closed);
 
         let mut conflicting_prepare = prepare;
-        conflicting_prepare.execution_commitment = wire::ExecutionCommitment::without_topups(
-            Hash::new(b"conflicting deferred parent state"),
-            Hash::new(b"conflicting deferred post state"),
-            Hash::new(b"conflicting deferred writes"),
-            Hash::new(b"conflicting deferred block"),
-        );
+        conflicting_prepare.execution_commitment =
+            wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"conflicting deferred parent state"),
+                Hash::new(b"conflicting deferred post state"),
+                Hash::new(b"conflicting deferred writes"),
+                1,
+                Hash::new(b"conflicting deferred block"),
+            );
         let conflicting_fetch = AdapterEffect::FetchBody {
             tag,
             round: manifest.round,
@@ -32209,10 +32227,11 @@ mod tests {
             Some(&fixture.receipt)
         );
 
-        let commitment = wire::ExecutionCommitment::without_topups(
+        let commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"leader-wire Decision state root"),
             Hash::new(b"leader-wire Decision event root"),
             Hash::new(b"leader-wire Decision reject root"),
+            1,
             Hash::new(b"leader-wire Decision fee root"),
         );
         assert_eq!(
@@ -33142,10 +33161,11 @@ mod tests {
             HashOf::new(&manifest),
         );
         let validated = ValidatedBodyReceipt::for_test(durable.clone());
-        let conflicting_commitment = wire::ExecutionCommitment::without_topups(
+        let conflicting_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"decision mismatch parent state"),
             Hash::new(b"decision mismatch post state"),
             Hash::new(b"decision mismatch ordinary writes"),
+            1,
             Hash::new(b"decision mismatch executed block"),
         );
         assert_ne!(validated.execution_commitment(), conflicting_commitment);
@@ -33334,10 +33354,11 @@ mod tests {
                 "the retained fair-ingress {phase:?} vote becomes drainable after validation"
             );
 
-            let conflicting_commitment = wire::ExecutionCommitment::without_topups(
+            let conflicting_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"conflicting early vote parent state"),
                 Hash::new(b"conflicting early vote post state"),
                 Hash::new(b"conflicting early vote ordinary writes"),
+                1,
                 Hash::new(b"conflicting early vote executed block"),
             );
             assert_ne!(
@@ -34775,10 +34796,11 @@ mod tests {
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"runtime-test-block")),
             payload_hash: Hash::new(b"runtime-test-payload"),
         };
-        let execution_commitment = wire::ExecutionCommitment::without_topups(
+        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"runtime parent state"),
             Hash::new(b"runtime post state"),
             Hash::new(b"runtime ordinary writes"),
+            1,
             Hash::new(b"runtime executed block wire"),
         );
         let vote = wire::ConsensusMessageV2Payload::Vote(wire::Vote {

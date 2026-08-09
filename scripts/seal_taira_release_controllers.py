@@ -226,20 +226,32 @@ OPERATION_FLAGS: dict[str, set[str]] = {
     },
     "assemble-boi": {
         "--artifact-handoff-root", "--candidate-archive",
-        "--candidate-authority-dir", "--candidate-replay-ledger",
+        "--candidate-authority-dir",
         "--expected-source-commit", "--expected-dpn-validator-release-commit",
         "--expected-cargo-lock-sha256",
         "--expected-workspace-source-manifest-sha256", "--expected-receipt-id",
         "--trusted-signing-fingerprint", "--release-manifest-verifier",
-        "--trusted-release-manifest-verifier-sha256", "--output",
+        "--trusted-release-manifest-verifier-sha256",
+        "--qualification-external-signer",
+        "--trusted-qualification-external-signer-sha256",
+        "--qualification-signing-public-key",
+        "--trusted-qualification-signing-fingerprint",
+        "--workflow-run-id", "--workflow-run-attempt", "--output",
     },
     "deploy-reset": {
         "--bundle", "--binary", "--supervisor", "--admission-archive",
-        "--admission-authority-dir", "--expected-source-commit",
+        "--admission-authority-dir", "--boi-qualified-handoff-root",
+        "--expected-source-commit",
         "--expected-dpn-validator-release-commit",
         "--expected-cargo-lock-sha256", "--expected-workspace-source-manifest-sha256",
         "--expected-receipt-id", "--expected-artifact-handoff-sha256",
         "--expected-production-reset-manifest-sha256", "--trusted-signing-fingerprint",
+        "--trusted-boi-qualification-public-key",
+        "--trusted-boi-qualification-signing-fingerprint",
+        "--expected-boi-qualification-host-id",
+        "--expected-boi-qualification-installation-id",
+        "--expected-boi-qualification-controller-digest",
+        "--expected-workflow-run-id", "--expected-workflow-run-attempt",
         "--release-manifest-verifier", "--trusted-release-manifest-verifier-sha256",
         "--health-timeout-seconds", "--apply",
     },
@@ -276,11 +288,14 @@ OUTPUT_PATH_FLAGS = {
 IMMUTABLE_HANDOFF_OUTPUT_PREFIXES = {
     "snapshot-public-privacy": "public-input-",
     "capture-four-peer": "qualification-receipt-",
+    "assemble-boi": "boi-qualified-",
 }
 INPUT_PATH_FLAGS = {
     "--source", "--evidence-root", "--archive", "--checkout-root",
     "--public-privacy-input-dir",
     "--controller-manifest", "--external-signer", "--signing-public-key",
+    "--qualification-external-signer", "--qualification-signing-public-key",
+    "--trusted-boi-qualification-public-key",
     "--release-manifest-verifier", "--authority-dir", "--source-bundle",
     "--privacy-release-dir", "--genesis-external-signer",
     "--onboarding-token-hash-tool", "--reset-bundle", "--validator-binary",
@@ -290,9 +305,10 @@ INPUT_PATH_FLAGS = {
     "--privacy-action-driver", "--privacy-network-driver", "--privacy-jindo-driver",
     "--exact12-matrix",
     "--bundle", "--binary", "--admission-archive",
-    "--admission-authority-dir", "--replay-ledger", "--source-identity",
+    "--admission-authority-dir", "--boi-qualified-handoff-root",
+    "--replay-ledger", "--source-identity",
     "--artifact-handoff-root", "--candidate-archive",
-    "--candidate-authority-dir", "--candidate-replay-ledger",
+    "--candidate-authority-dir",
     "--candidate-root",
     "--result", "--write-config",
 }
@@ -329,6 +345,7 @@ REQUIRED_FLAGS: dict[tuple[str, str | None], set[str]] = {
 TRUSTED_EXECUTABLE_FLAGS = frozenset(
     {
         "--external-signer",
+        "--qualification-external-signer",
         "--genesis-external-signer",
         "--onboarding-token-hash-tool",
         "--oras",
@@ -338,6 +355,9 @@ TRUSTED_EXECUTABLE_FLAGS = frozenset(
 )
 EXECUTABLE_DIGEST_FLAGS = {
     "--genesis-external-signer": "--trusted-genesis-external-signer-sha256",
+    "--qualification-external-signer": (
+        "--trusted-qualification-external-signer-sha256"
+    ),
     "--release-manifest-verifier": "--trusted-release-manifest-verifier-sha256",
 }
 SEALED_EXECUTABLE_DEPENDENCIES: dict[str, dict[str, str]] = {
@@ -353,6 +373,13 @@ SEALED_INPUT_DEPENDENCIES: dict[str, set[str]] = {
     "publish-rollout": {"--registry-config", "--signing-public-key"}
 }
 TRUSTED_LITERAL_FLAGS: dict[str, set[str]] = {
+    "assemble-boi": {"--trusted-qualification-signing-fingerprint"},
+    "deploy-reset": {
+        "--trusted-boi-qualification-signing-fingerprint",
+        "--expected-boi-qualification-host-id",
+        "--expected-boi-qualification-installation-id",
+        "--expected-boi-qualification-controller-digest",
+    },
     "publish-rollout": {
         "--expected-oras-version",
         "--repository",
@@ -391,6 +418,8 @@ SENSITIVE_TRUSTED_INPUT_FLAGS = frozenset(
         "--registry-config",
         "--result",
         "--signing-public-key",
+        "--qualification-signing-public-key",
+        "--trusted-boi-qualification-public-key",
         "--source",
         "--source-bundle",
         "--write-config",
@@ -832,9 +861,21 @@ def _validate_trusted_literal(flag: str, value: str) -> None:
         if VERSION_RE.fullmatch(value) is None:
             _fail("trusted ORAS version literal is noncanonical")
         return
-    if flag == "--trusted-signing-fingerprint":
+    if flag in {
+        "--trusted-signing-fingerprint",
+        "--trusted-qualification-signing-fingerprint",
+        "--trusted-boi-qualification-signing-fingerprint",
+        "--expected-boi-qualification-controller-digest",
+    }:
         if SHA256_RE.fullmatch(value) is None:
             _fail("trusted signing fingerprint literal is noncanonical")
+        return
+    if flag in {
+        "--expected-boi-qualification-host-id",
+        "--expected-boi-qualification-installation-id",
+    }:
+        if TRUST_ID_RE.fullmatch(value) is None:
+            _fail("trusted BOI qualification identity literal is noncanonical")
         return
     _fail("trusted literal flag is not allow-listed")
 
@@ -2695,6 +2736,109 @@ def _dispatch_capture_composite(
             _remove_controller_owned_tree(final_output, handoff_root)
 
 
+def _dispatch_boi_composite(
+    operation_args: Sequence[str], attestation: dict[str, object]
+) -> int:
+    """Qualify privately as authority, then export one root-frozen handoff."""
+
+    _subcommand, option_values = _operation_option_values(
+        "assemble-boi", operation_args
+    )
+    output_values = option_values.get("--output", [])
+    if len(output_values) != 1:
+        _fail("BOI qualification composite lacks one exact output")
+    final_output = Path(output_values[0])
+    authority_uid, authority_gid, authority_root = _identity_contract(
+        attestation, "authority"
+    )
+    controller_uid = int(attestation["uid"])
+    controller_gid = int(attestation.get("controller_gid", 0))
+    handoff_root = Path(str(attestation["handoff_root"]))
+    scratch = Path(tempfile.mkdtemp(prefix=".boi-qualification-", dir=authority_root))
+    if scratch.parent != authority_root or scratch.is_symlink():
+        _fail("BOI qualification scratch escaped the authority root")
+    os.chown(scratch, authority_uid, authority_gid)
+    scratch.chmod(0o700)
+    scratch_info = scratch.lstat()
+    if (
+        not stat.S_ISDIR(scratch_info.st_mode)
+        or stat.S_ISLNK(scratch_info.st_mode)
+        or scratch_info.st_uid != authority_uid
+        or scratch_info.st_gid != authority_gid
+        or stat.S_IMODE(scratch_info.st_mode) != 0o700
+    ):
+        _fail("BOI qualification scratch is not fresh and owner-private")
+    replay_ledger = scratch / "candidate-replay-ledger-v1.json"
+    private_output = scratch / "qualified-handoff"
+    if replay_ledger.exists() or private_output.exists():
+        _fail("BOI qualification internal outputs are not fresh")
+    transformed: list[str] = []
+    values = list(operation_args)
+    index = 0
+    while index < len(values):
+        flag = values[index]
+        index += 1
+        if flag in BOOLEAN_FLAGS:
+            transformed.append(flag)
+            continue
+        value = values[index]
+        index += 1
+        transformed.extend(
+            (flag, str(private_output) if flag == "--output" else value)
+        )
+    transformed.extend(
+        (
+            "--candidate-replay-ledger",
+            str(replay_ledger),
+            "--qualification-host-id",
+            str(attestation["host_id"]),
+            "--qualification-installation-id",
+            str(attestation["installation_id"]),
+            "--controller-closure-digest",
+            str(attestation["controller_digest"]),
+        )
+    )
+    completed = False
+    try:
+        result = _dispatch(
+            "admit",
+            ["init-replay-ledger", "--output", str(replay_ledger)],
+            (authority_uid, authority_gid),
+        )
+        if result != 0:
+            return result
+        _validate_operation_outputs({replay_ledger}, authority_uid, authority_gid)
+        result = _dispatch(
+            "assemble-boi",
+            transformed,
+            (authority_uid, authority_gid),
+        )
+        if result != 0:
+            return result
+        _validate_operation_outputs(
+            {replay_ledger, private_output}, authority_uid, authority_gid
+        )
+        inspected = inspect_handoff(
+            private_output,
+            "privacy-v1-boi-qualified",
+            handoff_root,
+            controller_uid,
+            final_output.name,
+            controller_gid=controller_gid,
+        )
+        if Path(str(inspected.get("staged_root", ""))) != final_output:
+            _fail("BOI qualification export path differs from the sealed output")
+        _validate_operation_outputs(
+            {final_output}, controller_uid, controller_gid
+        )
+        completed = True
+        return 0
+    finally:
+        _remove_controller_owned_tree(scratch, authority_root)
+        if not completed and (final_output.exists() or final_output.is_symlink()):
+            _remove_controller_owned_tree(final_output, handoff_root)
+
+
 def _dispatch_publication_composite(
     operation_args: Sequence[str], attestation: dict[str, object]
 ) -> int:
@@ -2953,6 +3097,7 @@ def main(argv: list[str] | None = None) -> int:
         operation_identity = _expected_operation_identity(args.role, args.operation)
         runs_as_root = operation_identity == "root"
         root_composite = args.operation in {
+            "assemble-boi",
             "capture-four-peer",
             "publish-rollout",
         }
@@ -2964,6 +3109,8 @@ def main(argv: list[str] | None = None) -> int:
             _fail("root-required operation identity contract differs")
         if args.operation == "capture-four-peer":
             result = _dispatch_capture_composite(operation_args, attestation)
+        elif args.operation == "assemble-boi":
+            result = _dispatch_boi_composite(operation_args, attestation)
         elif args.operation == "publish-rollout":
             result = _dispatch_publication_composite(operation_args, attestation)
         else:

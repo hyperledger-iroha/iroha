@@ -660,7 +660,9 @@ CreateServiceTransportOwnerPair ==
           !.serviceOwnerNonce = "OwnerNonce",
           !.transportOwnerNonce = "OwnerNonce",
           !.receiptStage = "Absent",
-          !.restartFenceAuthorized = FALSE]
+          !.restartFenceAuthorized =
+            state.restartFenceAuthorized
+              /\ state.pendingRolloverAuthority = "RestartRestore"]
 
 ValidateFinality ==
   /\ ~state.finalityValidated
@@ -702,6 +704,7 @@ SealAppliedHeightOutputHandoff ==
   /\ ~state.ownerSealed
   /\ state.receiptStage = "Absent"
   /\ ExactServiceTransportOwnerPair
+  /\ ~state.restartFenceAuthorized
   /\ ~state.successorActive
   /\ ~state.restartRequired
   /\ state' =
@@ -919,6 +922,8 @@ CrashAfterBootstrapStatePublication ==
 ValidateBootstrapLifecycleCandidateV3 ==
   /\ state.lifecycleCommitPhase \in
        {"BootstrapStatePublished", "Restarting"}
+  /\ (state.lifecycleCommitPhase = "Restarting"
+       \/ ~state.restartRequired)
   /\ state.durableLifecycleRootV3 = BootstrapLifecycleRootV3
   /\ state.startupValidationFault = "None"
   /\ state.durableLifecycleStateSlotsV3[
@@ -955,6 +960,7 @@ ValidateBootstrapLifecycleWithoutCandidateV3 ==
 
 ReplaceInitialLifecycleRootV3 ==
   /\ state.lifecycleCommitPhase = "BootstrapStatePublished"
+  /\ (~state.restartRequired \/ state.validatedRestartObserved)
   /\ state.durableLifecycleRootV3 = BootstrapLifecycleRootV3
   /\ state.candidatePresent
   /\ state.candidateSemanticallyValidated
@@ -992,6 +998,7 @@ CrashAfterBootstrapRootReplacement ==
 
 CommitInitialLifecycleRootV3 ==
   /\ state.lifecycleCommitPhase = "BootstrapRootReplaced"
+  /\ (~state.restartRequired \/ state.validatedRestartObserved)
   /\ state.candidatePresent
   /\ state.candidateSemanticallyValidated
   /\ RootSelectedLifecyclePairMatches(state)
@@ -1010,6 +1017,10 @@ CommitInitialLifecycleRootV3 ==
           !.crashArtifactsPresent = FALSE,
           !.cleanupPerformed = TRUE,
           !.restartRequired = FALSE,
+          !.lateEnqueueRejected = FALSE,
+          !.foreignReceiptRejected = FALSE,
+          !.predecessorMismatchRejected = FALSE,
+          !.wrongSuccessorRejected = FALSE,
           !.failureReason = "None"]
 
 ValidateRootSelectedLifecycleV3 ==
@@ -1144,6 +1155,10 @@ CompleteBootstrapRestartWithoutCandidateV3 ==
           !.crashArtifactsPresent = FALSE,
           !.cleanupPerformed = TRUE,
           !.restartRequired = FALSE,
+          !.lateEnqueueRejected = FALSE,
+          !.foreignReceiptRejected = FALSE,
+          !.predecessorMismatchRejected = FALSE,
+          !.wrongSuccessorRejected = FALSE,
           !.failureReason = "None"]
 
 (***************************************************************************
@@ -1190,6 +1205,8 @@ PersistFreshRequesterEpoch ==
                LifecycleRootV3(snapshot),
              !.requesterEpochPhase = "Persisted",
              !.pendingStreamEpoch = issuedEpoch,
+             !.requesterEpochReplacementRestored = FALSE,
+             !.epochCrashObserved = FALSE,
              !.crashArtifactsPresent = FALSE,
              !.cleanupPerformed = TRUE,
              !.capacityRejected = FALSE]
@@ -1264,10 +1281,15 @@ RestoreRequesterEpochCounterAfterCrash ==
           !.lifecycleCommitPhase = "Current",
           !.validatedRestartObserved = TRUE,
           !.restartFenceAuthorized =
-            state.targetRoster # state.currentRoster,
+            state.targetRoster # state.currentRoster
+              /\ state.receiptStage \in {"Absent", "Lost"},
           !.crashArtifactsPresent = FALSE,
           !.cleanupPerformed = TRUE,
           !.restartRequired = FALSE,
+          !.lateEnqueueRejected = FALSE,
+          !.foreignReceiptRejected = FALSE,
+          !.predecessorMismatchRejected = FALSE,
+          !.wrongSuccessorRejected = FALSE,
           !.failureReason = "None"]
 
 RejectRequesterEpochOverflow ==
@@ -1634,10 +1656,15 @@ RecoverPredecessorLifecycleV3 ==
           !.pendingRolloverAuthority = "None",
           !.validatedRestartObserved = TRUE,
           !.restartFenceAuthorized =
-            state.targetRoster # state.currentRoster,
+            state.targetRoster # state.currentRoster
+              /\ state.receiptStage \in {"Absent", "Lost"},
           !.crashArtifactsPresent = FALSE,
           !.cleanupPerformed = TRUE,
           !.restartRequired = FALSE,
+          !.lateEnqueueRejected = FALSE,
+          !.foreignReceiptRejected = FALSE,
+          !.predecessorMismatchRejected = FALSE,
+          !.wrongSuccessorRejected = FALSE,
           !.failureReason = "None"]
 
 CommitSuccessorLifecycleRootV3 ==
@@ -1718,13 +1745,17 @@ RestoreSuccessorLifecycleV3AfterCrash ==
           !.candidatePresent = FALSE,
           !.candidateSemanticallyValidated = FALSE,
           !.lifecycleCommitPhase = "Restored",
-          !.pendingRolloverAuthority = "RestartRestore",
+          !.pendingRolloverAuthority = "None",
           !.validatedRestartObserved = TRUE,
           !.restartFenceAuthorized = FALSE,
           !.crashArtifactsPresent = FALSE,
           !.cleanupPerformed = TRUE,
           !.transitionAuthority = "RestartRestore",
           !.restartRequired = FALSE,
+          !.lateEnqueueRejected = FALSE,
+          !.foreignReceiptRejected = FALSE,
+          !.predecessorMismatchRejected = FALSE,
+          !.wrongSuccessorRejected = FALSE,
           !.failureReason = "None"]
 
 PublishCommittedLifecycleV3ToMemory ==
@@ -2193,7 +2224,9 @@ SemanticValidationBeforeCleanupInvariant ==
                 DurableSnapshot(state)))
   /\ (~state.durableJournalValidated =>
         ~state.cleanupPerformed)
-  /\ (state.cleanupPerformed /\ state.restartRequired =>
+  /\ (state.cleanupPerformed
+       /\ state.restartRequired
+       /\ state.lifecycleCommitPhase = "Restarting" =>
         /\ state.restartStateDirectoryResynced
         /\ state.restartRootDirectoryResynced)
 
@@ -2334,7 +2367,8 @@ AuthorityGatedGenerationAdvanceInvariant ==
   /\ (state.restartFenceAuthorized =>
         /\ state.durableJournalValidated
         /\ state.validatedRestartObserved
-        /\ state.cleanupPerformed
+        /\ (state.pendingRolloverAuthority = "None" =>
+              state.cleanupPerformed)
         /\ state.restartStateDirectoryResynced
         /\ state.restartRootDirectoryResynced
         /\ state.targetRoster # state.currentRoster
@@ -2373,6 +2407,7 @@ SameRosterTransportPreservationInvariant ==
   (/\ state.targetRoster = state.baselineRoster
    /\ state.currentRoster = state.baselineRoster
    /\ state.durableLifecycleRootV3.shape = "Committed"
+   /\ state.lifecycleCommitPhase = "Current"
    /\ ~state.restartRequired) =>
     /\ state.serviceGeneration = state.baselineServiceGeneration
     /\ DurableSnapshot(state).serviceGeneration =
@@ -2653,6 +2688,7 @@ ValidatedCleanupStepSafety ==
   (/\ state.restartRequired
    /\ ~state.cleanupPerformed
    /\ state'.cleanupPerformed
+   /\ state.lifecycleCommitPhase = "Restarting"
    /\ state.durableLifecycleRootV3.shape = "Committed")
     =>
       /\ state.restartStateDirectoryResynced
@@ -2727,13 +2763,11 @@ RestartRestoreSuccessorActiveWithoutRestart ==
   /\ state.transitionAuthority = "RestartRestore"
 
 ResponsiveDurableExactOutputRolloverLiveness ==
-  ResponsiveDurableExactOutputSpec =>
-    (state.finalityValidated
-      ~> DurableExactOutputSuccessorActiveWithoutRestart)
+  state.finalityValidated
+    ~> DurableExactOutputSuccessorActiveWithoutRestart
 
 ResponsiveRestartRestoreRolloverLiveness ==
-  ResponsiveRestartRestoreSpec =>
-    (state.restartRequired
-      ~> RestartRestoreSuccessorActiveWithoutRestart)
+  state.restartRequired
+    ~> RestartRestoreSuccessorActiveWithoutRestart
 
 =============================================================================

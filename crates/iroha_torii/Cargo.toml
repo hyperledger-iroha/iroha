@@ -149,6 +149,7 @@ tempfile = { workspace = true }
 mv = { workspace = true }
 dashmap = { workspace = true }
 hyper = { version = "1.7.0", default-features = false, features = ["http1", "client", "server" ] }
+hyper-util = { version = "=0.1.20", features = ["tokio"] }
 humantime = { workspace = true }
 http-body-util = { workspace = true }
 http = { workspace = true }

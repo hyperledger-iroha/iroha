@@ -24,7 +24,7 @@ use super::super::super::{
 use super::super::phase23_encrypted::ZkAmsPhase23AccumulatorShapeV1;
 
 const RELEASE_TERMINAL_KAT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase3.release-terminal-kat";
-const RELEASE_TERMINAL_NEGATIVE_CASE_COUNT_V1: u32 = 17;
+const RELEASE_TERMINAL_NEGATIVE_CASE_COUNT_V1: u32 = 21;
 
 #[derive(Clone)]
 struct ReleaseKatRandom {
@@ -219,8 +219,8 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
     let governed =
         ZkAmsPhase3GovernedBatchV1::new(context, governed_inputs).expect("maximum governed batch");
     let proof_context = release_proof_context();
-    let context_frame =
-        super::super::super::context_frame(&proof_context).expect("canonical proof context frame");
+    let context_frame = terminal_composition_context_frame(&proof_context, context, &governed)
+        .expect("canonical terminal composition context frame");
     let precomputation = precompute_masked_relaxed_v1(
         super::super::super::COMPOSITION_DOMAIN_V1,
         &context_frame,
@@ -418,6 +418,31 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
         maps,
         &output.proof_bytes,
     ));
+    for mutation in 0..4 {
+        let mut rebound_context = context;
+        match mutation {
+            0 => rebound_context.roster_digest[0] ^= 1,
+            1 => rebound_context.epoch += 1,
+            2 => rebound_context.transcript_digest[0] ^= 1,
+            3 => rebound_context.batch_id[0] ^= 1,
+            _ => unreachable!(),
+        }
+        rebound_context.digest = terminal_context_digest(rebound_context);
+        let mut rebound_governed = governed.clone();
+        rebound_governed.context_digest = rebound_context.digest;
+        rebound_governed.digest = governed_batch_digest(&rebound_governed);
+        let mut rebound_anchor = output.batch_anchor.clone();
+        rebound_anchor.context_digest = rebound_context.digest;
+        rebound_anchor.digest = batch_anchor_digest(&rebound_anchor);
+        rejected.push(verify(
+            &proof_context,
+            rebound_context,
+            &rebound_governed,
+            &rebound_anchor,
+            maps,
+            &output.proof_bytes,
+        ));
+    }
     let mut bad_governed = governed.clone();
     bad_governed.digest[0] ^= 1;
     rejected.push(verify(
@@ -515,7 +540,7 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
             .to_be_bytes(),
     );
     kat.update(&output.proof_bytes);
-    kat.update(&receipt.digest);
+    kat.update(&receipt.digest());
     kat.update(&RELEASE_TERMINAL_NEGATIVE_CASE_COUNT_V1.to_be_bytes());
     for result in rejected {
         kat.update(&[result.into()]);

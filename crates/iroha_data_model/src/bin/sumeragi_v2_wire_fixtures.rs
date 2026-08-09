@@ -35,6 +35,7 @@ use iroha_data_model::{
         SumeragiV2VoteQuorumStatus, SumeragiV2WorkStatus, TimeoutCertificate, TimeoutJustification,
         TimeoutVote, TimeoutVoteGroup, ValidatorPower, Vote, encode_payload_chunks,
     },
+    merge::MergeLedgerEntry,
     peer::PeerId,
 };
 use norito::codec::{DecodeAll, Encode};
@@ -92,6 +93,20 @@ impl FixtureRow {
 struct NamedMessage {
     name: &'static str,
     message: ConsensusMessageV2,
+}
+
+#[derive(Encode)]
+struct PreV4ExecutionCommitment {
+    parent_state_root: Hash,
+    post_state_root: Hash,
+    ordinary_writes_root: Hash,
+    topup_anchor_root: Option<Hash>,
+    topup_anchor_count: u32,
+    native_amx_application_manifest_version: u16,
+    native_amx_application_manifest_root: Hash,
+    native_amx_application_manifest_count: u32,
+    executed_block_wire_len: u64,
+    executed_block_wire_hash: Hash,
 }
 
 struct FixtureValues {
@@ -183,10 +198,11 @@ fn subject(seed: u8) -> BlockSubject {
 }
 
 fn execution_commitment(seed: u8) -> ExecutionCommitment {
-    ExecutionCommitment::without_topups(
+    ExecutionCommitment::without_topups_or_merge_carrier(
         Hash::new([seed, 3]),
         Hash::new([seed, 4]),
         Hash::new([seed, 5]),
+        1,
         Hash::new([seed, 6]),
     )
 }
@@ -204,6 +220,33 @@ fn qc(context: &HeightContext, view: u64, phase: GlobalPhase) -> QuorumCertifica
     }
 }
 
+fn merge_carrier_entry_hash() -> HashOf<MergeLedgerEntry> {
+    HashOf::from_untyped_unchecked(Hash::new(b"sumeragi-v2-v4-merge-carrier-fixture"))
+}
+
+fn merge_carrier_execution_commitment(seed: u8) -> ExecutionCommitment {
+    ExecutionCommitment::new_with_native_amx_application_manifest_and_merge_carrier(
+        Hash::new([seed, 3]),
+        Hash::new([seed, 4]),
+        Hash::new([seed, 5]),
+        None,
+        0,
+        NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+        native_amx_application_manifest_empty_root(),
+        0,
+        Some(MergeCarrierCommitmentV1::new(merge_carrier_entry_hash())),
+        1,
+        Hash::new([seed, 6]),
+    )
+    .expect("canonical merge-carrier fixture execution commitment")
+}
+
+fn merge_carrier_qc(context: &HeightContext) -> QuorumCertificate {
+    let mut certificate = qc(context, 4, GlobalPhase::Prepare);
+    certificate.execution_commitment = merge_carrier_execution_commitment(5);
+    certificate
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "the canonical fixture values are easier to audit when assembled in one deterministic sequence"
@@ -214,6 +257,10 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
         .validate()
         .map_err(|error| format!("fixture context is invalid: {error}"))?;
     let prepare = qc(&context, 1, GlobalPhase::Prepare);
+    let merge_carrier_prepare = merge_carrier_qc(&context);
+    merge_carrier_prepare
+        .validate(&context)
+        .map_err(|error| format!("fixture merge-carrier PrepareQC is invalid: {error}"))?;
     let timeout = TimeoutCertificate {
         round: round(&context, 2),
         groups: vec![TimeoutVoteGroup {
@@ -298,6 +345,12 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
             name: "quorum_certificate",
             message: ConsensusMessageV2::new(ConsensusMessageV2Payload::QuorumCertificate(
                 prepare.clone(),
+            )),
+        },
+        NamedMessage {
+            name: "quorum_certificate_merge_carrier",
+            message: ConsensusMessageV2::new(ConsensusMessageV2Payload::QuorumCertificate(
+                merge_carrier_prepare,
             )),
         },
         NamedMessage {
@@ -524,6 +577,7 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
     let canonical_vote = values.message("vote")?;
     let canonical_reproposal_vote = values.message("commit_vote_reproposal")?;
     let canonical_reproposal_qc = values.message("commit_quorum_certificate_reproposal")?;
+    let canonical_merge_carrier_qc = values.message("quorum_certificate_merge_carrier")?;
     let canonical_request = values.message("commit_certificate_request")?;
     let canonical_response = values.message("commit_certificate_response")?;
 
@@ -562,6 +616,44 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
         .execution_commitment
         .native_amx_application_manifest_count =
         iroha_data_model::block::consensus_v2::MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES + 1;
+
+    let mut merge_carrier_wrong_version = canonical_merge_carrier_qc.clone();
+    let ConsensusMessageV2Payload::QuorumCertificate(certificate) =
+        &mut merge_carrier_wrong_version.payload
+    else {
+        return Err("canonical merge-carrier fixture contains the wrong payload".into());
+    };
+    certificate
+        .execution_commitment
+        .merge_carrier
+        .as_mut()
+        .ok_or("canonical merge-carrier fixture is missing its carrier")?
+        .version = MERGE_CARRIER_COMMITMENT_VERSION_V1.saturating_add(1);
+
+    let ConsensusMessageV2Payload::QuorumCertificate(certificate) =
+        &canonical_merge_carrier_qc.payload
+    else {
+        return Err("canonical merge-carrier fixture contains the wrong payload".into());
+    };
+    let commitment = certificate.execution_commitment;
+    let pre_v4_commitment = PreV4ExecutionCommitment {
+        parent_state_root: commitment.parent_state_root,
+        post_state_root: commitment.post_state_root,
+        ordinary_writes_root: commitment.ordinary_writes_root,
+        topup_anchor_root: commitment.topup_anchor_root,
+        topup_anchor_count: commitment.topup_anchor_count,
+        native_amx_application_manifest_version: commitment.native_amx_application_manifest_version,
+        native_amx_application_manifest_root: commitment.native_amx_application_manifest_root,
+        native_amx_application_manifest_count: commitment.native_amx_application_manifest_count,
+        executed_block_wire_len: commitment.executed_block_wire_len,
+        executed_block_wire_hash: commitment.executed_block_wire_hash,
+    };
+    let merge_carrier_missing_field = replace_unique_subsequence(
+        &canonical_merge_carrier_qc.encode(),
+        &commitment.encode(),
+        &pre_v4_commitment.encode(),
+        "merge-carrier execution commitment",
+    )?;
 
     let mut commit_vote = canonical_vote.clone();
     let ConsensusMessageV2Payload::Vote(vote) = &mut commit_vote.payload else {
@@ -684,6 +776,16 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
                 native_manifest_count_over_bound,
             ))
             .encode(),
+        ),
+        FixtureRow::rejected(
+            "negative_message",
+            "execution_commitment_merge_carrier_wrong_version",
+            merge_carrier_wrong_version.encode(),
+        ),
+        FixtureRow::rejected(
+            "negative_message",
+            "execution_commitment_missing_merge_carrier_field",
+            merge_carrier_missing_field,
         ),
         FixtureRow::rejected(
             "negative_message",
@@ -846,6 +948,34 @@ fn replace_single_difference(
     Ok(corrupted)
 }
 
+fn replace_unique_subsequence(
+    bytes: &[u8],
+    needle: &[u8],
+    replacement: &[u8],
+    label: &str,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    if needle.is_empty() {
+        return Err(format!("encoded {label} was unexpectedly empty").into());
+    }
+    let matches = bytes
+        .windows(needle.len())
+        .enumerate()
+        .filter_map(|(index, window)| (window == needle).then_some(index))
+        .collect::<Vec<_>>();
+    let [index] = matches.as_slice() else {
+        return Err(format!(
+            "expected exactly one encoded {label}, found {} occurrences",
+            matches.len()
+        )
+        .into());
+    };
+    let mut corrupted = Vec::with_capacity(bytes.len() - needle.len() + replacement.len());
+    corrupted.extend_from_slice(&bytes[..*index]);
+    corrupted.extend_from_slice(replacement);
+    corrupted.extend_from_slice(&bytes[*index + needle.len()..]);
+    Ok(corrupted)
+}
+
 fn replace_first_guarded(
     bytes: &mut [u8],
     needle: &[u8],
@@ -923,6 +1053,7 @@ fn validate_rows(rows: &[FixtureRow], values: &FixtureValues) -> Result<(), Box<
         "commit_request_truncated_signature",
         "commit_response_truncated_signature",
         "commit_request_invalid_chain_utf8",
+        "execution_commitment_missing_merge_carrier_field",
     ] {
         if decode_message(&row(rows, "negative_message", name)?.bytes).is_ok() {
             return Err(format!("negative message {name} unexpectedly decoded").into());
@@ -949,6 +1080,7 @@ fn validate_rows(rows: &[FixtureRow], values: &FixtureValues) -> Result<(), Box<
         "execution_commitment_native_manifest_zero_count_nonempty_root",
         "execution_commitment_native_manifest_nonzero_count_empty_root",
         "execution_commitment_native_manifest_count_1025",
+        "execution_commitment_merge_carrier_wrong_version",
     ] {
         let message = decode_message(&row(rows, "negative_message", name)?.bytes)?;
         let ConsensusMessageV2Payload::QuorumCertificate(certificate) = message.payload else {

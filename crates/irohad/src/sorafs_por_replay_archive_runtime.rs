@@ -241,14 +241,20 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::sorafs::{capacity::ProviderId, reputation::PorTerminalOutcomeV1};
+    use iroha_data_model::sorafs::{
+        capacity::ProviderId,
+        reputation::{PorTerminalOutcomeV1, StreamTokenValidationOutcomeV1},
+    };
     use sorafs_node::{
         NodeRuntimeDeps, PorFinalizedReplayArchiveBindingV1,
         PorFinalizedReplayArchiveExternalErrorV1, PorFinalizedReplayArchiveLookupV1,
         PorFinalizedReplayArchiveReceiptV1, PorFinalizedReplayArchiveRecordV1,
         PorFinalizedReplayArchiveV1,
         config::{GcConfig, PorReplayArchivePolicyV1, RepairConfig, StorageConfig},
-        reputation::runtime::{ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError},
+        reputation::runtime::{
+            ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError,
+            StreamTokenReputationAdmissionOutcomeV1,
+        },
     };
     use tempfile::TempDir;
 
@@ -267,6 +273,14 @@ mod tests {
             _provider_id: ProviderId,
             _outcome: PorTerminalOutcomeV1,
         ) -> Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError> {
+            Err(ReputationRuntimeError::RuntimeBindingMismatch)
+        }
+
+        fn record_authenticated_stream_token_validation(
+            &self,
+            _provider_id: ProviderId,
+            _outcome: StreamTokenValidationOutcomeV1,
+        ) -> Result<StreamTokenReputationAdmissionOutcomeV1, ReputationRuntimeError> {
             Err(ReputationRuntimeError::RuntimeBindingMismatch)
         }
     }
@@ -297,6 +311,14 @@ mod tests {
             _outcome: PorTerminalOutcomeV1,
         ) -> Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError> {
             self.calls.fetch_add(1, Ordering::Relaxed);
+            Err(ReputationRuntimeError::RuntimeBindingMismatch)
+        }
+
+        fn record_authenticated_stream_token_validation(
+            &self,
+            _provider_id: ProviderId,
+            _outcome: StreamTokenValidationOutcomeV1,
+        ) -> Result<StreamTokenReputationAdmissionOutcomeV1, ReputationRuntimeError> {
             Err(ReputationRuntimeError::RuntimeBindingMismatch)
         }
     }

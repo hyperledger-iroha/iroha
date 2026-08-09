@@ -46,11 +46,17 @@ credentials. Standard `irohad` forwards the deployment-owned boundary into
 Torii, and startup or an in-flight call fails closed when the provider is
 missing, substituted, stale, unavailable, or test-marked.
 
-Until an authenticated signed archive installs and reads back every terminal
-panel-notification receipt, saturated notification capacity returns
-`ResourceExhausted` without deleting or mutating retained receipts or
-checkpoint bytes. Restart preserves the same saturated state. Notification
-receipt compaction remains an open production requirement.
+The bounded terminal archive is now source-complete. It selects one canonical
+safe prefix across delivered panel notifications, resolved notification dead
+letters, terminal native operations, resolved durable dead letters, and
+completed handoffs; seals that reservation through the external checkpoint
+authority; obtains a source-checkpoint attestation; and requires exact
+immutable install/readback plus an unchanged authoritative source checkpoint
+before pruning. Predecessor-linked Ed25519 heads, explicit signer rotation,
+authenticated publication readback, restart replay, incremental audit, and an
+operator-triggered bounded full-history audit all fail closed. Until a genuine
+deployment archive completes those steps, saturated capacity still returns
+`ResourceExhausted` without deleting or mutating retained terminal state.
 
 The strict transaction ingress is the one deliberate local boundary: it admits
 an already signed transaction through Torii's canonical durable queue and owns
@@ -66,15 +72,15 @@ identity.
 Remaining production blockers under
 `V1-BLOCK-MODERATION-VIEWER-RUNTIME-01` are deployment construction of the real
 messaging, settlement/publication, HSM/KMS/WebAuthn, linearizable sealed-CAS
-checkpoint-store, and signed receipt-to-transparency providers; a monotonic
-public-head adapter; semantic operation-ID fencing; equivalent
-predecessor-bound CAS/single-writer ownership for the moderation orchestrator;
-and signed replay-safe terminal and receipt compaction/archive. The evidence
-viewer core and standard launcher now require the qualified external
-checkpoint authority and treat its local file as a verified cache, but the
-repository still lacks a real store adapter and reviewed reference-deployment
-evidence for multi-replica CAS, the complete moderation service, evidence
-viewer, juror notification/portal workflow, downstream
+checkpoint-store, immutable archive, and signed receipt-to-transparency
+providers; a monotonic public-head adapter; and cross-replica semantic
+operation/checkpoint fencing. The evidence viewer core and standard launcher
+require the qualified external checkpoint authority and treat its local file
+as a verified cache, while the orchestrator's shipped archive contract must be
+exercised against genuine immutable storage, checkpoint attestation, and
+publication readback providers. The repository still lacks those deployment
+adapters and reviewed evidence for multi-replica CAS, the complete moderation
+service, evidence viewer, juror notification/portal workflow, downstream
 settlement/publication, and four-validator recovery scenarios.
 
 ## Shipped Foundations
@@ -219,8 +225,10 @@ case activation are submitted as typed ISIs; no direct-open ISI exists.
   settlement/publication, HSM/KMS/WebAuthn, and authenticated downstream
   providers through the shipped qualified boundaries. Add the signed
   receipt-to-transparency producer, cross-replica semantic operation-ID
-  fencing, predecessor-bound checkpoint CAS/single-writer ownership, and signed
-  replay-safe terminal/receipt compaction and archive.
+  fencing, and predecessor-bound checkpoint CAS/single-writer ownership. Run
+  the shipped signed terminal archive, signer-rotation, publication-readback,
+  restart-replay, and bounded/full-history audit contracts against the genuine
+  immutable archive and checkpoint-attestation providers.
 - Deploy the existing appeal/panel transaction outbox, finalized-chain
   orchestrator, retry/reconciliation worker, supervised panel-notification
   pass, and challenge/no-show maintenance with the remaining juror portal and

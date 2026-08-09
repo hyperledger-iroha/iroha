@@ -2288,7 +2288,7 @@ enum ExternalCoordinationPhaseV1 {
     Persist,
 }
 
-trait MusubiProviderAttestationJournalTimeV1: Send + Sync {
+pub(crate) trait MusubiProviderAttestationJournalTimeV1: Send + Sync {
     fn now_unix_ms<'a>(
         &'a self,
     ) -> ProviderIngestFutureV1<'a, Result<u64, MusubiProviderAttestationJournalErrorV1>>;
@@ -5005,8 +5005,8 @@ mod tests {
 
     #[test]
     fn corrupt_checkpoint_rejects_empty_chain_identity() {
-        let fixture = fixture(0x13, 0x14);
-        let mut checkpoint = awaiting_checkpoint(&fixture);
+        let corrupt_identity_fixture = fixture(0x13, 0x14);
+        let mut checkpoint = awaiting_checkpoint(&corrupt_identity_fixture);
         // SAFETY: `ChainId` is transparent over `Box<str>`. This deliberately
         // violates its constructor invariant only inside the corruption test;
         // the value is encoded and rejected without reaching production code.
@@ -5021,8 +5021,8 @@ mod tests {
             Err(MusubiProviderAttestationJournalErrorV1::CorruptCheckpoint)
         );
 
-        let fixture = fixture(0x15, 0x16);
-        let mut impossible_deadline = awaiting_checkpoint(&fixture);
+        let impossible_deadline_fixture = fixture(0x15, 0x16);
+        let mut impossible_deadline = awaiting_checkpoint(&impossible_deadline_fixture);
         impossible_deadline.checkpoint_sequence = 2;
         impossible_deadline.last_observed_unix_ms = 1;
         impossible_deadline.entries[0].generation = 1;
@@ -5090,9 +5090,9 @@ mod tests {
         let store = Arc::new(MemoryJournalStore::default());
         let journal = MusubiProviderAttestationJournalV1::new(store, test_policy())
             .expect("construct journal");
-        let fixture = fixture(0x41, 0x42);
+        let initial_fixture = fixture(0x41, 0x42);
         let inserted = journal
-            .enqueue(&fixture.request)
+            .enqueue(&initial_fixture.request)
             .await
             .expect("insert intent");
         assert!(matches!(
@@ -5101,20 +5101,20 @@ mod tests {
         ));
         assert!(matches!(
             journal
-                .enqueue(&fixture.request)
+                .enqueue(&initial_fixture.request)
                 .await
                 .expect("replay intent"),
             MusubiProviderAttestationEnqueueOutcomeV1::Existing { .. }
         ));
 
         let later_request = ProviderIngestMusubiAttestationApprovalRequestV1::test_fixture(
-            fixture.request.payload().clone(),
-            fixture.request.completion_claim_digest(),
+            initial_fixture.request.payload().clone(),
+            initial_fixture.request.completion_claim_digest(),
             ProviderIngestFinalizedCursorV1 {
                 height: 81,
                 block_hash: [0x91; 32],
             },
-            fixture.request.signer_policy(),
+            initial_fixture.request.signer_policy(),
         )
         .expect("later finalized request");
         assert!(matches!(
@@ -5126,13 +5126,13 @@ mod tests {
         ));
 
         let lower_request = ProviderIngestMusubiAttestationApprovalRequestV1::test_fixture(
-            fixture.request.payload().clone(),
-            fixture.request.completion_claim_digest(),
+            initial_fixture.request.payload().clone(),
+            initial_fixture.request.completion_claim_digest(),
             ProviderIngestFinalizedCursorV1 {
                 height: 79,
                 block_hash: [0x92; 32],
             },
-            fixture.request.signer_policy(),
+            initial_fixture.request.signer_policy(),
         )
         .expect("lower but structurally valid cursor");
         assert_eq!(
@@ -5141,13 +5141,13 @@ mod tests {
         );
 
         let forked_request = ProviderIngestMusubiAttestationApprovalRequestV1::test_fixture(
-            fixture.request.payload().clone(),
-            fixture.request.completion_claim_digest(),
+            initial_fixture.request.payload().clone(),
+            initial_fixture.request.completion_claim_digest(),
             ProviderIngestFinalizedCursorV1 {
                 height: 80,
                 block_hash: [0x93; 32],
             },
-            fixture.request.signer_policy(),
+            initial_fixture.request.signer_policy(),
         )
         .expect("same-height fork is structurally valid above the completion anchor");
         assert_eq!(
@@ -5543,14 +5543,14 @@ mod tests {
 
     #[tokio::test]
     async fn stale_or_mismatched_claims_cause_no_external_calls() {
-        let fixture = fixture(0x48, 0x58);
+        let primary_fixture = fixture(0x48, 0x58);
         let journal = MusubiProviderAttestationJournalV1::new(
             Arc::new(MemoryJournalStore::default()),
             test_policy(),
         )
         .expect("construct journal");
         let id = journal
-            .enqueue(&fixture.request)
+            .enqueue(&primary_fixture.request)
             .await
             .expect("enqueue")
             .approval_id();
@@ -5571,10 +5571,15 @@ mod tests {
             )
             .await
             .expect("return work to retry");
-        let signer = FakeApprovalSigner::new(&fixture);
+        let signer = FakeApprovalSigner::new(&primary_fixture);
         assert_eq!(
             journal
-                .approve_claim_with_signer(&stale, &fixture.request, &signer, &clock_at(102))
+                .approve_claim_with_signer(
+                    &stale,
+                    &primary_fixture.request,
+                    &signer,
+                    &clock_at(102),
+                )
                 .await,
             Err(MusubiProviderAttestationJournalErrorV1::StaleClaim)
         );
@@ -5599,7 +5604,7 @@ mod tests {
         assert_eq!(signer.approve_calls.load(Ordering::SeqCst), 0);
 
         journal
-            .approve_claim_with_signer(&current, &fixture.request, &signer, &clock_at(107))
+            .approve_claim_with_signer(&current, &primary_fixture.request, &signer, &clock_at(107))
             .await
             .expect("approve current claim");
         let handoff = journal

@@ -16,11 +16,17 @@ if [[ ! -f "$CORE_MODULE" || -L "$CORE_MODULE" ]]; then
 fi
 
 # `cargo package` only carries files under the package root. The sole reviewed
-# path override is the package-local refinement test split; reject every other
-# path override and every parent-relative include.
+# path override is the package-local refinement test split; its nested terminal
+# cases use an identity-preserving include. Reject every other path override and
+# every parent-relative include.
 REFINEMENT_TESTS="$CORE_DIR/refinement_cases.rs"
 if [[ ! -f "$REFINEMENT_TESTS" || -L "$REFINEMENT_TESTS" ]]; then
   echo "missing package-local regular refinement test source: $REFINEMENT_TESTS" >&2
+  exit 1
+fi
+REFINEMENT_PIPELINE_TESTS="$CORE_DIR/refinement_cases/terminal_body_pipeline.rs"
+if [[ ! -f "$REFINEMENT_PIPELINE_TESTS" || -L "$REFINEMENT_PIPELINE_TESTS" ]]; then
+  echo "missing package-local regular terminal body-pipeline refinement test source: $REFINEMENT_PIPELINE_TESTS" >&2
   exit 1
 fi
 path_attribute_hits="$(
@@ -30,15 +36,19 @@ path_attribute_count="$(
   printf '%s\n' "$path_attribute_hits" \
     | awk 'NF { count += 1 } END { print count + 0 }'
 )"
-reviewed_path_count="$(
+reviewed_outer_path_count="$(
   rg -F -c '#[path = "refinement_cases.rs"]' "$CORE_DIR/refinement.rs" || true
 )"
-if [[ "$path_attribute_count" != 1 || "$reviewed_path_count" != 1 ]] \
+reviewed_pipeline_include_count="$(
+  rg -F -c 'include!("refinement_cases/terminal_body_pipeline.rs");' "$REFINEMENT_TESTS" || true
+)"
+if [[ "$path_attribute_count" != 1 || "$reviewed_outer_path_count" != 1 \
+  || "$reviewed_pipeline_include_count" != 1 ]] \
   || ! rg -U -q \
     '^#\[cfg\(test\)\]\n#\[path = "refinement_cases.rs"\]\nmod tests;$' \
     "$CORE_DIR/refinement.rs"; then
   printf '%s\n' "$path_attribute_hits" >&2
-  echo "production Sumeragi v2 reducer must use only the reviewed package-local refinement test split" >&2
+  echo "production Sumeragi v2 reducer must use only the reviewed package-local refinement test split and identity-preserving nested include" >&2
   exit 1
 fi
 if rg -n \

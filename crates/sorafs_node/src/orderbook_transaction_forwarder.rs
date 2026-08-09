@@ -691,7 +691,8 @@ pub struct OrderbookTransactionForwarder {
 
 impl OrderbookTransactionForwarder {
     /// Construct a non-persistent forwarder for focused composition tests.
-    pub fn in_memory(
+    #[cfg(test)]
+    fn in_memory(
         policy: OrderbookTransactionForwarderPolicyV1,
     ) -> Result<Self, OrderbookTransactionForwarderError> {
         policy.validate()?;

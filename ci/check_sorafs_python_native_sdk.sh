@@ -73,6 +73,8 @@ JUNIT_REPORT="${SDK_SESSION}/pytest.xml"
 "${VENV_PYTHON}" -m pytest -q -p no:cacheprovider \
   --junitxml "${JUNIT_REPORT}" \
   tests/cancel_asset_lock_v1_test.py \
+  tests/cancel_asset_lock_client_helpers_test.py \
+  tests/client_hard_cut_contract_test.py \
   tests/client_ledger_helpers_test.py \
   tests/sorafs_reference_validation_test.py \
   tests/sorafs_replication_instruction_test.py
@@ -89,3 +91,21 @@ if skipped:
         f"SoraFS native Python SDK parity may not contain skipped tests; found {skipped}"
     )
 PY
+
+# Local runs leave no persistent output by default. Release and CI callers may
+# opt in to one payload-free manifest by naming a fresh absolute directory
+# outside the source tree. The checker creates that directory without following
+# symlinks only after the native suite and its zero-skip audit both succeed.
+VERIFY_EVIDENCE_ARGS=()
+if [[ -n "${SORAFS_PYTHON_SDK_EVIDENCE_DIR:-}" ]]; then
+  VERIFY_EVIDENCE_ARGS=(
+    --evidence-dir "${SORAFS_PYTHON_SDK_EVIDENCE_DIR}"
+  )
+fi
+"${VENV_PYTHON}" -I "${ROOT_DIR}/scripts/check_native_sdk_abi22_artifact.py" \
+  verify \
+  --artifact "${NATIVE_EXTENSION}" \
+  --manifest "${NATIVE_MANIFEST}" \
+  --source-root "${ROOT_DIR}" \
+  --python "${VENV_PYTHON}" \
+  "${VERIFY_EVIDENCE_ARGS[@]}"

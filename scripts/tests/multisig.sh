@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 set -ex
 
 cargo build
@@ -34,7 +34,7 @@ gen_signatories() {
 # populate signatories
 N_SIGNATORIES=3
 SIGNATORIES=($(gen_signatories $N_SIGNATORIES))
-for signatory in ${SIGNATORIES[@]}; do
+for signatory in "${SIGNATORIES[@]}"; do
     ./iroha account register --id $signatory
 done
 

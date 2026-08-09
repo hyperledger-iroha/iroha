@@ -2316,14 +2316,18 @@ mod app_api_integration_tests {
                 Quantity::from(75_u32),
             ),
         ];
+        let hbl_domain_id = DomainId::try_new("hbl", "paynet").expect("HBL domain");
+        let ubl_domain_id = DomainId::try_new("ubl", "paynet").expect("UBL domain");
         let domain = Domain::new(domain_id).build(&alice_id);
+        let hbl_domain = Domain::new(hbl_domain_id.clone()).build(&alice_id);
+        let ubl_domain = Domain::new(ubl_domain_id.clone()).build(&alice_id);
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
         let bob_account = Account::new(bob_id.clone()).build(&alice_id);
         let hbl_settlement_account = Account::new(hbl_settlement_id.clone()).build(&alice_id);
         let ubl_settlement_account = Account::new(ubl_settlement_id.clone()).build(&alice_id);
         let ubl_user_account = Account::new(ubl_user_id.clone()).build(&alice_id);
-        let world = World::with_assets(
-            [domain],
+        let mut world = World::with_assets(
+            [domain, hbl_domain, ubl_domain],
             [
                 alice_account,
                 bob_account,
@@ -2334,6 +2338,12 @@ mod app_api_integration_tests {
             [pkr_definition],
             assets,
             [],
+        );
+        install_asset_holder_alias_parent_leases_for_test(
+            &mut world,
+            &alice_id,
+            paynet_dataspace_id,
+            &[&hbl_domain_id, &ubl_domain_id],
         );
         let mut state = Arc::new(iroha_core::state::State::new_for_testing(
             world,
@@ -2381,6 +2391,62 @@ mod app_api_integration_tests {
         bind_account_alias_for_test(&state, &ubl_settlement_id, "cbdc@ubl.paynet");
 
         (state, alice_id, bob_id)
+    }
+
+    fn install_asset_holder_alias_parent_leases_for_test(
+        world: &mut World,
+        owner: &AccountId,
+        dataspace_id: iroha_data_model::nexus::DataSpaceId,
+        domains: &[&DomainId],
+    ) {
+        let controller = iroha_data_model::sns::NameControllerV1::account(
+            &iroha_data_model::account::AccountAddress::from_account_id(owner)
+                .expect("parent lease owner address"),
+        );
+        let dataspace_selector =
+            iroha_core::sns::selector_for_dataspace_alias("paynet").expect("paynet selector");
+        let mut dataspace_metadata = iroha_data_model::metadata::Metadata::default();
+        dataspace_metadata.insert(
+            iroha_core::sns::SNS_DATASPACE_ID_METADATA_KEY
+                .parse()
+                .expect("dataspace metadata key"),
+            iroha_primitives::json::Json::new(dataspace_id.as_u64()),
+        );
+        let dataspace_record = iroha_data_model::sns::NameRecordV1::new(
+            dataspace_selector.clone(),
+            owner.clone(),
+            vec![controller.clone()],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            dataspace_metadata,
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            iroha_core::sns::record_storage_key(&dataspace_selector),
+            norito::codec::Encode::encode(&dataspace_record),
+        );
+
+        for domain in domains {
+            let selector =
+                iroha_core::sns::selector_for_domain(domain).expect("parent domain selector");
+            let record = iroha_data_model::sns::NameRecordV1::new(
+                selector.clone(),
+                owner.clone(),
+                vec![controller.clone()],
+                0,
+                0,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                iroha_data_model::metadata::Metadata::default(),
+            );
+            world.smart_contract_state_mut_for_testing().insert(
+                iroha_core::sns::record_storage_key(&selector),
+                norito::codec::Encode::encode(&record),
+            );
+        }
     }
 
     fn asset_holder_alias_aggregate_query() -> QueryEnvelope {

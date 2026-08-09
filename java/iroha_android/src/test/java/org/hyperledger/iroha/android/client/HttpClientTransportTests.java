@@ -93,34 +93,12 @@ public final class HttpClientTransportTests {
 
   private HttpClientTransportTests() {}
 
-  private static String noncanonicalStandardBase64PadBitAlias(final String encoded) {
-    if (!encoded.endsWith("==")) {
-      throw new AssertionError("64-byte signatures encode with == padding");
-    }
-    final String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    final char[] chars = encoded.toCharArray();
-    final int index = chars.length - 3;
-    final int value = alphabet.indexOf(chars[index]);
-    if (value < 0) {
-      throw new AssertionError("standard base64 alphabet");
-    }
-    chars[index] = alphabet.charAt(value ^ 0x01);
-    return new String(chars);
-  }
-
-  private static String canonicalSignatureBase64Fixture() {
-    final byte[] signature = new byte[64];
-    for (int i = 0; i < signature.length; i++) {
-      signature[i] = 0x01;
-    }
-    return Base64.getEncoder().encodeToString(signature);
-  }
-
   public static void main(final String[] args) throws Exception {
     submitBuildsToriiRequest();
     submitPropagatesExecutorFailure();
     submitSkipsRetryWhenNetworkRetriesDisabled();
     retryPolicyRecognizesRetryableStatus();
+    HttpClientTransportExactReadTests.main(args);
     ledgerExecutedBlockWireIsExactBoundedAndFailClosed();
     privacyCapabilitiesAreTypedAndExact();
     sorafsGatewayFetchUsesConfig();
@@ -150,12 +128,7 @@ public final class HttpClientTransportTests {
     ramLfeExecuteRequestAllowsNotFound();
     ramLfeReceiptVerifyUsesRawReceipt();
     ramLfeResponseParsersRejectNonExactFields();
-    vpnProfileRequestParsesNativeLeaseFields();
-    vpnProfileRequiresHttpsAndValidatesAvailabilityBoundTrustTuple();
-    vpnSessionParserRejectsNonCanonicalHelperTicketHex();
-    vpnResponseParsersRejectNonCanonicalIdsHashesAndUnknownFields();
-    vpnResponseParsersRejectMissingRequiredFieldsAndSchemaBounds();
-    vpnRoutesRejectWrongSuccessfulStatusCodes();
+    HttpClientTransportVpnParserTests.runAll();
     vpnQuoteRequestSignsCanonicalBodyAndParsesOpenLeaseInstruction();
     ed25519KeyRoutesRejectSmallOrderIdentityPoint();
     feeQuoteRequestSignsExactUnsignedPayloadAndPreservesPayer();
@@ -2266,425 +2239,6 @@ public final class HttpClientTransportTests {
         + "}";
   }
 
-  private static void vpnProfileRequestParsesNativeLeaseFields() {
-    final String json =
-        "{"
-            + "\"available\":true,"
-            + "\"relay_endpoint\":\"/dns/relay.example/udp/9443/quic\","
-            + "\"supported_exit_classes\":[\"standard\",\"low-latency\",\"high-security\"],"
-            + "\"default_exit_class\":\"standard\","
-            + "\"lease_secs\":600,"
-            + "\"dns_push_interval_secs\":60,"
-            + "\"meter_family\":\"soranet.vpn.standard\","
-            + "\"route_pushes\":[\"0.0.0.0/0\"],"
-            + "\"excluded_routes\":[\"10.0.0.0/8\"],"
-            + "\"dns_servers\":[\"1.1.1.1\"],"
-            + "\"tunnel_addresses\":[\"10.208.0.2/32\"],"
-            + "\"mtu_bytes\":1280,"
-            + "\"display_billing_label\":\"standard XOR\","
-            + "\"operator_account_id\":\"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\","
-            + "\"lease_fee\":\"1000000.25\","
-            + "\"settlement_grace_secs\":120,"
-            + "\"flow_label_bits\":24,"
-            + "\"padding_budget_ms\":15,"
-            + "\"relay_id_hex\":\""
-            + VALID_ED25519_PUBLIC_KEY_HEX
-            + "\","
-            + "\"descriptor_commit_hex\":\""
-            + "cd".repeat(32)
-            + "\","
-            + "\"tls_server_name\":\"relay.example\","
-            + "\"relay_tls_spki_sha256_hex\":\""
-            + "ab".repeat(32)
-            + "\","
-            + "\"relay_certificate_sha256_hex\":\""
-            + "ef".repeat(32)
-            + "\","
-            + "\"directory_snapshot_digest_hex\":\""
-            + "42".repeat(32)
-            + "\""
-            + "}";
-    final StubResponseExecutor executor =
-        new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
-    final HttpClientTransport transport =
-        HttpClientTransport.withExecutor(
-            executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
-
-    final VpnProfile profile = transport.getVpnProfile().join();
-
-    assert profile.available() : "VPN profile should be available";
-    assert "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT".equals(profile.operatorAccountId()) : "VPN operator account mismatch";
-    assert "1000000.25".equals(profile.leaseFee()) : "VPN lease fee mismatch";
-    assert profile.dnsPushIntervalSecs() == 60L : "VPN DNS push interval mismatch";
-    assert profile.settlementGraceSecs() == 120L : "VPN settlement grace mismatch";
-    assert VALID_ED25519_PUBLIC_KEY_HEX.equals(profile.relayIdHex()) : "VPN relay id mismatch";
-    assert "cd".repeat(32).equals(profile.descriptorCommitHex())
-        : "VPN descriptor digest mismatch";
-    assert "relay.example".equals(profile.tlsServerName()) : "VPN TLS SNI mismatch";
-    assert "ab".repeat(32).equals(profile.relayTlsSpkiSha256Hex()) : "VPN TLS pin mismatch";
-    assert "ef".repeat(32).equals(profile.relayCertificateSha256Hex())
-        : "VPN certificate digest mismatch";
-    assert "42".repeat(32).equals(profile.directorySnapshotDigestHex())
-        : "VPN directory snapshot digest mismatch";
-    assert "GET".equals(executor.lastRequest().method()) : "VPN profile must use GET";
-    assert executor.lastRequest().uri().toString().equals("https://torii.example/v1/vpn/profile")
-        : "VPN profile URI mismatch";
-
-    expectRuntimeException(
-        () ->
-            VpnJsonParser.parseProfile(
-                json.replace("\"dns_push_interval_secs\":60", "\"dns_push_interval_secs\":29")
-                    .getBytes(StandardCharsets.UTF_8)),
-        "VPN profile parser must reject DNS push intervals below 30 seconds");
-    expectRuntimeException(
-        () ->
-            VpnJsonParser.parseProfile(
-                json.replace("\"dns_push_interval_secs\":60,", "")
-                    .getBytes(StandardCharsets.UTF_8)),
-        "VPN profile parser must require dns_push_interval_secs");
-    expectRuntimeException(
-        () ->
-            VpnJsonParser.parseProfile(
-                json.replaceFirst("\\{", "{\"unexpected\":true,")
-                    .getBytes(StandardCharsets.UTF_8)),
-        "VPN profile parser must reject unknown fields");
-    expectRuntimeException(
-        () ->
-            VpnJsonParser.parseProfile(
-                json.replace("ab".repeat(32), "AB".repeat(32))
-                    .getBytes(StandardCharsets.UTF_8)),
-        "VPN profile parser must reject uppercase TLS pins");
-  }
-
-  private static void vpnProfileRequiresHttpsAndValidatesAvailabilityBoundTrustTuple() {
-    final StubResponseExecutor insecureExecutor =
-        new StubResponseExecutor(200, vpnProfileJson().getBytes(StandardCharsets.UTF_8));
-    final HttpClientTransport insecureTransport =
-        HttpClientTransport.withExecutor(
-            insecureExecutor,
-            ClientConfig.builder().setBaseUri(URI.create("http://torii.example")).build());
-    expectRuntimeException(
-        insecureTransport::getVpnProfile,
-        "VPN profile must reject insecure transport before dispatch");
-    assert insecureExecutor.lastRequest() == null : "insecure VPN request reached dispatch";
-
-    final Map<String, Object> unavailable = vpnJsonObject(vpnProfileJson());
-    unavailable.put("available", Boolean.FALSE);
-    for (final String field :
-        List.of(
-            "relay_endpoint",
-            "relay_id_hex",
-            "descriptor_commit_hex",
-            "tls_server_name",
-            "relay_tls_spki_sha256_hex",
-            "relay_certificate_sha256_hex",
-            "directory_snapshot_digest_hex")) {
-      unavailable.put(field, "");
-    }
-    final VpnProfile unavailableProfile =
-        VpnJsonParser.parseProfile(
-            JsonEncoder.encode(unavailable).getBytes(StandardCharsets.UTF_8));
-    assert !unavailableProfile.available();
-    assert unavailableProfile.relayEndpoint().isEmpty();
-    assert unavailableProfile.relayIdHex().isEmpty();
-
-    final Object[][] invalidValues = {
-      {"relay_id_hex", "00".repeat(32)},
-      {"descriptor_commit_hex", "00".repeat(32)},
-      {"descriptor_commit_hex", "0x" + "cd".repeat(32)},
-      {"tls_server_name", "Relay.Example"},
-      {"tls_server_name", "-relay.example"},
-      {"relay_endpoint", "/dns4/Relay.Example/udp/443/quic"},
-      {"relay_endpoint", "/dns4/relay.example/udp/0443/quic"},
-      {"relay_endpoint", "/dns4/relay.example/tcp/443/quic"}
-    };
-    for (final Object[] invalid : invalidValues) {
-      expectRuntimeException(
-          () ->
-              VpnJsonParser.parseProfile(
-                  vpnJsonWithField(vpnProfileJson(), (String) invalid[0], invalid[1])),
-          "VPN profile parser accepted malformed trust tuple field " + invalid[0]);
-    }
-  }
-
-  private static void vpnSessionParserRejectsNonCanonicalHelperTicketHex() {
-    final String sessionId = "33".repeat(32);
-    final String paymentTxHash = "44".repeat(32);
-    final String[] invalidValues = {
-      "0x" + VPN_HELPER_TICKET_HEX,
-      VPN_HELPER_TICKET_HEX.toUpperCase(Locale.ROOT),
-      VPN_HELPER_TICKET_HEX.substring(0, VPN_HELPER_TICKET_HEX.length() - 2)
-    };
-    for (final String invalid : invalidValues) {
-      final byte[] payload =
-          vpnSessionJson(sessionId, paymentTxHash)
-              .replace(VPN_HELPER_TICKET_HEX, invalid)
-              .getBytes(StandardCharsets.UTF_8);
-      expectRuntimeException(
-          () -> VpnJsonParser.parseSession(payload),
-          "VPN session parser must reject non-canonical helper_ticket_hex");
-    }
-  }
-
-  private static void vpnResponseParsersRejectNonCanonicalIdsHashesAndUnknownFields() {
-    final String identifier = "ab".repeat(32);
-    final String paymentTxHash = "cd".repeat(32);
-    final String meteringKey = VALID_ED25519_PUBLIC_KEY_HEX;
-    final String quote = vpnQuoteJson(identifier, meteringKey);
-
-    expectRuntimeException(
-        () ->
-            VpnJsonParser.parseQuote(
-                quote
-                    .replace(
-                        "\"quote_id\":\"" + identifier + "\"",
-                        "\"quote_id\":\"0x" + identifier + "\"")
-                    .getBytes(StandardCharsets.UTF_8)),
-        "VPN quote parser must reject prefixed quote ids");
-    expectRuntimeException(
-        () ->
-            VpnJsonParser.parseQuote(
-                quote.replace("aa".repeat(16), "AA".repeat(16))
-                    .getBytes(StandardCharsets.UTF_8)),
-        "VPN quote parser must reject uppercase session ids");
-    expectRuntimeException(
-        () ->
-            VpnJsonParser.parseQuote(
-                quote.replaceFirst("\\{", "{\"unexpected\":true,")
-                    .getBytes(StandardCharsets.UTF_8)),
-        "VPN quote parser must reject unknown fields");
-    expectRuntimeException(
-        () ->
-            VpnJsonParser.parseQuote(
-                quote
-                    .replaceFirst(
-                        "\"payload_hex\":\"cafe\"",
-                        "\"payload_hex\":\"cafe\",\"unexpected\":true")
-                    .getBytes(StandardCharsets.UTF_8)),
-        "VPN transaction instruction parser must reject unknown fields");
-
-    final String session = vpnSessionJson(identifier, paymentTxHash);
-    expectRuntimeException(
-        () ->
-            VpnJsonParser.parseSession(
-                session
-                    .replace(
-                        "\"session_id\":\"" + identifier + "\"",
-                        "\"session_id\":\"" + identifier.toUpperCase(Locale.ROOT) + "\"")
-                    .getBytes(StandardCharsets.UTF_8)),
-        "VPN session parser must reject uppercase session ids");
-    expectRuntimeException(
-        () ->
-            VpnJsonParser.parseSession(
-                session
-                    .replace(
-                        "\"payment_tx_hash\":\"" + paymentTxHash + "\"",
-                        "\"payment_tx_hash\":\"0x" + paymentTxHash + "\"")
-                    .getBytes(StandardCharsets.UTF_8)),
-        "VPN session parser must reject prefixed payment hashes");
-    expectRuntimeException(
-        () ->
-            VpnJsonParser.parseSession(
-                session.replaceFirst("\\{", "{\"unexpected\":true,")
-                    .getBytes(StandardCharsets.UTF_8)),
-        "VPN session parser must reject unknown fields");
-
-    final String receipt = vpnReceiptJson(identifier, paymentTxHash, true);
-    expectRuntimeException(
-        () ->
-            VpnJsonParser.parseReceipt(
-                receipt
-                    .replace(
-                        "\"lease_id_hex\":\"" + identifier + "\"",
-                        "\"lease_id_hex\":\"" + identifier.toUpperCase(Locale.ROOT) + "\"")
-                    .getBytes(StandardCharsets.UTF_8)),
-        "VPN receipt parser must reject uppercase lease ids");
-    expectRuntimeException(
-        () ->
-            VpnJsonParser.parseReceipt(
-                receipt
-                    .replace(
-                        "\"payment_tx_hash\":\"" + paymentTxHash + "\"",
-                        "\"payment_tx_hash\":\"0x" + paymentTxHash + "\"")
-                    .getBytes(StandardCharsets.UTF_8)),
-        "VPN receipt parser must reject prefixed payment hashes");
-    expectRuntimeException(
-        () ->
-            VpnJsonParser.parseReceipt(
-                receipt.replaceFirst("\\{", "{\"unexpected\":true,")
-                    .getBytes(StandardCharsets.UTF_8)),
-        "VPN receipt parser must reject unknown fields");
-    expectRuntimeException(
-        () ->
-            VpnJsonParser.parseReceiptList(
-                ("{\"items\":[" + receipt + "],\"total\":1,\"unexpected\":true}")
-                    .getBytes(StandardCharsets.UTF_8)),
-        "VPN receipt-list parser must reject unknown fields");
-  }
-
-  private static void vpnResponseParsersRejectMissingRequiredFieldsAndSchemaBounds() {
-    final String identifier = "ab".repeat(32);
-    final String paymentTxHash = "cd".repeat(32);
-    final String meteringKey = VALID_ED25519_PUBLIC_KEY_HEX;
-    final String profile = vpnProfileJson();
-    final String quote = vpnQuoteJson(identifier, meteringKey);
-    final String session = vpnSessionJson(identifier, paymentTxHash);
-    final String receipt = vpnReceiptJson(identifier, paymentTxHash, true);
-    final String receiptList = "{\"items\":[" + receipt + "],\"total\":1}";
-
-    final List<Runnable> missingCases =
-        List.of(
-            () ->
-                VpnJsonParser.parseProfile(
-                    vpnJsonWithoutField(profile, "relay_tls_spki_sha256_hex")),
-            () ->
-                VpnJsonParser.parseQuote(vpnJsonWithoutField(quote, "open_lease_instruction")),
-            () -> VpnJsonParser.parseSession(vpnJsonWithoutField(session, "route_pushes")),
-            () ->
-                VpnJsonParser.parseReceipt(
-                    vpnJsonWithoutField(receipt, "settle_lease_instruction")),
-            () -> VpnJsonParser.parseReceiptList(vpnJsonWithoutField(receiptList, "items")));
-    for (final Runnable decode : missingCases) {
-      expectRuntimeException(decode, "VPN response parser must reject a missing required field");
-    }
-    expectRuntimeException(
-        () -> VpnJsonParser.parseSession(vpnJsonWithField(session, "route_pushes", null)),
-        "VPN response parser must reject null required arrays");
-
-    final Object[][] profileViolations = {
-      {"supported_exit_classes", List.of("standard", "low-latency")},
-      {"supported_exit_classes", List.of("standard", "standard", "high-security")},
-      {"default_exit_class", "unsupported"},
-      {"lease_secs", 0L},
-      {"lease_secs", 4_294_967_296L},
-      {"mtu_bytes", 1279L},
-      {"settlement_grace_secs", 0L},
-      {"flow_label_bits", 23L},
-      {"padding_budget_ms", 0L}
-    };
-    for (final Object[] violation : profileViolations) {
-      expectRuntimeException(
-          () ->
-              VpnJsonParser.parseProfile(
-                  vpnJsonWithField(profile, (String) violation[0], violation[1])),
-          "VPN profile parser must reject invalid " + violation[0]);
-    }
-
-    expectRuntimeException(
-        () ->
-            VpnJsonParser.parseQuote(
-                vpnJsonWithField(quote, "tx_instructions", Collections.emptyList())),
-        "VPN quote parser must reject the retired transaction instruction array");
-    expectRuntimeException(
-        () -> VpnJsonParser.parseSession(vpnJsonWithField(session, "status", "settled")),
-        "VPN session parser must require active status");
-    expectRuntimeException(
-        () -> VpnJsonParser.parseReceipt(vpnJsonWithField(receipt, "status", "active")),
-        "VPN receipt parser must reject active status");
-    expectRuntimeException(
-        () -> VpnJsonParser.parseReceipt(vpnJsonWithField(receipt, "receipt_source", "operator")),
-        "VPN receipt parser must reject unknown receipt sources");
-    expectRuntimeException(
-        () ->
-            VpnJsonParser.parseReceipt(
-                vpnJsonWithField(receipt, "tx_instructions", Collections.emptyList())),
-        "VPN receipt parser must reject the retired transaction instruction array");
-
-    final Map<String, Object> receiptObject = vpnJsonObject(receipt);
-    expectRuntimeException(
-        () ->
-            VpnJsonParser.parseReceiptList(
-                vpnJsonWithField(receiptList, "items", Collections.nCopies(25, receiptObject))),
-        "VPN receipt-list parser must allow at most 24 items");
-    expectRuntimeException(
-        () -> VpnJsonParser.parseReceiptList(vpnJsonWithField(receiptList, "total", 25L)),
-        "VPN receipt-list parser must cap total at 24");
-  }
-
-  @SuppressWarnings("unchecked")
-  private static Map<String, Object> vpnJsonObject(final String json) {
-    return new LinkedHashMap<>((Map<String, Object>) JsonParser.parse(json));
-  }
-
-  private static byte[] vpnJsonWithField(
-      final String json, final String field, final Object value) {
-    final Map<String, Object> root = vpnJsonObject(json);
-    root.put(field, value);
-    return JsonEncoder.encode(root).getBytes(StandardCharsets.UTF_8);
-  }
-
-  private static byte[] vpnJsonWithoutField(final String json, final String field) {
-    final Map<String, Object> root = vpnJsonObject(json);
-    root.remove(field);
-    return JsonEncoder.encode(root).getBytes(StandardCharsets.UTF_8);
-  }
-
-  private static void vpnRoutesRejectWrongSuccessfulStatusCodes() throws Exception {
-    final String identifier = "33".repeat(32);
-    final String paymentTxHash = "44".repeat(32);
-    final String meteringKey = VALID_ED25519_PUBLIC_KEY_HEX;
-    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
-    final ToriiCanonicalRequestAuth auth =
-        canonicalAuth("alice", keyPair, 1_700_000_000_050L, "vpn-status-nonce");
-
-    assertVpnWrongStatusRejected(201, vpnProfileJson(), transport -> transport.getVpnProfile().join());
-    assertVpnWrongStatusRejected(
-        200,
-        vpnQuoteJson(identifier, meteringKey),
-        transport ->
-            transport
-                .createVpnQuote(new VpnQuoteCreateRequest("standard", "0x" + meteringKey), auth)
-                .join());
-    assertVpnWrongStatusRejected(
-        200,
-        vpnSessionJson(identifier, paymentTxHash),
-        transport ->
-            transport
-                .createVpnSession(
-                    new VpnSessionCreateRequest(
-                        "standard", identifier, "0x" + paymentTxHash, meteringKey),
-                    auth)
-                .join());
-    assertVpnWrongStatusRejected(
-        201,
-        vpnSessionJson(identifier, paymentTxHash),
-        transport -> transport.getVpnSession(identifier, auth).join());
-    assertVpnWrongStatusRejected(
-        201,
-        vpnReceiptJson(identifier, paymentTxHash, false),
-        transport -> transport.deleteVpnSession(identifier, auth).join());
-    assertVpnWrongStatusRejected(
-        200,
-        vpnReceiptJson(identifier, paymentTxHash, true),
-        transport ->
-            transport
-                .submitVpnReceipt(
-                    new VpnReceiptSubmitRequest("0xCAFE", "BEEF", "0x" + identifier), auth)
-                .join());
-    final String receipt = vpnReceiptJson(identifier, paymentTxHash, true);
-    assertVpnWrongStatusRejected(
-        201,
-        "{\"items\":[" + receipt + "],\"total\":1}",
-        transport -> transport.listVpnReceipts(auth).join());
-  }
-
-  @FunctionalInterface
-  private interface VpnTransportCall {
-    void invoke(HttpClientTransport transport);
-  }
-
-  private static void assertVpnWrongStatusRejected(
-      final int status, final String body, final VpnTransportCall call) {
-    final HttpClientTransport transport =
-        HttpClientTransport.withExecutor(
-            new StubResponseExecutor(status, body.getBytes(StandardCharsets.UTF_8)),
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
-    expectRuntimeException(
-        () -> call.invoke(transport),
-        "VPN route must reject unexpected successful status " + status);
-  }
-
   private static void vpnQuoteRequestSignsCanonicalBodyAndParsesOpenLeaseInstruction()
       throws Exception {
     final String quoteId = "11".repeat(32);
@@ -3529,7 +3083,9 @@ public final class HttpClientTransportTests {
   private static void callContractRequestParsesResponse() {
     final String contractAddress =
         "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
-    final String signingMessageB64 = Base64.getEncoder().encodeToString(new byte[32]);
+    final byte[] transactionPayload = transactionWithPayload((byte) 0x07).encodedPayload();
+    final String transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload);
+    final String signingMessageB64 = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload));
     final StubResponseExecutor executor =
         new StubResponseExecutor(
             200,
@@ -3549,11 +3105,7 @@ public final class HttpClientTransportTests {
                     + "\","
                     + "\"entrypoint\":\"contribute\","
                     + "\"transaction_ttl_ms\":60000,"
-                    + "\"entrypoint_hash_hex\":\""
-                    + "77".repeat(32)
-                    + "\","
-                    + "\"transaction_scaffold_b64\":\"AQID\","
-                    + "\"signed_transaction_b64\":\"AQID\","
+                    + "\"transaction_payload_b64\":\"" + transactionPayloadB64 + "\","
                     + "\"signing_message_b64\":\""
                     + signingMessageB64
                     + "\","
@@ -3573,9 +3125,6 @@ public final class HttpClientTransportTests {
                     + "55".repeat(32)
                     + "\","
                     + "\"entrypoint\":\"contribute\","
-                    + "\"entrypoint_hash_hex\":\""
-                    + "77".repeat(32)
-                    + "\","
                     + "\"gas_limit\":5000,\"gas_used\":17,"
                     + "\"fee_payment\":{\"payer\":\"authority\","
                     + "\"value\":{\"charge_limits\":[],\"gas_limit\":5000}},"
@@ -3609,8 +3158,7 @@ public final class HttpClientTransportTests {
     assert "contribute".equals(response.entrypoint()) : "Entrypoint mismatch";
     assert Long.valueOf(60_000L).equals(response.transactionTtlMs())
         : "transaction_ttl_ms mismatch";
-    assert "77".repeat(32).equals(response.entrypointHashHex())
-        : "entrypoint_hash_hex mismatch";
+    assert response.entrypointHashHex() == null : "draft entrypoint hash must be absent";
     assert response.pipelineStatus() == null : "draft must not include pipeline status";
     assert "contract_call".equals(response.operationReceipt().operationKind())
         : "operation kind mismatch";
@@ -3618,9 +3166,7 @@ public final class HttpClientTransportTests {
         : "operation gas limit mismatch";
     assert "88".repeat(32).equals(response.operationReceipt().payloadDigestHex())
         : "payload digest mismatch";
-    assert "AQID".equals(response.transactionScaffoldB64())
-        : "transaction_scaffold_b64 mismatch";
-    assert "AQID".equals(response.signedTransactionB64()) : "signed_transaction_b64 mismatch";
+    assert transactionPayloadB64.equals(response.transactionPayloadB64()) : "transaction_payload_b64 mismatch";
     assert signingMessageB64.equals(response.signingMessageB64())
         : "signing_message_b64 mismatch";
 
@@ -3702,6 +3248,9 @@ public final class HttpClientTransportTests {
     final byte[] instructionBytes = new byte[] {1, 2, 3, 4};
     final String proposalId = "aa".repeat(32);
     final String multisigAccountId = TestAccountIds.ed25519Authority(0x37);
+    final byte[] transactionPayload = transactionWithPayload((byte) 0x08).encodedPayload();
+    final String transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload);
+    final String signingMessageB64 = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload));
     final StubResponseExecutor executor =
         new StubResponseExecutor(
             200,
@@ -3720,7 +3269,10 @@ public final class HttpClientTransportTests {
                     + "\"tx_hash_hex\":null,"
                     + "\"executed_tx_hash_hex\":null,"
                     + "\"creation_time_ms\":123,"
-                    + "\"signing_message_b64\":\"AQID\"}")
+                    + "\"transaction_payload_b64\":\"" + transactionPayloadB64 + "\","
+                    + "\"signing_message_b64\":\""
+                    + signingMessageB64
+                    + "\"}")
                 .getBytes(StandardCharsets.UTF_8),
             "ok");
     final HttpClientTransport transport =
@@ -3751,7 +3303,9 @@ public final class HttpClientTransportTests {
         : "resolved multisig account mismatch";
     assert Boolean.FALSE.equals(response.submitted()) : "submitted mismatch";
     assert proposalId.equals(response.instructionsHash()) : "instructions_hash mismatch";
-    assert "AQID".equals(response.signingMessageB64()) : "signing_message_b64 mismatch";
+    assert transactionPayloadB64.equals(response.transactionPayloadB64()) : "transaction_payload_b64 mismatch";
+    assert signingMessageB64.equals(response.signingMessageB64())
+        : "signing_message_b64 mismatch";
 
     final TransportRequest request = executor.lastRequest();
     assert request != null : "Multisig request must be captured";
@@ -3830,9 +3384,12 @@ public final class HttpClientTransportTests {
                     .setSignatureB64("not base64")
                     .build()),
         "malformed detached signature must be rejected");
-    final String canonicalSignature = canonicalSignatureBase64Fixture();
+    final String canonicalSignature = HttpClientTransportExactReadTests.canonicalSignatureBase64Fixture();
     for (final String signatureB64 :
-        List.of(" " + canonicalSignature, noncanonicalStandardBase64PadBitAlias(canonicalSignature))) {
+        List.of(
+            " " + canonicalSignature,
+            HttpClientTransportExactReadTests.noncanonicalStandardBase64PadBitAlias(
+                canonicalSignature))) {
       expectIllegalArgument(
           () ->
               HttpClientTransport.buildMultisigProposePayload(
@@ -6314,7 +5871,7 @@ public final class HttpClientTransportTests {
     }
   }
 
-  private static String vpnProfileJson() {
+  static String vpnProfileJson() {
     return "{"
         + "\"available\":true,"
         + "\"relay_endpoint\":\"/dns/relay.example/udp/9443/quic\","
@@ -6353,7 +5910,7 @@ public final class HttpClientTransportTests {
         + "}";
   }
 
-  private static String vpnQuoteJson(final String quoteId, final String meteringKey) {
+  static String vpnQuoteJson(final String quoteId, final String meteringKey) {
     return "{"
         + "\"quote_id\":\""
         + quoteId
@@ -6403,7 +5960,7 @@ public final class HttpClientTransportTests {
         + "}";
   }
 
-  private static String vpnSessionJson(final String sessionId, final String paymentTxHash) {
+  static String vpnSessionJson(final String sessionId, final String paymentTxHash) {
     return "{"
         + "\"session_id\":\""
         + sessionId
@@ -6455,7 +6012,7 @@ public final class HttpClientTransportTests {
         + "}";
   }
 
-  private static String vpnReceiptJson(
+  static String vpnReceiptJson(
       final String sessionId, final String paymentTxHash, final boolean settled) {
     final String status = settled ? "settled" : "disconnected";
     final String source = settled ? "relay" : "torii";
@@ -6675,22 +6232,6 @@ public final class HttpClientTransportTests {
     }
   }
 
-  private static final class OneResponseExecutor implements HttpTransportExecutor {
-    private final TransportResponse response;
-    private TransportRequest lastRequest;
-    private int requestCount;
-
-    private OneResponseExecutor(final TransportResponse response) {
-      this.response = Objects.requireNonNull(response, "response");
-    }
-
-    @Override
-    public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
-      lastRequest = Objects.requireNonNull(request, "request");
-      requestCount++;
-      return CompletableFuture.completedFuture(response);
-    }
-  }
 
   private record QueuedResponse(int statusCode, String body) {}
 

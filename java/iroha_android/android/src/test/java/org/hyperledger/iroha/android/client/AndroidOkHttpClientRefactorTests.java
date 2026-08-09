@@ -136,8 +136,8 @@ public final class AndroidOkHttpClientRefactorTests {
       final TelemetryRecord okRequest = okSink.awaitRequest();
       assertRequestFields(okRequest, "/v1/pipeline/transactions", "POST");
 
-      final TelemetryRecord okResponse = okSink.awaitResponse();
-      assertEquals(202, okResponse.statusCode().orElseThrow());
+      final TelemetryRecord submitResponse = okSink.awaitResponse();
+      assertEquals(202, submitResponse.statusCode().orElseThrow());
     }
   }
 

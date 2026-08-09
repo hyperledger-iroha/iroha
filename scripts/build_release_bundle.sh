@@ -224,11 +224,13 @@ PREBUILT_DIR_PY
 fi
 
 daemon_bin="irohad"
+governance_dag_bin="sorafs_governance_dag"
 cli_bin="iroha"
 utility_bin="kagami"
 sanitizer_bin="attachment_sanitizer"
 if [[ "$os_tag" == "win" ]]; then
   daemon_bin="${daemon_bin}.exe"
+  governance_dag_bin="${governance_dag_bin}.exe"
   cli_bin="${cli_bin}.exe"
   utility_bin="${utility_bin}.exe"
   sanitizer_bin="${sanitizer_bin}.exe"
@@ -302,12 +304,14 @@ fixed_files=(
   "LICENSE"
   "PROFILE.toml"
   "bin/$daemon_bin"
+  "bin/$governance_dag_bin"
   "bin/$cli_bin"
   "bin/$utility_bin"
   "bin/$sanitizer_bin"
 )
 executables=(
   "bin/$daemon_bin"
+  "bin/$governance_dag_bin"
   "bin/$cli_bin"
   "bin/$utility_bin"
   "bin/$sanitizer_bin"
@@ -315,6 +319,11 @@ executables=(
 python3 "$repo_root/scripts/copy_release_file.py" \
   --source "$binary_root/$daemon_bin" \
   --output "$stage_root/bin/$daemon_bin" \
+  --mode 0755 \
+  --require-executable
+python3 "$repo_root/scripts/copy_release_file.py" \
+  --source "$binary_root/$governance_dag_bin" \
+  --output "$stage_root/bin/$governance_dag_bin" \
   --mode 0755 \
   --require-executable
 python3 "$repo_root/scripts/copy_release_file.py" \

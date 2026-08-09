@@ -389,6 +389,8 @@ pub(super) fn prove_precomputed_masked_relaxed_v1(
     // Take ownership immediately so every success and error path scrubs the
     // materialized folded witness on return.
     let folded_witness = SecretRelaxedWitness::new(folded_witness);
+    #[cfg(test)]
+    maybe_panic_after_precomputed_witness_handoff_v1();
     prove_precomputed_masked_relaxed_inner_v1(
         domain,
         context_frame,
@@ -1047,6 +1049,69 @@ impl Drop for SecretScalar {
 
 struct SecretScalars(Vec<Scalar>);
 
+fn clear_secret_scalar_slice_v1(values: &mut [Scalar]) {
+    let values = core::hint::black_box(values);
+    for value in values.iter_mut() {
+        value.clear_secret();
+    }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    let _ = core::hint::black_box(&mut *values);
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static SECRET_SCALARS_ZEROIZED_DROPS_V1: core::cell::Cell<usize> = const {
+        core::cell::Cell::new(0)
+    };
+    static SECRET_WITNESS_ZEROIZED_DROPS_V1: core::cell::Cell<usize> = const {
+        core::cell::Cell::new(0)
+    };
+    static SECRET_RELAXED_WITNESS_ZEROIZED_CLEARS_V1: core::cell::Cell<usize> = const {
+        core::cell::Cell::new(0)
+    };
+    static PANIC_AFTER_PRECOMPUTED_WITNESS_HANDOFF_V1: core::cell::Cell<bool> = const {
+        core::cell::Cell::new(false)
+    };
+}
+
+#[cfg(test)]
+fn secret_scalars_zeroized_drop_count_v1() -> usize {
+    SECRET_SCALARS_ZEROIZED_DROPS_V1
+        .try_with(core::cell::Cell::get)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+fn secret_witness_zeroized_drop_count_v1() -> usize {
+    SECRET_WITNESS_ZEROIZED_DROPS_V1
+        .try_with(core::cell::Cell::get)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+fn secret_relaxed_witness_zeroized_clear_count_v1() -> usize {
+    SECRET_RELAXED_WITNESS_ZEROIZED_CLEARS_V1
+        .try_with(core::cell::Cell::get)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+fn arm_panic_after_precomputed_witness_handoff_v1() {
+    let _ = PANIC_AFTER_PRECOMPUTED_WITNESS_HANDOFF_V1
+        .try_with(|armed| armed.set(true));
+}
+
+#[cfg(test)]
+fn maybe_panic_after_precomputed_witness_handoff_v1() {
+    let should_panic = PANIC_AFTER_PRECOMPUTED_WITNESS_HANDOFF_V1
+        .try_with(|armed| armed.replace(false))
+        .unwrap_or(false);
+    assert!(
+        !should_panic,
+        "injected panic after precomputed folded-witness handoff"
+    );
+}
+
 impl SecretScalars {
     fn new(values: Vec<Scalar>) -> Self {
         Self(values)
@@ -1069,7 +1134,15 @@ impl DerefMut for SecretScalars {
 
 impl Drop for SecretScalars {
     fn drop(&mut self) {
-        self.0.fill(Scalar::zero());
+        let values = core::hint::black_box(&mut self.0);
+        clear_secret_scalar_slice_v1(values);
+        #[cfg(test)]
+        if values.iter().all(|value| value.is_zero()) {
+            let _ = SECRET_SCALARS_ZEROIZED_DROPS_V1
+                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *values);
     }
 }
 
@@ -1091,8 +1164,18 @@ impl Deref for SecretWitness {
 
 impl Drop for SecretWitness {
     fn drop(&mut self) {
-        self.0.values.fill(Scalar::zero());
-        self.0.blindings.fill(Scalar::zero());
+        let witness = core::hint::black_box(&mut self.0);
+        clear_secret_scalar_slice_v1(&mut witness.values);
+        clear_secret_scalar_slice_v1(&mut witness.blindings);
+        #[cfg(test)]
+        if witness.values.iter().all(|value| value.is_zero())
+            && witness.blindings.iter().all(|value| value.is_zero())
+        {
+            let _ = SECRET_WITNESS_ZEROIZED_DROPS_V1
+                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *witness);
     }
 }
 
@@ -1104,11 +1187,35 @@ impl SecretRelaxedWitness {
     }
 
     fn replace(&mut self, witness: RelaxedWitness) {
-        self.0.values.fill(Scalar::zero());
-        self.0.witness_blindings.fill(Scalar::zero());
-        self.0.error.fill(Scalar::zero());
-        self.0.error_blindings.fill(Scalar::zero());
+        self.clear_secret();
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         self.0 = witness;
+        let _ = core::hint::black_box(&mut self.0);
+    }
+
+    fn clear_secret(&mut self) {
+        let witness = core::hint::black_box(&mut self.0);
+        clear_secret_scalar_slice_v1(&mut witness.values);
+        clear_secret_scalar_slice_v1(&mut witness.witness_blindings);
+        clear_secret_scalar_slice_v1(&mut witness.error);
+        clear_secret_scalar_slice_v1(&mut witness.error_blindings);
+        #[cfg(test)]
+        if witness.values.iter().all(|value| value.is_zero())
+            && witness
+                .witness_blindings
+                .iter()
+                .all(|value| value.is_zero())
+            && witness.error.iter().all(|value| value.is_zero())
+            && witness
+                .error_blindings
+                .iter()
+                .all(|value| value.is_zero())
+        {
+            let _ = SECRET_RELAXED_WITNESS_ZEROIZED_CLEARS_V1
+                .try_with(|clears| clears.set(clears.get().saturating_add(1)));
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *witness);
     }
 }
 
@@ -1122,10 +1229,7 @@ impl Deref for SecretRelaxedWitness {
 
 impl Drop for SecretRelaxedWitness {
     fn drop(&mut self) {
-        self.0.values.fill(Scalar::zero());
-        self.0.witness_blindings.fill(Scalar::zero());
-        self.0.error.fill(Scalar::zero());
-        self.0.error_blindings.fill(Scalar::zero());
+        self.clear_secret();
     }
 }
 

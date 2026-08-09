@@ -13,7 +13,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - Swift SDK: from the `IrohaSwift` directory run `swift test` to execute the Swift package tests.
 - Kotlin SDK: from the `kotlin` directory run `./gradlew :core-jvm:test --console=plain`; build Android artifacts with `./gradlew :client-android:assembleRelease :offline-wallet-android:assembleRelease --quiet`.
 - Android SDK: from `java/iroha_android` run `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test`.
-- Scripts dependencies: `python3 -m pip install -r scripts/requirements.txt`.
+- Scripts dependencies (Python 3.10+): `python3 -m pip install -r scripts/requirements.txt`.
 - Script tests: `pytest pytests/scripts`.
 
 ## Overview

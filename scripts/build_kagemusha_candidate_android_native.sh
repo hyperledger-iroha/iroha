@@ -143,9 +143,9 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
-from check_android_device_lab_slot import validate_kagemusha_candidate_stage_manifest_v1
+from check_android_device_lab_slot import validate_kagemusha_candidate_stage_manifest_v2
 
-validate_kagemusha_candidate_stage_manifest_v1(
+validate_kagemusha_candidate_stage_manifest_v2(
     Path(sys.argv[2]),
     candidate_sha256=sys.argv[3],
     stage_sha256=sys.argv[4],

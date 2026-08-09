@@ -362,6 +362,7 @@ make_android_outputs() {
 import hashlib
 import json
 from pathlib import Path
+import struct
 import sys
 import zipfile
 
@@ -376,9 +377,47 @@ abis = ("arm64-v8a", "x86_64")
 library_name = "libconnect_norito_bridge.so"
 libraries = {}
 generated_libraries = {}
+
+
+def stripped_elf(machine, marker):
+    ident = b"\x7fELF" + bytes((2, 1, 1, 0)) + bytes(8)
+    header = struct.pack(
+        "<HHIQQQIHHHHHH",
+        3,
+        machine,
+        1,
+        0,
+        64,
+        120,
+        0,
+        64,
+        56,
+        1,
+        64,
+        2,
+        1,
+    )
+    program_header = struct.pack("<IIQQQQQQ", 2, 4, 248, 0, 0, 16, 16, 8)
+    null_section = bytes(64)
+    string_section = struct.pack(
+        "<IIQQQQIIQQ", 1, 3, 0, 0, 248, 11, 0, 0, 1, 0
+    )
+    return (
+        ident
+        + header
+        + program_header
+        + null_section
+        + string_section
+        + b"\x00.shstrtab\x00"
+        + marker
+    )
+
+
 for abi in abis:
-    payload = f"fixture-{mode}-{abi}\n".encode("ascii")
-    raw_payload = f"raw-fixture-{mode}-{abi}\n".encode("ascii")
+    machine = 183 if abi == "arm64-v8a" else 62
+    marker = f"fixture-{mode}-{abi}\n".encode("ascii")
+    payload = stripped_elf(machine, marker)
+    raw_payload = b"raw-cargo-ndk\n" + payload
     path = root / (
         "kotlin/client-android/build/generated/jniLibs/"
         f"{mode}/{abi}/{library_name}"
@@ -700,7 +739,8 @@ let bridgeTargetPath = configuredArtifactDirectory == nil
 let package = Package(
     name: "IrohaSwift",
     platforms: [
-        .iOS(.v15)
+        .iOS(.v15),
+        .macOS(.v12)
     ],
     targets: [
         .binaryTarget(
@@ -737,10 +777,10 @@ SWIFT
       <key>SupportedPlatformVariant</key><string>simulator</string>
     </dict>
     <dict>
-      <key>LibraryIdentifier</key><string>macos-arm64</string>
+      <key>LibraryIdentifier</key><string>macos-arm64_x86_64</string>
       <key>LibraryPath</key><string>libNoritoBridge.a</string>
       <key>HeadersPath</key><string>Headers</string>
-      <key>SupportedArchitectures</key><array><string>arm64</string></array>
+      <key>SupportedArchitectures</key><array><string>arm64</string><string>x86_64</string></array>
       <key>SupportedPlatform</key><string>macos</string>
     </dict>
   </array>
@@ -750,7 +790,7 @@ SWIFT
 </plist>
 PLIST
 
-  for slice in ios-arm64 ios-arm64_x86_64-simulator macos-arm64; do
+  for slice in ios-arm64 ios-arm64_x86_64-simulator macos-arm64_x86_64; do
     mkdir -p "$root/dist/NoritoBridge.xcframework/$slice/Headers"
     printf 'fake static library for %s\n' "$slice" >"$root/dist/NoritoBridge.xcframework/$slice/libNoritoBridge.a"
     cp "$root/crates/connect_norito_bridge/include/NoritoBridge.h" \
@@ -763,14 +803,14 @@ PLIST
 
   hash_a="$(shasum -a 256 "$root/dist/NoritoBridge.xcframework/ios-arm64/libNoritoBridge.a" | awk '{print $1}')"
   hash_b="$(shasum -a 256 "$root/dist/NoritoBridge.xcframework/ios-arm64_x86_64-simulator/libNoritoBridge.a" | awk '{print $1}')"
-  hash_c="$(shasum -a 256 "$root/dist/NoritoBridge.xcframework/macos-arm64/libNoritoBridge.a" | awk '{print $1}')"
+  hash_c="$(shasum -a 256 "$root/dist/NoritoBridge.xcframework/macos-arm64_x86_64/libNoritoBridge.a" | awk '{print $1}')"
   local header_hash
   header_hash="$(shasum -a 256 "$root/dist/NoritoBridge.xcframework/ios-arm64/Headers/connect_norito_bridge.h" | awk '{print $1}')"
   cat >"$root/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift" <<SWIFT
 enum NoritoBridgeLoader {
     static let expectedVersion = "1.0.0"
     private static let expectedHashes: [String: String] = [
-        "macos-arm64": "$hash_c",
+        "macos-arm64_x86_64": "$hash_c",
         "ios-arm64": "$hash_a",
         "ios-arm64_x86_64-simulator": "$hash_b"
     ]
@@ -945,7 +985,7 @@ SWIFT
   "hashes": {
     "ios-arm64": "$hash_a",
     "ios-arm64_x86_64-simulator": "$hash_b",
-    "macos-arm64": "$hash_c"
+    "macos-arm64_x86_64": "$hash_c"
   }
 }
 JSON
@@ -1092,7 +1132,7 @@ xcframework = root / "dist/NoritoBridge.xcframework"
 for slice_name in (
     "ios-arm64",
     "ios-arm64_x86_64-simulator",
-    "macos-arm64",
+    "macos-arm64_x86_64",
 ):
     (xcframework / slice_name / "Headers/connect_norito_bridge.h").write_bytes(
         header_bytes
@@ -1162,7 +1202,7 @@ make_apple_inspection_tools() {
   cat >"$tools/lipo" <<'SH'
 #!/usr/bin/env bash
 case "${*: -1}" in
-  *ios-arm64_x86_64-simulator*) printf 'arm64 x86_64\n' ;;
+  *ios-arm64_x86_64-simulator*|*macos-arm64_x86_64*) printf 'arm64 x86_64\n' ;;
   *) printf 'arm64\n' ;;
 esac
 SH
@@ -1255,6 +1295,8 @@ for symbol in shell_array("KAGEMUSHA_C_SYMBOLS"):
     emit(symbol)
 for symbol in shell_array("SORAFS_APPEAL_FINANCE_C_SYMBOLS"):
     emit(symbol)
+for symbol in shell_array("PRIVACY_COMPILED_PROFILE_C_SYMBOLS"):
+    emit(symbol)
 for namespace in (
     "org_hyperledger_iroha_sdk_offline",
     "org_hyperledger_iroha_android_offline",
@@ -1264,6 +1306,8 @@ for namespace in (
 for symbol in shell_array("VALIDATION_FEE_JNI_SYMBOLS"):
     emit(symbol)
 for symbol in shell_array("SORAFS_APPEAL_FINANCE_JNI_SYMBOLS"):
+    emit(symbol)
+for symbol in shell_array("PRIVACY_COMPILED_PROFILE_JNI_SYMBOLS"):
     emit(symbol)
 for symbol in shell_array("NATIVE_SIGNER_JNI_CONTRACT_SYMBOLS"):
     emit(symbol)
@@ -1488,6 +1532,45 @@ run_expect_fail \
   "$symlinked_package_resolution" \
   "Swift package resolution lock must be a non-symbolic regular file" \
   --apple-only
+
+substituted_abi_alias="$TMP_DIR/substituted-abi-alias"
+make_fixture "$substituted_abi_alias"
+sed -i.bak 's/= PRIVACY_BRIDGE_ABI_VERSION_V1;/= SUBSTITUTE_ABI_VERSION;/' \
+  "$substituted_abi_alias/crates/connect_norito_bridge/src/lib.rs"
+rm "$substituted_abi_alias/crates/connect_norito_bridge/src/lib.rs.bak"
+run_expect_fail "$substituted_abi_alias" "bridge source does not bind its ABI to the canonical privacy constant"
+
+fallback_abi_definition="$TMP_DIR/fallback-abi-definition"
+make_fixture "$fallback_abi_definition"
+printf '%s\n' 'const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 21;' \
+  >>"$fallback_abi_definition/crates/connect_norito_bridge/src/lib.rs"
+run_expect_fail "$fallback_abi_definition" "bridge source does not bind its ABI to the canonical privacy constant"
+
+missing_canonical_abi="$TMP_DIR/missing-canonical-abi"
+make_fixture "$missing_canonical_abi"
+: >"$missing_canonical_abi/crates/iroha_data_model/src/privacy/protocol.rs"
+run_expect_fail "$missing_canonical_abi" "canonical privacy bridge ABI constant is missing or non-numeric"
+
+nonnumeric_canonical_abi="$TMP_DIR/nonnumeric-canonical-abi"
+make_fixture "$nonnumeric_canonical_abi"
+sed -i.bak 's/= 21;/= ABI_TWENTY_ONE;/' \
+  "$nonnumeric_canonical_abi/crates/iroha_data_model/src/privacy/protocol.rs"
+rm "$nonnumeric_canonical_abi/crates/iroha_data_model/src/privacy/protocol.rs.bak"
+run_expect_fail "$nonnumeric_canonical_abi" "canonical privacy bridge ABI constant is missing or non-numeric"
+
+canonical_abi_drift="$TMP_DIR/canonical-abi-drift"
+make_fixture "$canonical_abi_drift"
+sed -i.bak 's/= 21;/= 20;/' \
+  "$canonical_abi_drift/crates/iroha_data_model/src/privacy/protocol.rs"
+rm "$canonical_abi_drift/crates/iroha_data_model/src/privacy/protocol.rs.bak"
+run_expect_fail "$canonical_abi_drift" "canonical privacy bridge ABI constant drifted from 21"
+
+header_abi_drift="$TMP_DIR/header-abi-drift"
+make_fixture "$header_abi_drift"
+sed -i.bak 's/ABI_VERSION 21/ABI_VERSION 20/' \
+  "$header_abi_drift/crates/connect_norito_bridge/include/connect_norito_bridge.h"
+rm "$header_abi_drift/crates/connect_norito_bridge/include/connect_norito_bridge.h.bak"
+run_expect_fail "$header_abi_drift" "bridge header ABI macro drifted from 21"
 
 custom_apple_artifact_dir="$TMP_DIR/custom-apple-artifact-dir"
 make_fixture "$custom_apple_artifact_dir"
@@ -2144,6 +2227,45 @@ make_fixture "$missing_header"
 rm -f "$missing_header/dist/NoritoBridge.xcframework/ios-arm64_x86_64-simulator/Headers/NoritoBridge.h"
 run_expect_fail "$missing_header" "missing XCFramework slice header"
 
+non_universal_macos="$TMP_DIR/non-universal-macos"
+make_fixture "$non_universal_macos"
+"$TEST_PYTHON_BINARY" -I -S - \
+  "$non_universal_macos/dist/NoritoBridge.xcframework/Info.plist" <<'PY'
+from pathlib import Path
+import plistlib
+import sys
+
+
+path = Path(sys.argv[1])
+with path.open("rb") as handle:
+    payload = plistlib.load(handle)
+for library in payload["AvailableLibraries"]:
+    if library["LibraryIdentifier"] == "macos-arm64_x86_64":
+        library["SupportedArchitectures"] = ["arm64"]
+with path.open("wb") as handle:
+    plistlib.dump(payload, handle)
+PY
+run_expect_fail \
+  "$non_universal_macos" \
+  "NoritoBridge Info.plist does not declare the canonical universal Apple slices"
+
+test_only_prebuilt_manifest="$TMP_DIR/test-only-prebuilt-manifest"
+make_fixture "$test_only_prebuilt_manifest"
+sed -i.bak '/"version": "1.0.0",/a\
+  "test_only_prebuilt_slices": false,' \
+  "$test_only_prebuilt_manifest/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+rm -f "$test_only_prebuilt_manifest/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
+run_expect_fail \
+  "$test_only_prebuilt_manifest" \
+  "release artifact manifest must not contain test_only_prebuilt_slices"
+
+test_only_prebuilt_marker="$TMP_DIR/test-only-prebuilt-marker"
+make_fixture "$test_only_prebuilt_marker"
+touch "$test_only_prebuilt_marker/dist/NoritoBridge.xcframework/.test-only-prebuilt-slices"
+run_expect_fail \
+  "$test_only_prebuilt_marker" \
+  "release artifact must not carry the test-only prebuilt-slices marker"
+
 missing_hash="$TMP_DIR/missing-hash"
 make_fixture "$missing_hash"
 cat >"$missing_hash/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json" <<'JSON'
@@ -2153,7 +2275,7 @@ cat >"$missing_hash/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json" <
   "cargo_features": [],
   "hashes": {
     "ios-arm64": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "macos-arm64": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    "macos-arm64_x86_64": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   }
 }
 JSON
@@ -2210,7 +2332,7 @@ run_expect_apple_forbidden_binary_fail \
 run_expect_apple_forbidden_binary_fail \
   "$extra_binary_symbol" \
   "connect_norito_set_chain_discriminant" \
-  "macos-arm64" \
+  "macos-arm64_x86_64" \
   "$inspection_tools"
 run_expect_apple_forbidden_binary_fail \
   "$extra_binary_symbol" \
@@ -2230,7 +2352,7 @@ run_expect_apple_forbidden_binary_fail \
 run_expect_apple_forbidden_binary_fail \
   "$extra_binary_symbol" \
   "iroha_privacy_validate_capabilities_v1" \
-  "macos-arm64" \
+  "macos-arm64_x86_64" \
   "$inspection_tools"
 run_expect_apple_forbidden_binary_fail \
   "$extra_binary_symbol" \
@@ -2245,7 +2367,7 @@ run_expect_apple_forbidden_binary_fail \
 run_expect_apple_forbidden_binary_fail \
   "$extra_binary_symbol" \
   "iroha_privacy_verify_proof_v1" \
-  "macos-arm64" \
+  "macos-arm64_x86_64" \
   "$inspection_tools"
 
 symbol_inventory_mismatch="$TMP_DIR/symbol-inventory-mismatch"
@@ -2782,6 +2904,31 @@ run_expect_android_forbidden_binary_fail \
   "$android_inspection_tools"
 run_expect_android_forbidden_binary_fail \
   "$with_android_outputs" \
+  "iroha_privacy_capabilities_v1" \
+  "arm64-v8a" \
+  "$android_inspection_tools"
+run_expect_android_forbidden_binary_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_validate_capabilities_v1" \
+  "x86_64" \
+  "$android_inspection_tools"
+run_expect_android_forbidden_binary_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_proof_request_v1" \
+  "arm64-v8a" \
+  "$android_inspection_tools"
+run_expect_android_forbidden_binary_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_build_proof_v1" \
+  "x86_64" \
+  "$android_inspection_tools"
+run_expect_android_forbidden_binary_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_verify_proof_v1" \
+  "arm64-v8a" \
+  "$android_inspection_tools"
+run_expect_android_forbidden_binary_fail \
+  "$with_android_outputs" \
   "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2" \
   "arm64-v8a" \
   "$android_inspection_tools"
@@ -2802,6 +2949,42 @@ run_expect_android_missing_symbol_fail \
   "$with_android_outputs" \
   "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json" \
   "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_compiled_profile_catalog_v1" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_validate_compiled_profile_catalog_v1" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_exact12_fixture_bundle_v1" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_validate_exact12_fixture_bundle_v1" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_free_buffer" \
+  "$android_inspection_tools"
+for privacy_jni_symbol in \
+  Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeBridgeAbiVersion \
+  Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeCompiledProfileCatalog \
+  Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateCompiledProfileCatalog \
+  Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeExact12FixtureBundle \
+  Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateExact12FixtureBundle \
+  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeBridgeAbiVersion \
+  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeCompiledProfileCatalog \
+  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateCompiledProfileCatalog \
+  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeExact12FixtureBundle \
+  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateExact12FixtureBundle; do
+  run_expect_android_missing_symbol_fail \
+    "$with_android_outputs" \
+    "$privacy_jni_symbol" \
+    "$android_inspection_tools"
+done
 run_expect_android_missing_symbol_fail \
   "$with_android_outputs" \
   "Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateAppealFinanceCancelAssetLockJson" \

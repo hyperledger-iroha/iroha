@@ -61,9 +61,25 @@ fn terminal_handoff_policy_drift_after_delivery_is_ambiguous() {
         case_id: "case-1".to_owned(),
         round_id: "round-1".to_owned(),
         outcome_digest: [0x62; 32],
-        finalized_cursor: ModerationFinalizedCursorV1 {
-            height: 11,
+        outcome_finalized_at_unix_ms: 11,
+        finalized_cursor: ModerationFinalizedEventCursorV1 {
+            sequence: 1,
+            block_height: 11,
             block_hash: [0x63; 32],
+            event_index: 0,
+        },
+        source_event_witness: ModerationFinalizedEventV1 {
+            sequence: 1,
+            block_height: 11,
+            block_hash: [0x63; 32],
+            event_index: 0,
+            event: SorafsModerationLedgerEvent::new(
+                SorafsModerationLedgerEventKind::CaseFinalized,
+                Some("case-1".to_owned()),
+                Some("round-1".to_owned()),
+                account(9),
+                11,
+            ),
         },
     };
 
@@ -131,9 +147,11 @@ fn terminal_handoffs_use_exact_finalization_block_across_later_tips() {
     );
     assert!(first_handoffs.iter().all(|handoff| {
         handoff.finalized_cursor
-            == ModerationFinalizedCursorV1 {
-                height: 3,
+            == ModerationFinalizedEventCursorV1 {
+                sequence: 7,
+                block_height: 3,
                 block_hash: [3; 32],
+                event_index: 0,
             }
     }));
 }
@@ -194,6 +212,7 @@ fn checkpoint_and_pending_terminal_handoff_are_chain_fenced() {
         settlement_sink: settlement.clone(),
         publication_sink: publication.clone(),
         panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
+        panel_notification_archive: Arc::new(MockPanelNotificationArchive::default()),
     };
     let orchestrator =
         ModerationOrchestratorV1::open(checkpoint.clone(), runtime_deps()).expect("open");

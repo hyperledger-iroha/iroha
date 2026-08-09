@@ -365,15 +365,15 @@ object NoritoAdapters {
     }
 
     private class SequenceAdapter<T>(private val element: TypeAdapter<T>) : TypeAdapter<List<T>> {
-        override fun encode(encoder: NoritoEncoder, values: List<T>) {
-            encoder.writeLength(values.size.toLong(), false)
+        override fun encode(encoder: NoritoEncoder, value: List<T>) {
+            encoder.writeLength(value.size.toLong(), false)
             if ((encoder.flags and NoritoHeader.PACKED_SEQ) != 0) {
-                encodePacked(encoder, values)
+                encodePacked(encoder, value)
             } else {
                 val compact = (encoder.flags and NoritoHeader.COMPACT_LEN) != 0
-                for (value in values) {
+                for (elementValue in value) {
                     val child = encoder.childEncoder()
-                    element.encode(child, value)
+                    element.encode(child, elementValue)
                     val payload = child.toByteArray()
                     encoder.writeLength(payload.size.toLong(), compact)
                     encoder.writeBytes(payload)
@@ -472,8 +472,8 @@ object NoritoAdapters {
         private val value: TypeAdapter<V>,
     ) : TypeAdapter<Map<K, V>> {
 
-        override fun encode(encoder: NoritoEncoder, map: Map<K, V>) {
-            val entries = sortedEntries(map)
+        override fun encode(encoder: NoritoEncoder, value: Map<K, V>) {
+            val entries = sortedEntries(value)
             encoder.writeLength(entries.size.toLong(), false)
             if ((encoder.flags and NoritoHeader.PACKED_SEQ) != 0) {
                 encodePacked(encoder, entries)
@@ -653,9 +653,9 @@ object NoritoAdapters {
         private val value: TypeAdapter<V>,
     ) : TypeAdapter<Map.Entry<K, V>> {
 
-        override fun encode(encoder: NoritoEncoder, entry: Map.Entry<K, V>) {
-            key.encode(encoder, entry.key)
-            value.encode(encoder, entry.value)
+        override fun encode(encoder: NoritoEncoder, value: Map.Entry<K, V>) {
+            key.encode(encoder, value.key)
+            this.value.encode(encoder, value.value)
         }
 
         override fun decode(decoder: NoritoDecoder): Map.Entry<K, V> {

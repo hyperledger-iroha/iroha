@@ -888,6 +888,7 @@ internal static class ToriiVpnJson
             nameof(ToriiVpnQuote.FeeAssetId) => "fee_asset_id",
             nameof(ToriiVpnQuote.EscrowAccountId) => "escrow_account_id",
             nameof(ToriiVpnQuote.ExitClass) => "exit_class",
+            nameof(ToriiVpnQuote.LeaseFee) => "lease_fee",
             nameof(ToriiVpnQuote.QuoteExpiresAtMilliseconds) => "quote_expires_at_ms",
             nameof(ToriiVpnQuote.MeteringPublicKeyHex) => "metering_public_key_hex",
             nameof(ToriiVpnSession.SessionId) => "session_id",

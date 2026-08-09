@@ -114,14 +114,15 @@ query, and privacy primitives.
 
 ## Native Privacy Bridge
 
-The first-release native metadata surface is
+The first-release native surface exposes local build metadata only:
 `is_privacy_native_available()` and
 `privacy_compiled_profile_catalog_v1()`. The latter returns this binary's
-canonical Norito `PrivacyCompiledProfileCatalogV1` archive and intentionally
-contains no committed height, policy, activation, or readiness projection. The
-separate Torii client method `privacy_capabilities_v1()` strictly parses the
-authoritative live `PrivacyCapabilitySnapshotV1` JSON. There is no generic
-request/build/verify dispatcher and no legacy algorithm alias.
+canonical Norito `PrivacyCompiledProfileCatalogV1` archive and contains no
+committed height, governance activation, or readiness state. The distinct
+`Client.privacy_capabilities_v1()` method fetches and strictly parses a fresh
+authoritative JSON `PrivacyCapabilitySnapshotV1` from live Torii. There is no
+local `privacy_capabilities_v1()` alias, generic request/build/verify
+dispatcher, or legacy algorithm alias.
 
 `PRIVACY_PROTOCOL_IDS_V1` contains exactly twelve identities in wire order:
 `zk-ace-pq-authorization-v0`, `anonymous-pgc-k-out-of-n-v1`,

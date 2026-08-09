@@ -4,8 +4,7 @@ use iroha_data_model::{
     ChainId,
     events::data::sorafs::SorafsModerationLedgerEventKind,
     sorafs::moderation_ledger::{
-        ModerationFinalizedCursorV1, ModerationFinalizedEventV1,
-        ModerationFinalizedLedgerSnapshotV1, ModerationOutcomeRecordV1,
+        ModerationFinalizedEventV1, ModerationFinalizedLedgerSnapshotV1, ModerationOutcomeRecordV1,
         is_canonical_moderation_identifier_v1,
     },
 };
@@ -25,15 +24,26 @@ impl ModerationOrchestratorCheckpointV1 {
             generation: 0,
             panel_notification_clock_unix_ms: 0,
             panel_notification_scanned_cursor: None,
+            terminal_handoff_scanned_cursor: None,
             panel_notification_outbox_digest: [0; 32],
+            panel_notification_archived_dead_letter_count: 0,
+            terminal_handoff_archived_cursor: None,
+            panel_notification_archive_compaction_reservation: None,
+            panel_notification_archive_signer_epochs: Vec::new(),
+            panel_notification_archive_head: None,
+            panel_notification_archive_pending_publication: None,
+            panel_notification_archive_published_head: None,
+            panel_notification_archive_audit_cursor: None,
             finalized_snapshot: None,
             finalized_snapshot_digest: None,
             operations: Vec::new(),
             outbox: Vec::new(),
             dead_letters: Vec::new(),
+            dead_letter_incident_sequence: 0,
             pending_handoffs: Vec::new(),
             completed_handoffs: Vec::new(),
             panel_notifications: Vec::new(),
+            panel_notification_dead_letter_resolutions: Vec::new(),
         };
         refresh_panel_notification_outbox_digest(&mut state);
         state
@@ -88,26 +98,6 @@ pub(super) fn terminal_finalization_event_matches_outcome(
         && *event.event.occurred_at_unix_ms() == outcome.finalized_at_unix_ms
 }
 
-pub(super) fn retained_terminal_finalization_cursor(
-    snapshot: &ModerationFinalizedLedgerSnapshotV1,
-    outcome: &ModerationOutcomeRecordV1,
-) -> Result<ModerationFinalizedCursorV1, &'static str> {
-    let Some(event) =
-        retained_terminal_finalization_event(snapshot, &outcome.case_id, &outcome.round_id)?
-    else {
-        // V1 requires the exact finalization event in the committed projection
-        // and fails closed once that provenance is unavailable.
-        return Err("terminal outcome has no retained exact finalization event");
-    };
-    if !terminal_finalization_event_matches_outcome(event, outcome) {
-        return Err("terminal finalization event provenance differs from the outcome");
-    }
-    Ok(ModerationFinalizedCursorV1 {
-        height: event.block_height,
-        block_hash: event.block_hash,
-    })
-}
-
 pub(super) fn validate_retained_terminal_handoff(
     handoff: &ModerationTerminalHandoffV1,
     snapshot: Option<&ModerationFinalizedLedgerSnapshotV1>,
@@ -116,8 +106,9 @@ pub(super) fn validate_retained_terminal_handoff(
     if !is_canonical_moderation_identifier_v1(&handoff.case_id)
         || !is_canonical_moderation_identifier_v1(&handoff.round_id)
         || handoff.outcome_digest == [0; 32]
+        || handoff.outcome_finalized_at_unix_ms == 0
         || !external_work_cursor_is_valid(
-            handoff.finalized_cursor.height,
+            handoff.finalized_cursor.block_height,
             handoff.finalized_cursor.block_hash,
             snapshot,
         )
@@ -132,6 +123,16 @@ pub(super) fn validate_retained_terminal_handoff(
     {
         return Err(ModerationOrchestratorError::CheckpointCorrupt(
             "terminal handoff identity, scope, or finalized cursor is invalid".to_owned(),
+        ));
+    }
+    let witness = &handoff.source_event_witness;
+    if witness.cursor() != handoff.finalized_cursor
+        || *witness.event.kind() != SorafsModerationLedgerEventKind::CaseFinalized
+        || witness.event.case_id().as_deref() != Some(&handoff.case_id)
+        || witness.event.round_id().as_deref() != Some(&handoff.round_id)
+    {
+        return Err(ModerationOrchestratorError::CheckpointCorrupt(
+            "terminal handoff sealed event witness is malformed or substituted".to_owned(),
         ));
     }
     let snapshot = snapshot.ok_or_else(|| {
@@ -157,21 +158,25 @@ pub(super) fn validate_retained_terminal_handoff(
             "terminal handoff differs from its authoritative outcome".to_owned(),
         ));
     }
-    if let Some(event) =
+    if handoff.outcome_finalized_at_unix_ms != outcome.finalized_at_unix_ms {
+        return Err(ModerationOrchestratorError::CheckpointCorrupt(
+            "terminal handoff timestamp differs from its authoritative outcome".to_owned(),
+        ));
+    }
+    if !terminal_finalization_event_matches_outcome(witness, outcome) {
+        return Err(ModerationOrchestratorError::CheckpointCorrupt(
+            "terminal handoff witness provenance differs from its outcome".to_owned(),
+        ));
+    }
+    let retained_event =
         retained_terminal_finalization_event(snapshot, &handoff.case_id, &handoff.round_id)
-            .map_err(|message| ModerationOrchestratorError::CheckpointCorrupt(message.to_owned()))?
-    {
-        let exact_cursor = ModerationFinalizedCursorV1 {
-            height: event.block_height,
-            block_hash: event.block_hash,
-        };
-        if !terminal_finalization_event_matches_outcome(event, outcome)
-            || handoff.finalized_cursor != exact_cursor
-        {
-            return Err(ModerationOrchestratorError::CheckpointCorrupt(
-                "terminal handoff differs from its retained exact finalization event".to_owned(),
-            ));
-        }
+            .map_err(|message| {
+                ModerationOrchestratorError::CheckpointCorrupt(message.to_owned())
+            })?;
+    if retained_event.is_some_and(|event| event != witness) {
+        return Err(ModerationOrchestratorError::CheckpointCorrupt(
+            "terminal handoff differs from its retained exact finalization event".to_owned(),
+        ));
     }
     Ok(())
 }

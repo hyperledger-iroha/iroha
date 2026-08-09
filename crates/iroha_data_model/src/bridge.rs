@@ -44,8 +44,7 @@ pub use sccp_registry::{
     sccp_exact_evm_xor_route_config_hash_v1, sccp_exact_solana_xor_route_config_hash_v1,
     sccp_exact_tron_xor_route_config_hash_v1, sccp_groth16_bn254_public_signal_schema_hash_v1,
     sccp_groth16_bn254_verifying_key_hash_v1, sccp_lane_id_hash_v1, sccp_network_identity_hash_v1,
-    sccp_network_tag_v1, sccp_semantic_proof_profile_hash_v1,
-    sccp_route_escrow_account_id_v1,
+    sccp_network_tag_v1, sccp_route_escrow_account_id_v1, sccp_semantic_proof_profile_hash_v1,
     sccp_solana_destination_binding_hash_v1, sccp_solana_native_verifier_config_hash_v1,
     sccp_sora_finality_anchor_hash_v1, sccp_sora_taira_chain_id_hash_v1,
     sccp_source_emitter_identity_hash_v1, sccp_source_identity_hash_v1,
@@ -570,7 +569,7 @@ pub struct BridgeProofRecord {
 }
 
 /// Current schema version of [`BridgeFinalityProof`].
-pub const BRIDGE_FINALITY_PROOF_VERSION_V1: u8 = 1;
+pub const BRIDGE_FINALITY_PROOF_VERSION_V2: u8 = 2;
 
 /// Current schema version of [`BridgeFinalityAttestationBodyV1`].
 pub const BRIDGE_FINALITY_ATTESTATION_VERSION_V1: u8 = 1;
@@ -594,7 +593,7 @@ pub const BRIDGE_FINALITY_ATTESTATION_SIGNATURE_DOMAIN_V1: &[u8] =
 #[norito(deny_unknown_fields)]
 pub struct BridgeFinalityProof {
     /// Proof schema version. The first release requires
-    /// [`BRIDGE_FINALITY_PROOF_VERSION_V1`].
+    /// [`BRIDGE_FINALITY_PROOF_VERSION_V2`].
     pub version: u8,
     /// Block header for the finalized block.
     pub block_header: crate::block::BlockHeader,
@@ -1146,9 +1145,9 @@ fn validate_bridge_finality_proof_structure(
     proof: &BridgeFinalityProof,
     expected_network_id: &NetworkId,
 ) -> Result<(), BridgeFinalityVerifyError> {
-    if proof.version != BRIDGE_FINALITY_PROOF_VERSION_V1 {
+    if proof.version != BRIDGE_FINALITY_PROOF_VERSION_V2 {
         return Err(BridgeFinalityVerifyError::UnsupportedProofVersion {
-            expected: BRIDGE_FINALITY_PROOF_VERSION_V1,
+            expected: BRIDGE_FINALITY_PROOF_VERSION_V2,
             actual: proof.version,
         });
     }
@@ -1494,12 +1493,14 @@ mod tests {
             height: 1,
             view: 0,
         };
-        let execution_commitment = crate::block::consensus_v2::ExecutionCommitment::without_topups(
-            Hash::new(b"bridge v2 parent state"),
-            Hash::new(b"bridge v2 post state"),
-            Hash::new(b"bridge v2 ordinary writes"),
-            Hash::new(b"bridge v2 executed block wire"),
-        );
+        let execution_commitment =
+            crate::block::consensus_v2::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"bridge v2 parent state"),
+                Hash::new(b"bridge v2 post state"),
+                Hash::new(b"bridge v2 ordinary writes"),
+                1,
+                Hash::new(b"bridge v2 executed block wire"),
+            );
         let mut commit_qc = QuorumCertificate {
             round,
             proposal_round: round,
@@ -1546,7 +1547,7 @@ mod tests {
         );
         V2Fixture {
             proof: BridgeFinalityProof {
-                version: BRIDGE_FINALITY_PROOF_VERSION_V1,
+                version: BRIDGE_FINALITY_PROOF_VERSION_V2,
                 block_header: header,
                 finality_artifact: artifact,
             },
@@ -1626,10 +1627,11 @@ mod tests {
             height,
             view: 0,
         };
-        let execution_commitment = wire::ExecutionCommitment::without_topups(
+        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"bridge v2 successor parent state"),
             Hash::new(b"bridge v2 successor post state"),
             Hash::new(b"bridge v2 successor ordinary writes"),
+            1,
             Hash::new(b"bridge v2 successor executed block wire"),
         );
         let commit_qc = wire::QuorumCertificate {
@@ -1648,7 +1650,7 @@ mod tests {
             validator_set_pops,
         );
         let mut proof = BridgeFinalityProof {
-            version: BRIDGE_FINALITY_PROOF_VERSION_V1,
+            version: BRIDGE_FINALITY_PROOF_VERSION_V2,
             block_header: header,
             finality_artifact: artifact,
         };
@@ -2783,11 +2785,22 @@ mod tests {
         let context_id = fixture.proof.finality_artifact.context_id();
 
         let mut wrong_version = fixture.proof.clone();
-        wrong_version.version = BRIDGE_FINALITY_PROOF_VERSION_V1 + 1;
+        wrong_version.version = BRIDGE_FINALITY_PROOF_VERSION_V2 + 1;
         let mut verifier = BridgeFinalityVerifier::with_context(expected_network, context_id);
         assert!(matches!(
             verifier.verify(&wrong_version),
             Err(BridgeFinalityVerifyError::UnsupportedProofVersion { .. })
+        ));
+
+        let mut legacy_v1 = fixture.proof.clone();
+        legacy_v1.version = 1;
+        let mut verifier = BridgeFinalityVerifier::with_context(expected_network, context_id);
+        assert!(matches!(
+            verifier.verify(&legacy_v1),
+            Err(BridgeFinalityVerifyError::UnsupportedProofVersion {
+                expected: BRIDGE_FINALITY_PROOF_VERSION_V2,
+                actual: 1,
+            })
         ));
 
         let mut verifier =

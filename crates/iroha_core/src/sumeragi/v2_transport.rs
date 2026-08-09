@@ -1060,12 +1060,14 @@ mod tests {
                     proposal_round: self.manifest.round,
                     phase: wire::GlobalPhase::Prepare,
                     subject: self.manifest.subject,
-                    execution_commitment: wire::ExecutionCommitment::without_topups(
-                        Hash::new(b"transport fixture parent state"),
-                        Hash::new(b"transport fixture post state"),
-                        Hash::new(b"transport fixture ordinary writes"),
-                        Hash::new(b"transport fixture executed block wire"),
-                    ),
+                    execution_commitment:
+                        wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                            Hash::new(b"transport fixture parent state"),
+                            Hash::new(b"transport fixture post state"),
+                            Hash::new(b"transport fixture ordinary writes"),
+                            1,
+                            Hash::new(b"transport fixture executed block wire"),
+                        ),
                     signers: vec![0, 1, 2],
                     aggregate_signature: vec![0xA5; 48],
                 },

@@ -77,106 +77,7 @@ pub mod isi {
         }
     }
 
-    fn alias_grace_until_ms(lease_expiry_ms: Option<u64>) -> Option<u64> {
-        lease_expiry_ms.map(|expiry| expiry.saturating_add(ASSET_ALIAS_GRACE_MS))
-    }
-
-    fn validate_alias_for_asset_definition(
-        alias: Option<&AssetDefinitionAlias>,
-        definition: &AssetDefinition,
-    ) -> Result<(), InstructionExecutionError> {
-        validate_asset_alias_against_names(alias, [definition.name().as_str()]).map_err(|err| {
-            InstructionExecutionError::InvariantViolation(
-                format!("invalid asset definition alias: {err}").into(),
-            )
-        })
-    }
-
-    fn dataspace_id_for_alias_segment(
-        state_transaction: &StateTransaction<'_, '_>,
-        dataspace_alias: &str,
-    ) -> Option<DataSpaceId> {
-        crate::sns::active_dataspace_id_by_alias(
-            &state_transaction.world,
-            &state_transaction.nexus.dataspace_catalog,
-            dataspace_alias,
-            state_transaction.block_unix_timestamp_ms(),
-        )
-        .or_else(|| {
-            if dataspace_alias.eq_ignore_ascii_case("universal") {
-                Some(DataSpaceId::UNIVERSAL)
-            } else {
-                state_transaction
-                    .nexus
-                    .dataspace_catalog
-                    .by_alias(dataspace_alias)
-                    .map(|entry| entry.id)
-            }
-        })
-    }
-
-    fn asset_definition_home_dataspace(
-        state_transaction: &StateTransaction<'_, '_>,
-        definition: &AssetDefinition,
-    ) -> Option<DataSpaceId> {
-        definition
-            .owning_domain()
-            .as_ref()
-            .map_or(Some(DataSpaceId::UNIVERSAL), |domain| {
-                dataspace_id_for_alias_segment(state_transaction, domain.dataspace().as_ref())
-            })
-    }
-
-    fn dataspace_is_public_or_universal(
-        state_transaction: &StateTransaction<'_, '_>,
-        dataspace_id: DataSpaceId,
-    ) -> bool {
-        dataspace_id == DataSpaceId::UNIVERSAL
-            || state_transaction
-                .nexus
-                .lane_catalog
-                .lanes()
-                .iter()
-                .any(|lane| {
-                    lane.dataspace_id == dataspace_id && lane.visibility == LaneVisibility::Public
-                })
-    }
-
-    fn ensure_global_asset_definition_home_is_public_or_universal(
-        state_transaction: &StateTransaction<'_, '_>,
-        definition: &AssetDefinition,
-    ) -> Result<(), InstructionExecutionError> {
-        if state_transaction.replay_compatibility {
-            return Ok(());
-        }
-        if definition.balance_scope_policy() != AssetBalancePolicy::Global {
-            return Ok(());
-        }
-
-        let home_dataspace = asset_definition_home_dataspace(state_transaction, definition)
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "asset definition {} owning domain has no active dataspace",
-                        definition.id()
-                    )
-                    .into(),
-                )
-            })?;
-
-        if !dataspace_is_public_or_universal(state_transaction, home_dataspace) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "global asset definition {} cannot be registered in restricted dataspace {}; use DataspaceRestricted balance policy",
-                    definition.id(),
-                    home_dataspace.as_u64()
-                )
-                .into(),
-            ));
-        }
-
-        Ok(())
-    }
+    include!("domain/asset_alias_scope.rs");
 
     fn ensure_global_asset_definition_registered_on_authoritative_route(
         state_transaction: &StateTransaction<'_, '_>,
@@ -1484,8 +1385,10 @@ pub mod isi {
                 )
                     .into());
             }
-            if crate::smartcontracts::isi::vpn::is_active_vpn_client(state_transaction, &account_id)
-            {
+            if crate::smartcontracts::isi::vpn::is_active_vpn_client(
+                &state_transaction.world,
+                &account_id,
+            ) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
                         "cannot unregister account {account_id}: it funds an active operator-signed VPN lease"
@@ -1742,6 +1645,24 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
                         "cannot unregister account {account_id}: it is the lazily derived offline escrow account for asset definition {definition_id}"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+            let chain_id = state_transaction.chain_id().clone();
+            if let Some(definition_id) = state_transaction
+                .world
+                .assets_in_account_iter(&account_id)
+                .find_map(|asset| {
+                    let definition_id = asset.id().definition();
+                    (offline_escrow_account_id(&chain_id, definition_id) == account_id)
+                        .then(|| definition_id.clone())
+                })
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it is the deterministic offline escrow account holding live assets for asset definition {definition_id}"
                     )
                     .into(),
                 )
@@ -3727,6 +3648,8 @@ pub mod query {
 
 #[cfg(test)]
 mod tests {
+    include!("domain_restricted_asset_definition_tests.rs");
+
     use std::sync::Arc;
 
     use iroha_crypto::{
@@ -8846,6 +8769,78 @@ mod tests {
     }
 
     #[test]
+    fn unregister_account_rejects_live_offline_escrow_after_transaction_boundary() {
+        let mut state = test_state();
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
+            domain_id,
+            "usd".parse().expect("asset definition name"),
+        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let escrow_account_id;
+        let escrow_asset_id;
+        {
+            let mut first_tx = block.transaction();
+            Register::asset_definition({
+                let asset_definition_id = asset_definition_id.clone();
+                AssetDefinition::numeric(
+                    asset_definition_id,
+                    "usd".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
+            })
+            .execute(&authority, &mut first_tx)
+            .expect("register asset definition");
+            let asset_definition = first_tx
+                .world
+                .asset_definition(&asset_definition_id)
+                .expect("registered asset definition");
+            super::isi::ensure_offline_escrow_account(&asset_definition, &authority, &mut first_tx)
+                .expect("materialize deterministic offline escrow account");
+            escrow_account_id =
+                super::isi::offline_escrow_account_id(first_tx.chain_id(), &asset_definition_id);
+            escrow_asset_id = AssetId::new(asset_definition_id.clone(), escrow_account_id.clone());
+            Mint::asset_quantity(5_u32, escrow_asset_id.clone())
+                .execute(&authority, &mut first_tx)
+                .expect("mint live offline escrow backing");
+            first_tx.apply();
+        }
+
+        let mut second_tx = block.transaction();
+        assert!(
+            second_tx.settlement.offline.escrow_accounts.is_empty(),
+            "transaction-local escrow bindings must not be required for protection"
+        );
+        let err = Unregister::account(escrow_account_id.clone())
+            .execute(&authority, &mut second_tx)
+            .expect_err("live offline escrow backing must survive account unregistration");
+        let err_string = err.to_string();
+        assert!(
+            err_string.contains("offline escrow account"),
+            "error should explain the live offline escrow conflict: {err_string}"
+        );
+        assert!(
+            second_tx.world.accounts.get(&escrow_account_id).is_some(),
+            "offline escrow account should remain after rejected unregister"
+        );
+        assert_eq!(
+            second_tx
+                .world
+                .asset(&escrow_asset_id)
+                .expect("offline escrow backing should remain")
+                .value()
+                .as_ref()
+                .clone(),
+            Quantity::from(5_u32),
+        );
+    }
+
+    #[test]
     fn ordinary_metadata_does_not_reserve_an_offline_escrow_account() {
         let chain_id: ChainId = "offline-escrow-testnet".parse().expect("chain id");
         let domain_id: DomainId = DomainId::try_new("offline", "world").expect("domain id");
@@ -10482,51 +10477,6 @@ mod tests {
                 .expect("definition exists")
                 .balance_scope_policy(),
             iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted
-        );
-    }
-
-    #[test]
-    fn register_restricted_asset_definition_requires_explicit_owning_domain() {
-        let state = test_state();
-        let authority = (*ALICE_ID).clone();
-        let paynet = DataSpaceId::new(7);
-        let definition_id = AssetDefinitionId::from_uuid_bytes([
-            0x8a, 0xb5, 0xec, 0x8c, 0x32, 0xdf, 0x46, 0xcf, 0x87, 0xca, 0x3e, 0xd9, 0xce, 0x36,
-            0xa8, 0x19,
-        ])
-        .expect("opaque asset definition id");
-        let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("dataspace-root alias");
-        let definition = AssetDefinition::numeric(
-            definition_id.clone(),
-            "unit".to_owned(),
-            AssetBalancePolicy::DataspaceRestricted,
-            None,
-        )
-        .with_alias(Some(alias.clone()));
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
-        tx.current_dataspace_id = Some(paynet);
-        tx.world.current_dataspace_id = Some(paynet);
-
-        let error = Register::asset_definition(definition)
-            .execute(&authority, &mut tx)
-            .expect_err("restricted definitions must not omit authoritative domain context");
-        assert!(
-            error
-                .to_string()
-                .contains("requires an explicit owning domain"),
-            "unexpected error: {error}"
-        );
-        assert!(tx.world.asset_definitions.get(&definition_id).is_none());
-        assert!(tx.world.asset_definition_aliases.get(&alias).is_none());
-        assert!(
-            tx.world
-                .asset_definition_domains
-                .get(&definition_id)
-                .is_none()
         );
     }
 

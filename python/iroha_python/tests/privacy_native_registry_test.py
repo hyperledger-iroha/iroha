@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from iroha_python.privacy_catalog import PRIVACY_PROTOCOL_IDS_V1
@@ -18,9 +19,30 @@ def test_native_hosts_use_the_typed_local_catalog_without_synthetic_network_stat
         source = (ROOT / relative).read_text(encoding="utf-8")
         assert "PrivacyCompiledProfileCatalogV1" in source
         assert "PrivacyProtocolIdV1::ALL" in source
+        assert "compiled_privacy_profile_catalog_v1" in source
+        assert "validate_local_privacy_compiled_profile_catalog_archive_v1" in source
+        assert "PrivacyConsensusPolicyV1::taira_default()" not in source
+        assert "fn privacy_capabilities(" not in source
+        assert "pub fn privacy_capabilities_v1(" not in source
+        assert 'name = "privacy_capabilities_v1"' not in source
+        assert "iroha_privacy_capabilities_v1" not in source
         assert "committed_privacy_capability_snapshot_v1" not in source
         assert "struct PrivacyAlgorithmEntry" not in source
         assert "struct PrivacyCapabilitiesV1" not in source
+
+
+def test_runtime_readiness_is_only_built_from_a_fresh_committed_torii_view() -> None:
+    runtime = (ROOT / "crates/iroha_torii/src/runtime.rs").read_text(
+        encoding="utf-8"
+    )
+    state = (ROOT / "crates/iroha_core/src/state.rs").read_text(encoding="utf-8")
+    assert "PrivacyCapabilitySnapshotV1" in runtime
+    assert re.search(
+        r"state\s*\.view\(\)\s*\.privacy_capability_snapshot_v1\(\)", runtime
+    )
+    assert "committed_privacy_capability_snapshot_v1(" in state
+    assert "world.privacy_consensus_policy()" in state
+    assert re.search(r"world\s*\.privacy_activations\(\)", state)
 
 
 def test_python_ids_match_the_rust_first_release_labels() -> None:

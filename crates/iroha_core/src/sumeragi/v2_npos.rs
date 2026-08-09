@@ -1516,9 +1516,11 @@ mod tests {
     use crate::{kura::Kura, query::store::LiveQueryStore, state::World};
 
     fn test_network_id(seed: u8) -> NetworkId {
-        NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
-            iroha_data_model::block::BlockHeader,
-        >::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH])))
+        NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([seed; Hash::LENGTH]),
+            ),
+        )
     }
 
     fn keys() -> Vec<KeyPair> {
@@ -1592,10 +1594,11 @@ mod tests {
                 )),
                 payload_hash: Hash::new(b"parent-payload"),
             },
-            execution_commitment: wire::ExecutionCommitment::without_topups(
+            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"parent-state"),
                 Hash::new(b"parent-post-state"),
                 Hash::new(b"parent-ordinary-writes"),
+                1,
                 Hash::new(b"parent-executed-block-wire"),
             ),
             signers: vec![0, 1, 2],

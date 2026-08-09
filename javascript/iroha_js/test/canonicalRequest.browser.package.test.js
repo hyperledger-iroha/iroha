@@ -112,7 +112,7 @@ test("packed canonical-request subpath executes securely and has strict DOM type
       label.includes("canonicalRequest"),
     );
     assert.ok(target);
-    assert.equal(result.outputFiles[0].contents.byteLength, 98_090);
+    assert.equal(result.outputFiles[0].contents.byteLength, 98_089);
     assert.ok(
       result.outputFiles[0].contents.byteLength <= Math.floor(97_869 * 1.05),
       "packed canonical-request regressed more than 5% from the protected pre-reset tree",

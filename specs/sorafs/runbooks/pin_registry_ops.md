@@ -4,7 +4,10 @@ This runbook documents how to monitor and triage the SoraFS pin registry and its
 service-level agreements (SLAs). The metrics originate from `iroha_torii` and are exported
 via Prometheus under the `torii_sorafs_*` namespace. Torii samples the registry state on a 30 second
 interval in the background, so dashboards remain current even when no operators are polling
-the `/v1/sorafs/pin/*` endpoints. Import the curated dashboard
+the `/v1/sorafs/pin/*` endpoints. These sampled gauges are operational signals,
+not the consensus quota or settlement authority. Exact live manifest count and
+content-byte charges come from `PinManifestPageV1.charged_usage`, a
+consensus-maintained O(1) summary returned at a finalized height/hash. Import the curated dashboard
 (`specs/grafana_sorafs_pin_registry.json`) for a ready-to-use Grafana layout that maps
 directly to the sections below.
 
@@ -24,6 +27,27 @@ directly to the sections below.
 | `torii_sorafs_replication_deadline_slack_epochs` | `stat` (`avg` \| `p95` \| `max` \| `count`) | Pending-order slack windows (deadline minus issued epoch). |
 
 All gauges reset on every snapshot pull, so dashboards should sample at `1m` cadence or faster.
+
+## Authoritative pin accounting and readback
+
+- `GET /v1/sorafs/pin` returns bounded `PinManifestSummaryV1` rows in ascending
+  digest order. `limit` is `1..=256` and `max_bytes` is
+  `1024..=262144`; both ceilings apply to every response.
+- Continue only with the returned non-zero `next_after_digest` as the exclusive
+  `after_digest_hex` value. Repeat the page's paired
+  `finalized_cursor.height` and `finalized_cursor.block_hash` as
+  `expected_finalized_height` and
+  `expected_finalized_block_hash_hex`. A stale anchor returns HTTP 409. Offset
+  pagination is not part of the first-release pin-list contract.
+- Read `charged_usage.manifest_count` and `charged_usage.content_bytes` for the
+  authoritative live charge at that anchor. This is maintained transactionally
+  with global/per-account admission, manual retirement, and consensus-time
+  expiry; do not sum a full page set or scrape Prometheus to reconstruct it.
+- Use `GET /v1/sorafs/pin/{digest_hex}` for one exact
+  `PinManifestFinalizedRecordV1`. Alias proofs, metadata, council-envelope
+  commitment, and fee-payment detail are deliberately absent from list rows;
+  the exact route is bounded to a single admitted record and accepts only the
+  optional paired finalized precondition.
 
 ## Grafana dashboard
 
@@ -136,6 +160,13 @@ Follow this staged procedure when enabling or tightening the alias cache policy 
      `expected_finalized_height`/`expected_finalized_block_hash_hex`, and a
      stale pair. Require exact `PinManifestFinalizedRecordV1` JSON, `no-store`,
      and HTTP 409 for the stale cursor.
+   - Exercise `/v1/sorafs/pin` with the minimum and maximum row/byte limits,
+     each lifecycle filter, and at least two pages. Require ascending bounded
+     summaries, exclusive `next_after_digest` continuation under the same
+     height/hash pair, exact `charged_usage`, `no-store`, and HTTP 409 after
+     substituting either finalized coordinate. Require rejection of offsets,
+     duplicate/unknown selectors, unpaired anchors, zero cursors, and pages
+     whose encoded rows exceed `max_bytes`.
    - Exercise `/v1/sorafs/aliases` separately with synthetic proofs covering
      fresh, refresh-window, expired, and hard-expired cases. Validate its HTTP
      status codes, `Sora-Proof-Status`, `Retry-After`, `Warning`, and JSON body

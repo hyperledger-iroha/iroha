@@ -50,13 +50,14 @@ jobs:
       - name: Submit manifest
         env:
           TORII_URL: https://gateway.example/v2
+          IROHA_NETWORK_ID: ${{ vars.IROHA_NETWORK_ID }}
           IROHA_PRIVATE_KEY: ${{ secrets.IROHA_PRIVATE_KEY }}
         run: |
           sorafs_cli manifest submit \
             --manifest=artifacts/site.manifest.to \
             --chunk-plan=artifacts/site.plan.json \
             --torii-url="$TORII_URL" \
-            --resolve-submitted-epoch=true \
+            --network-id="$IROHA_NETWORK_ID" \
             --authority=<i105-account-id> \
             --private-key="$IROHA_PRIVATE_KEY" \
             --summary-out=artifacts/site.submit.json
@@ -111,7 +112,7 @@ sorafs:publish:
   needs: ["sorafs:build"]
   image: rust:1.81
   script:
-    - sorafs_cli manifest submit --manifest=artifacts/site.manifest.to --chunk-plan=artifacts/site.plan.json --torii-url="$TORII_URL" --resolve-submitted-epoch=true --authority=<i105-account-id> --private-key="$IROHA_PRIVATE_KEY" --summary-out=artifacts/site.submit.json
+    - sorafs_cli manifest submit --manifest=artifacts/site.manifest.to --chunk-plan=artifacts/site.plan.json --torii-url="$TORII_URL" --network-id="$IROHA_NETWORK_ID" --authority=<i105-account-id> --private-key="$IROHA_PRIVATE_KEY" --summary-out=artifacts/site.submit.json
     - sorafs_cli proof verify --manifest=artifacts/site.manifest.to --car=artifacts/site.car --chunk-plan=artifacts/site.plan.json --summary-out=artifacts/site.verify.json
   artifacts:
     paths:
@@ -120,6 +121,10 @@ sorafs:publish:
 
 - Failure of any CLI step causes the pipeline to halt, preserving consistent
   artefacts.
+- `IROHA_NETWORK_ID` must be the exact identity derived from the deployment's
+  expected genesis-header hash. The submit command signs one native
+  `RegisterPinManifest` transaction for that network; lifecycle event epochs
+  are derived by consensus and have no CI override flag.
 
 ## Release authenticity job
 

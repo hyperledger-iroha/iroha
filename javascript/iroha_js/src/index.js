@@ -104,12 +104,10 @@ export {
   KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES,
   KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
   KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES,
-  normalizeKagemushaAssetSelector,
   normalizeKagemushaOperationId,
   normalizeKagemushaOperationReference,
   normalizeKagemushaOperationStatus,
   normalizeKagemushaRedeemRequestV4,
-  normalizeKagemushaReadinessV4,
   normalizeOfflineStatus,
   normalizeKagemushaTopUpRequestV4,
 } from "./kagemushaOffline.js";
@@ -149,8 +147,8 @@ export {
   verifySm2,
   sm2PublicKeyMultihash,
   buildKaigiRosterJoinProof,
-  PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1,
   PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES,
+  PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1,
   PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
   isPrivacyNativeAvailable,
   privacyCompiledProfileCatalogV1,
@@ -355,11 +353,6 @@ export {
   deriveContractAddress,
   prepareBrowserContractArtifact,
 } from "./smartContractDeployment.js";
-export {
-  IVM_ARTIFACT_ADMISSION_MAX_INPUT_BYTES,
-  instantiateIvmArtifactAdmissionWasm,
-  verifyIvmContractArtifactAdmission,
-} from "./ivmArtifactAdmissionWasm.js";
 export {
   buildBurnAssetInstruction,
   buildCancelAssetLockInstruction,

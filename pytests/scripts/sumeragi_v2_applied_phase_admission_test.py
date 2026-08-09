@@ -204,13 +204,17 @@ def test_applied_phase_production_preflight_must_precede_ordinal_allocation(
         for item in module.rust_items(source, "enqueue")
         if item.brace_context == runtime_context
     )
-    old = "if self.command_admission_is_suppressed(tag, &command)? {"
+    old = "let preflight = self.command_admission_preflight(tag, class, &command)?;"
     assert enqueue.source.count(old) == 1
     item_start = source.index(enqueue.source)
     item_end = item_start + len(enqueue.source)
     runtime_path.write_text(
         source[:item_start]
-        + enqueue.source.replace(old, "if false {", 1)
+        + enqueue.source.replace(
+            old,
+            "let preflight = RuntimeCommandAdmissionPreflight::Admit;",
+            1,
+        )
         + source[item_end:],
         encoding="utf-8",
     )
@@ -222,7 +226,8 @@ def test_applied_phase_production_preflight_must_precede_ordinal_allocation(
     )
 
     assert any(
-        "preflight suppression must precede physical enqueue and ordinal allocation"
+        "preflight must coalesce or restore the exact dormant owner before "
+        "physical enqueue and fresh ordinal allocation"
         in error
         for error in errors
     ), errors

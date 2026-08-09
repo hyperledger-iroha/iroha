@@ -2625,7 +2625,7 @@ async fn submit_grouped_native_amx_transactions(
     );
     let payloads = transactions
         .iter()
-        .map(|transaction| submitter.prepare_transaction_payload(transaction))
+        .map(Client::prepare_transaction_payload)
         .collect::<Vec<_>>();
     submitter
         .submit_prepared_transaction_payload_batch_async(&payloads)
@@ -2692,7 +2692,7 @@ fn offline_kura_config(store_dir: std::path::PathBuf) -> KuraConfig {
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
         block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
-        eviction_required_replicas: defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }
 

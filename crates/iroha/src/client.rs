@@ -78,7 +78,7 @@ use iroha_torii_shared::{
     },
     uri as torii_uri,
 };
-use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
+use iroha_version::codec::EncodeVersioned;
 use norito::{
     decode_from_bytes,
     derive::{JsonDeserialize, JsonSerialize},
@@ -1744,15 +1744,20 @@ pub struct MultisigSpecResponse {
 )]
 pub struct SccpRegistryLimits {
     /// Maximum governed lanes retained by the registry.
-    pub max_governed_lanes: u32,
+    #[norito(rename = "max_governed_lanes")]
+    pub governed_lanes: u32,
     /// Maximum nonterminal route revisions across all lanes.
-    pub max_live_governed_routes: u32,
+    #[norito(rename = "max_live_governed_routes")]
+    pub live_governed_routes: u32,
     /// Maximum nonterminal route revisions in one lane.
-    pub max_live_routes_per_lane: u32,
+    #[norito(rename = "max_live_routes_per_lane")]
+    pub live_routes_per_lane: u32,
     /// Maximum retained route revisions in one lane, including retired revisions.
-    pub max_retained_routes_per_lane: u32,
+    #[norito(rename = "max_retained_routes_per_lane")]
+    pub retained_routes_per_lane: u32,
     /// Maximum retained native trust anchors in one lane.
-    pub max_retained_native_trust_anchors_per_lane: u32,
+    #[norito(rename = "max_retained_native_trust_anchors_per_lane")]
+    pub retained_native_trust_anchors_per_lane: u32,
 }
 
 #[derive(
@@ -1774,51 +1779,74 @@ pub struct SccpRegistryLimits {
 )]
 pub struct SccpResourceLimits {
     /// Maximum successful outbound SCCP messages committed by one block.
-    pub max_outbound_messages_per_block: u32,
+    #[norito(rename = "max_outbound_messages_per_block")]
+    pub outbound_messages_per_block: u32,
     /// Maximum canonical bytes retained for one outbound SCCP payload.
-    pub max_outbound_message_payload_bytes: u64,
+    #[norito(rename = "max_outbound_message_payload_bytes")]
+    pub outbound_message_payload_bytes: u64,
     /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
-    pub max_pending_outbound_messages: u64,
+    #[norito(rename = "max_pending_outbound_messages")]
+    pub pending_outbound_messages: u64,
     /// Maximum canonical outbound payload bytes awaiting destination proof acceptance.
-    pub max_pending_outbound_payload_bytes: u64,
+    #[norito(rename = "max_pending_outbound_payload_bytes")]
+    pub pending_outbound_payload_bytes: u64,
     /// Maximum closed SCCP proofs in one transaction.
-    pub max_proofs_per_transaction: u32,
+    #[norito(rename = "max_proofs_per_transaction")]
+    pub proofs_per_transaction: u32,
     /// Maximum closed SCCP proofs committed in one block.
-    pub max_proofs_per_block: u32,
+    #[norito(rename = "max_proofs_per_block")]
+    pub proofs_per_block: u32,
     /// Maximum canonical bytes retained for one closed SCCP proof.
-    pub max_proof_bytes_per_proof: u64,
+    #[norito(rename = "max_proof_bytes_per_proof")]
+    pub proof_bytes_per_proof: u64,
     /// Maximum aggregate SCCP proof bytes in one transaction.
-    pub max_proof_bytes_per_transaction: u64,
+    #[norito(rename = "max_proof_bytes_per_transaction")]
+    pub proof_bytes_per_transaction: u64,
     /// Maximum aggregate SCCP proof bytes committed in one block.
-    pub max_proof_bytes_per_block: u64,
+    #[norito(rename = "max_proof_bytes_per_block")]
+    pub proof_bytes_per_block: u64,
     /// Maximum native-finality continuation headers in one transaction.
-    pub max_native_headers_per_transaction: u32,
+    #[norito(rename = "max_native_headers_per_transaction")]
+    pub native_headers_per_transaction: u32,
     /// Maximum native-finality continuation headers committed in one block.
-    pub max_native_headers_per_block: u32,
+    #[norito(rename = "max_native_headers_per_block")]
+    pub native_headers_per_block: u32,
     /// Maximum Ethereum light-client updates in one transaction.
-    pub max_ethereum_light_client_updates_per_transaction: u32,
+    #[norito(rename = "max_ethereum_light_client_updates_per_transaction")]
+    pub ethereum_light_client_updates_per_transaction: u32,
     /// Maximum Ethereum light-client updates committed in one block.
-    pub max_ethereum_light_client_updates_per_block: u32,
+    #[norito(rename = "max_ethereum_light_client_updates_per_block")]
+    pub ethereum_light_client_updates_per_block: u32,
     /// Maximum framed native-finality header bytes in one transaction.
-    pub max_native_header_bytes_per_transaction: u64,
+    #[norito(rename = "max_native_header_bytes_per_transaction")]
+    pub native_header_bytes_per_transaction: u64,
     /// Maximum framed native-finality header bytes committed in one block.
-    pub max_native_header_bytes_per_block: u64,
+    #[norito(rename = "max_native_header_bytes_per_block")]
+    pub native_header_bytes_per_block: u64,
     /// Maximum secp256k1 recoveries in one transaction.
-    pub max_secp256k1_recoveries_per_transaction: u32,
+    #[norito(rename = "max_secp256k1_recoveries_per_transaction")]
+    pub secp256k1_recoveries_per_transaction: u32,
     /// Maximum secp256k1 recoveries committed in one block.
-    pub max_secp256k1_recoveries_per_block: u32,
+    #[norito(rename = "max_secp256k1_recoveries_per_block")]
+    pub secp256k1_recoveries_per_block: u32,
     /// Maximum BLS aggregate-signature checks in one transaction.
-    pub max_bls_aggregate_checks_per_transaction: u32,
+    #[norito(rename = "max_bls_aggregate_checks_per_transaction")]
+    pub bls_aggregate_checks_per_transaction: u32,
     /// Maximum BLS aggregate-signature checks committed in one block.
-    pub max_bls_aggregate_checks_per_block: u32,
+    #[norito(rename = "max_bls_aggregate_checks_per_block")]
+    pub bls_aggregate_checks_per_block: u32,
     /// Maximum BLS key-validation and signer-contribution work in one transaction.
-    pub max_bls_signer_contributions_per_transaction: u32,
+    #[norito(rename = "max_bls_signer_contributions_per_transaction")]
+    pub bls_signer_contributions_per_transaction: u32,
     /// Maximum BLS key-validation and signer-contribution work committed in one block.
-    pub max_bls_signer_contributions_per_block: u32,
+    #[norito(rename = "max_bls_signer_contributions_per_block")]
+    pub bls_signer_contributions_per_block: u32,
     /// Maximum BN254 pairing-product checks in one transaction.
-    pub max_bn254_pairing_checks_per_transaction: u32,
+    #[norito(rename = "max_bn254_pairing_checks_per_transaction")]
+    pub bn254_pairing_checks_per_transaction: u32,
     /// Maximum BN254 pairing-product checks committed in one block.
-    pub max_bn254_pairing_checks_per_block: u32,
+    #[norito(rename = "max_bn254_pairing_checks_per_block")]
+    pub bn254_pairing_checks_per_block: u32,
 }
 
 #[derive(
@@ -1862,21 +1890,21 @@ pub struct SccpCapabilities {
 
 fn expected_sccp_registry_limits() -> SccpRegistryLimits {
     SccpRegistryLimits {
-        max_governed_lanes: u32::try_from(iroha_data_model::bridge::SCCP_V1_MAX_GOVERNED_LANES)
+        governed_lanes: u32::try_from(iroha_data_model::bridge::SCCP_V1_MAX_GOVERNED_LANES)
             .expect("SCCP governed-lane limit fits u32"),
-        max_live_governed_routes: u32::try_from(
+        live_governed_routes: u32::try_from(
             iroha_data_model::bridge::SCCP_V1_MAX_LIVE_GOVERNED_ROUTES,
         )
         .expect("SCCP global live-route limit fits u32"),
-        max_live_routes_per_lane: u32::try_from(
+        live_routes_per_lane: u32::try_from(
             iroha_data_model::bridge::SCCP_V1_MAX_LIVE_ROUTES_PER_LANE,
         )
         .expect("SCCP lane live-route limit fits u32"),
-        max_retained_routes_per_lane: u32::try_from(
+        retained_routes_per_lane: u32::try_from(
             iroha_data_model::bridge::SCCP_V1_MAX_RETAINED_ROUTES_PER_LANE,
         )
         .expect("SCCP retained-route limit fits u32"),
-        max_retained_native_trust_anchors_per_lane: u32::try_from(
+        retained_native_trust_anchors_per_lane: u32::try_from(
             iroha_data_model::bridge::SCCP_V1_MAX_RETAINED_NATIVE_TRUST_ANCHORS_PER_LANE,
         )
         .expect("SCCP retained-anchor limit fits u32"),
@@ -1892,60 +1920,60 @@ fn validate_sccp_resource_limits(limits: SccpResourceLimits) -> Result<()> {
         ($($field:ident),+ $(,)?) => {
             $(if limits.$field == 0 {
                 return Err(eyre!(
-                    "SCCP capabilities resource_limits.{} must be nonzero",
+                    "SCCP capabilities resource_limits.max_{} must be nonzero",
                     stringify!($field)
                 ));
             })+
         };
     }
     require_nonzero!(
-        max_outbound_messages_per_block,
-        max_outbound_message_payload_bytes,
-        max_pending_outbound_messages,
-        max_pending_outbound_payload_bytes,
-        max_proofs_per_transaction,
-        max_proofs_per_block,
-        max_proof_bytes_per_proof,
-        max_proof_bytes_per_transaction,
-        max_proof_bytes_per_block,
-        max_native_headers_per_transaction,
-        max_native_headers_per_block,
-        max_ethereum_light_client_updates_per_transaction,
-        max_ethereum_light_client_updates_per_block,
-        max_native_header_bytes_per_transaction,
-        max_native_header_bytes_per_block,
-        max_secp256k1_recoveries_per_transaction,
-        max_secp256k1_recoveries_per_block,
-        max_bls_aggregate_checks_per_transaction,
-        max_bls_aggregate_checks_per_block,
-        max_bls_signer_contributions_per_transaction,
-        max_bls_signer_contributions_per_block,
-        max_bn254_pairing_checks_per_transaction,
-        max_bn254_pairing_checks_per_block,
+        outbound_messages_per_block,
+        outbound_message_payload_bytes,
+        pending_outbound_messages,
+        pending_outbound_payload_bytes,
+        proofs_per_transaction,
+        proofs_per_block,
+        proof_bytes_per_proof,
+        proof_bytes_per_transaction,
+        proof_bytes_per_block,
+        native_headers_per_transaction,
+        native_headers_per_block,
+        ethereum_light_client_updates_per_transaction,
+        ethereum_light_client_updates_per_block,
+        native_header_bytes_per_transaction,
+        native_header_bytes_per_block,
+        secp256k1_recoveries_per_transaction,
+        secp256k1_recoveries_per_block,
+        bls_aggregate_checks_per_transaction,
+        bls_aggregate_checks_per_block,
+        bls_signer_contributions_per_transaction,
+        bls_signer_contributions_per_block,
+        bn254_pairing_checks_per_transaction,
+        bn254_pairing_checks_per_block,
     );
     macro_rules! require_json_safe {
         ($($field:ident),+ $(,)?) => {
             $(if limits.$field > iroha_data_model::bridge::SCCP_V1_JSON_SAFE_INTEGER_MAX {
                 return Err(eyre!(
-                    "SCCP capabilities resource_limits.{} exceeds the V1 JSON-safe integer maximum",
+                    "SCCP capabilities resource_limits.max_{} exceeds the V1 JSON-safe integer maximum",
                     stringify!($field)
                 ));
             })+
         };
     }
     require_json_safe!(
-        max_outbound_message_payload_bytes,
-        max_pending_outbound_messages,
-        max_pending_outbound_payload_bytes,
-        max_proof_bytes_per_proof,
-        max_proof_bytes_per_transaction,
-        max_proof_bytes_per_block,
-        max_native_header_bytes_per_transaction,
-        max_native_header_bytes_per_block,
+        outbound_message_payload_bytes,
+        pending_outbound_messages,
+        pending_outbound_payload_bytes,
+        proof_bytes_per_proof,
+        proof_bytes_per_transaction,
+        proof_bytes_per_block,
+        native_header_bytes_per_transaction,
+        native_header_bytes_per_block,
     );
-    if limits.max_outbound_messages_per_block
+    if limits.outbound_messages_per_block
         != iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
-        || limits.max_outbound_message_payload_bytes
+        || limits.outbound_message_payload_bytes
             != u64::try_from(iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1)
                 .expect("SCCP outbound payload bound fits u64")
     {
@@ -1953,7 +1981,7 @@ fn validate_sccp_resource_limits(limits: SccpResourceLimits) -> Result<()> {
             "SCCP capabilities advertise incompatible fixed outbound message limits"
         ));
     }
-    if limits.max_proof_bytes_per_proof > limits.max_proof_bytes_per_transaction {
+    if limits.proof_bytes_per_proof > limits.proof_bytes_per_transaction {
         return Err(eyre!(
             "SCCP capabilities per-proof byte limit must not exceed its transaction limit"
         ));
@@ -1968,49 +1996,45 @@ fn validate_sccp_resource_limits(limits: SccpResourceLimits) -> Result<()> {
             }
         };
     }
+    require_transaction_within_block!(proofs_per_transaction, proofs_per_block, "proof count");
     require_transaction_within_block!(
-        max_proofs_per_transaction,
-        max_proofs_per_block,
-        "proof count"
-    );
-    require_transaction_within_block!(
-        max_proof_bytes_per_transaction,
-        max_proof_bytes_per_block,
+        proof_bytes_per_transaction,
+        proof_bytes_per_block,
         "proof bytes"
     );
     require_transaction_within_block!(
-        max_native_headers_per_transaction,
-        max_native_headers_per_block,
+        native_headers_per_transaction,
+        native_headers_per_block,
         "native headers"
     );
     require_transaction_within_block!(
-        max_ethereum_light_client_updates_per_transaction,
-        max_ethereum_light_client_updates_per_block,
+        ethereum_light_client_updates_per_transaction,
+        ethereum_light_client_updates_per_block,
         "Ethereum light-client updates"
     );
     require_transaction_within_block!(
-        max_native_header_bytes_per_transaction,
-        max_native_header_bytes_per_block,
+        native_header_bytes_per_transaction,
+        native_header_bytes_per_block,
         "native header bytes"
     );
     require_transaction_within_block!(
-        max_secp256k1_recoveries_per_transaction,
-        max_secp256k1_recoveries_per_block,
+        secp256k1_recoveries_per_transaction,
+        secp256k1_recoveries_per_block,
         "secp256k1 recoveries"
     );
     require_transaction_within_block!(
-        max_bls_aggregate_checks_per_transaction,
-        max_bls_aggregate_checks_per_block,
+        bls_aggregate_checks_per_transaction,
+        bls_aggregate_checks_per_block,
         "BLS aggregate checks"
     );
     require_transaction_within_block!(
-        max_bls_signer_contributions_per_transaction,
-        max_bls_signer_contributions_per_block,
+        bls_signer_contributions_per_transaction,
+        bls_signer_contributions_per_block,
         "BLS signer contributions"
     );
     require_transaction_within_block!(
-        max_bn254_pairing_checks_per_transaction,
-        max_bn254_pairing_checks_per_block,
+        bn254_pairing_checks_per_transaction,
+        bn254_pairing_checks_per_block,
         "BN254 pairing checks"
     );
     Ok(())
@@ -4552,6 +4576,34 @@ fn decode_zk_vk_hex32(value: &str, context: &str) -> Result<[u8; 32]> {
     Ok(output)
 }
 
+fn expected_zk_vk_len(object: &norito::json::Map, vk_bytes: Option<&[u8]>) -> Result<u32> {
+    if let Some(bytes) = vk_bytes {
+        u32::try_from(bytes.len()).wrap_err("verifying-key draft key length exceeds u32")
+    } else {
+        validate_optional_json_positive_u32_field(
+            object,
+            "vk_len",
+            "verifying-key draft request.vk_len",
+        )?
+        .ok_or_else(|| eyre!("verifying-key draft request.vk_len is required"))
+    }
+}
+
+fn expected_zk_vk_status(
+    object: &norito::json::Map,
+) -> Result<iroha_data_model::confidential::ConfidentialStatus> {
+    use iroha_data_model::confidential::ConfidentialStatus;
+
+    match object.get("status").and_then(norito::json::Value::as_str) {
+        None | Some("Active") => Ok(ConfidentialStatus::Active),
+        Some("Proposed") => Ok(ConfidentialStatus::Proposed),
+        Some("Withdrawn") => Ok(ConfidentialStatus::Withdrawn),
+        Some(status) => Err(eyre!(
+            "verifying-key draft request uses invalid status {status}"
+        )),
+    }
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "the verifier-key draft reconstruction keeps its ordered fail-closed validation in one audit surface"
@@ -4559,10 +4611,7 @@ fn decode_zk_vk_hex32(value: &str, context: &str) -> Result<[u8; 32]> {
 fn expected_zk_vk_record_from_request(
     request: &norito::json::Value,
 ) -> Result<iroha_data_model::proof::VerifyingKeyRecord> {
-    use iroha_data_model::{
-        confidential::ConfidentialStatus,
-        proof::{VerifyingKeyBox, VerifyingKeyRecord},
-    };
+    use iroha_data_model::proof::{VerifyingKeyBox, VerifyingKeyRecord};
 
     let object = require_json_object(request, "verifying-key draft request")?;
     let backend =
@@ -4608,16 +4657,7 @@ fn expected_zk_vk_record_from_request(
             ));
         }
     };
-    let vk_len = if let Some(bytes) = vk_bytes.as_ref() {
-        u32::try_from(bytes.len()).wrap_err("verifying-key draft key length exceeds u32")?
-    } else {
-        validate_optional_json_positive_u32_field(
-            object,
-            "vk_len",
-            "verifying-key draft request.vk_len",
-        )?
-        .ok_or_else(|| eyre!("verifying-key draft request.vk_len is required"))?
-    };
+    let vk_len = expected_zk_vk_len(object, vk_bytes.as_deref())?;
     let mut record = VerifyingKeyRecord::new_with_owner(
         version,
         circuit_id,
@@ -4657,16 +4697,7 @@ fn expected_zk_vk_record_from_request(
         .get("withdraw_height")
         .and_then(norito::json::Value::as_u64);
     record.key = vk_bytes.map(|bytes| VerifyingKeyBox::new(backend.into(), bytes));
-    record.status = match object.get("status").and_then(norito::json::Value::as_str) {
-        None | Some("Active") => ConfidentialStatus::Active,
-        Some("Proposed") => ConfidentialStatus::Proposed,
-        Some("Withdrawn") => ConfidentialStatus::Withdrawn,
-        Some(status) => {
-            return Err(eyre!(
-                "verifying-key draft request uses invalid status {status}"
-            ));
-        }
-    };
+    record.status = expected_zk_vk_status(object)?;
     Ok(record)
 }
 
@@ -8363,26 +8394,6 @@ mod offline_client_tests {
         assert_eq!(snapshot.url.path(), torii_uri::OFFLINE_READINESS);
         assert!(snapshot.url.query().is_none());
         assert_single_accept_header(snapshot, ACCEPT_NORITO_PREFERRED);
-    }
-
-    #[test]
-    #[expect(deprecated)]
-    fn deprecated_readiness_selector_is_ignored() {
-        let capability = universal_offline_capability();
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&capability).expect("encode capability"))
-            .expect("response");
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let result = with_mock_http(respond_with(&snapshots, response), || {
-            client_with_base_url(base_url()).get_offline_readiness(&asset_definition_id("ignored"))
-        })
-        .expect("compatibility response");
-
-        assert_eq!(result, capability);
-        let snapshots = snapshots.lock().expect("snapshots");
-        assert!(snapshots[0].url.query().is_none());
     }
 
     #[test]
@@ -13303,7 +13314,6 @@ impl Client {
         reason = "this remains an instance method in the stable client workflow API"
     )]
     pub fn prepare_transaction_payload(
-        &self,
         transaction: &SignedTransaction,
     ) -> PreparedTransactionPayload {
         PreparedTransactionPayload {
@@ -13627,7 +13637,7 @@ impl Client {
     ) -> Result<HashOf<SignedTransaction>> {
         self.ensure_transaction_submit_compatibility()?;
         iroha_logger::trace!(tx=?transaction, "Submitting");
-        let payload = self.prepare_transaction_payload(transaction);
+        let payload = Self::prepare_transaction_payload(transaction);
         let hash = payload.hash();
         let req = self.prepare_transaction_payload_request::<DefaultRequestBuilder>(&payload);
         let response = req
@@ -13669,7 +13679,7 @@ impl Client {
         &self,
         transaction: &SignedTransaction,
     ) -> Result<HashOf<SignedTransaction>> {
-        let payload = self.prepare_transaction_payload(transaction);
+        let payload = Self::prepare_transaction_payload(transaction);
         self.submit_prepared_transaction_payload_async(&payload)
             .await
     }
@@ -17123,7 +17133,7 @@ impl Client {
         transaction: &SignedTransaction,
     ) -> Result<HashOf<SignedTransaction>> {
         self.ensure_transaction_submit_compatibility()?;
-        let payload = self.prepare_transaction_payload(transaction);
+        let payload = Self::prepare_transaction_payload(transaction);
         let hash = payload.hash();
         let response = DefaultRequestBuilder::new(
             HttpMethod::POST,
@@ -17576,7 +17586,7 @@ impl Client {
         transaction: &SignedTransaction,
     ) -> Result<HashOf<SignedTransaction>> {
         self.ensure_transaction_submit_compatibility()?;
-        let payload = self.prepare_transaction_payload(transaction);
+        let payload = Self::prepare_transaction_payload(transaction);
         let hash = payload.hash();
         let response = DefaultRequestBuilder::new(
             HttpMethod::POST,
@@ -17788,7 +17798,7 @@ impl Client {
         transaction: &SignedTransaction,
     ) -> Result<HashOf<SignedTransaction>> {
         self.ensure_transaction_submit_compatibility()?;
-        let payload = self.prepare_transaction_payload(transaction);
+        let payload = Self::prepare_transaction_payload(transaction);
         let hash = payload.hash();
         let response = DefaultRequestBuilder::new(
             HttpMethod::POST,
@@ -19704,11 +19714,11 @@ impl Client {
 
     /// POST `/v1/contracts/call` with a JSON body.
     ///
-    /// Torii first prepares the canonical contract executable. This client then
-    /// quotes that exact unsigned payload, replaces only `fee_payment`, signs
-    /// it with `private_key`, and submits it through the transaction pipeline.
-    /// When `private_key` is absent, the returned scaffold and signing message
-    /// already contain the fixed-point quoted intent for external signing.
+    /// Torii prepares and quotes the canonical unsigned transaction payload. This
+    /// client verifies the exact payload/signing-message pair and, when
+    /// `private_key` is present, signs that payload without rebuilding it before
+    /// submitting it through the transaction pipeline. When `private_key` is
+    /// absent, the verified unsigned draft is returned for external signing.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
@@ -19760,30 +19770,75 @@ impl Client {
         )?;
         let mut response_value =
             Self::parse_json_ok_response(&response, "contract call prepare request")?;
-        let scaffold_b64 = response_value
-            .get("signed_transaction_b64")
-            .and_then(norito::json::Value::as_str)
-            .ok_or_else(|| {
-                eyre!("contract call prepare response omitted signed_transaction_b64")
-            })?;
-        let scaffold_bytes = base64::engine::general_purpose::STANDARD
-            .decode(scaffold_b64.as_bytes())
-            .wrap_err("decode contract call transaction scaffold")?;
-        if base64::engine::general_purpose::STANDARD.encode(&scaffold_bytes) != scaffold_b64 {
+        for retired in ["transaction_scaffold_b64", "signed_transaction_b64"] {
+            if response_value.get(retired).is_some() {
+                return Err(eyre!(
+                    "contract call prepare response contains retired `{retired}` field"
+                ));
+            }
+        }
+        if response_value.get("submitted").and_then(JsonValue::as_bool) != Some(false) {
             return Err(eyre!(
-                "contract call transaction scaffold must use canonical padded base64"
+                "contract call prepare response must be an unsubmitted draft"
             ));
         }
-        let scaffold = SignedTransaction::decode_all_versioned(&scaffold_bytes)
-            .wrap_err("decode versioned contract call transaction scaffold")?;
-        let mut exact_payload = scaffold.payload().clone();
-        if &exact_payload.authority != authority {
+        if response_value
+            .get("tx_hash_hex")
+            .is_some_and(|value| !value.is_null())
+            || response_value
+                .get("entrypoint_hash_hex")
+                .is_some_and(|value| !value.is_null())
+            || response_value
+                .get("pipeline_status")
+                .is_some_and(|value| !value.is_null())
+        {
             return Err(eyre!(
-                "contract call scaffold authority does not match the requested authority"
+                "contract call prepare response must not contain submission hashes or status"
+            ));
+        }
+        let transaction_payload_b64 = response_value
+            .get("transaction_payload_b64")
+            .and_then(norito::json::Value::as_str)
+            .ok_or_else(|| {
+                eyre!("contract call prepare response omitted transaction_payload_b64")
+            })?;
+        let transaction_payload = base64::engine::general_purpose::STANDARD
+            .decode(transaction_payload_b64.as_bytes())
+            .wrap_err("decode contract call transaction payload")?;
+        if base64::engine::general_purpose::STANDARD.encode(&transaction_payload)
+            != transaction_payload_b64
+        {
+            return Err(eyre!(
+                "contract call transaction payload must use canonical padded base64"
+            ));
+        }
+        let builder = TransactionBuilder::decode_payload(&transaction_payload)
+            .wrap_err("decode canonical contract call transaction payload")?;
+        let signing_message_b64 = response_value
+            .get("signing_message_b64")
+            .and_then(norito::json::Value::as_str)
+            .ok_or_else(|| eyre!("contract call prepare response omitted signing_message_b64"))?;
+        let signing_message = base64::engine::general_purpose::STANDARD
+            .decode(signing_message_b64.as_bytes())
+            .wrap_err("decode contract call signing message")?;
+        if base64::engine::general_purpose::STANDARD.encode(&signing_message) != signing_message_b64
+        {
+            return Err(eyre!(
+                "contract call signing message must use canonical padded base64"
+            ));
+        }
+        let expected_signing_message = builder.payload_hash_bytes();
+        if signing_message.as_slice() != expected_signing_message.as_slice() {
+            return Err(eyre!(
+                "contract call signing message does not match the transaction payload"
+            ));
+        }
+        if builder.payload().chain != self.chain || &builder.payload().authority != authority {
+            return Err(eyre!(
+                "contract call transaction payload changed the requested chain or authority"
             ));
         }
 
-        let mut workflow_client = self.clone();
         if let Some(private_key) = private_key {
             let key_pair = KeyPair::from_private_key(private_key.clone())
                 .wrap_err("derive contract call signing key pair")?;
@@ -19793,44 +19848,17 @@ impl Client {
                     "contract call private key does not match the requested authority"
                 ));
             }
-            workflow_client.key_pair = key_pair;
-            workflow_client.account = authority.clone();
-        } else if &self.account != authority {
-            return Err(eyre!(
-                "contract call quote authentication requires the client account to match the requested authority"
-            ));
-        }
-
-        let quote = workflow_client
-            .quote_fees(&exact_payload)
-            .wrap_err("quote exact contract call transaction payload")?;
-        let recommended_intent = quote.intent;
-        apply_fee_quote_intent(&mut exact_payload, recommended_intent.clone())?;
-
-        let response_object = response_value
-            .as_object_mut()
-            .ok_or_else(|| eyre!("contract call response must be a JSON object"))?;
-        if let Some(receipt) = response_object
-            .get_mut("operation_receipt")
-            .and_then(norito::json::Value::as_object_mut)
-        {
-            receipt.insert(
-                "fee_payment".to_owned(),
-                norito::json::to_value(&recommended_intent)?,
-            );
-        }
-
-        if let Some(private_key) = private_key {
-            let signed = TransactionBuilder::from_payload(exact_payload)
-                .wrap_err("reconstruct quoted contract call payload")?
+            let signed = builder
                 .try_sign(private_key)
-                .wrap_err("sign quoted contract call payload")?;
+                .wrap_err("sign exact contract call transaction payload")?;
             let tx_hash_hex = hex::encode(signed.hash().as_ref());
             let entrypoint_hash_hex = hex::encode(signed.hash_as_entrypoint().as_ref());
-            workflow_client
-                .submit_transaction(&signed)
-                .wrap_err("submit quoted contract call transaction")?;
+            self.submit_transaction(&signed)
+                .wrap_err("submit exact contract call transaction")?;
 
+            let response_object = response_value
+                .as_object_mut()
+                .ok_or_else(|| eyre!("contract call response must be a JSON object"))?;
             response_object.insert("submitted".to_owned(), true.into());
             response_object.insert("tx_hash_hex".to_owned(), tx_hash_hex.clone().into());
             response_object.insert(
@@ -19849,13 +19877,8 @@ impl Client {
                     "queue".to_owned(),
                 ))?,
             );
-            for field in [
-                "transaction_scaffold_b64",
-                "signed_transaction_b64",
-                "signing_message_b64",
-            ] {
-                response_object.insert(field.to_owned(), norito::json::Value::Null);
-            }
+            response_object.remove("transaction_payload_b64");
+            response_object.remove("signing_message_b64");
             if let Some(receipt) = response_object
                 .get_mut("operation_receipt")
                 .and_then(norito::json::Value::as_object_mut)
@@ -19864,31 +19887,6 @@ impl Client {
                 receipt.insert("tx_hash_hex".to_owned(), tx_hash_hex.into());
                 receipt.insert("entrypoint_hash_hex".to_owned(), entrypoint_hash_hex.into());
             }
-        } else {
-            let scaffold_key = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
-                .wrap_err("generate quoted contract call scaffold key")?;
-            let quoted_builder = TransactionBuilder::from_payload(exact_payload)
-                .wrap_err("reconstruct quoted contract call scaffold")?;
-            let placeholder_signature = Signature::try_new(
-                scaffold_key.private_key(),
-                &quoted_builder.payload_hash_bytes(),
-            )
-            .wrap_err("build quoted contract call scaffold signature")?;
-            let quoted_scaffold = quoted_builder.build_with_signature(placeholder_signature);
-            let scaffold_b64 = base64::engine::general_purpose::STANDARD
-                .encode(quoted_scaffold.encode_versioned());
-            let signing_message_b64 = base64::engine::general_purpose::STANDARD
-                .encode(HashOf::new(quoted_scaffold.payload()).as_ref());
-            response_object.insert(
-                "entrypoint_hash_hex".to_owned(),
-                hex::encode(quoted_scaffold.hash_as_entrypoint().as_ref()).into(),
-            );
-            response_object.insert(
-                "transaction_scaffold_b64".to_owned(),
-                scaffold_b64.clone().into(),
-            );
-            response_object.insert("signed_transaction_b64".to_owned(), scaffold_b64.into());
-            response_object.insert("signing_message_b64".to_owned(), signing_message_b64.into());
         }
 
         Ok(response_value)
@@ -23538,205 +23536,7 @@ fn join_torii_url_with_path_segments(url: &Url, path: &str, segments: &[&str]) -
 
 #[cfg(test)]
 mod url_join_tests {
-    use url::Url;
-
-    use super::{
-        ZkProofsFilter, is_verifier_backend_registry_label_v1, join_torii_url,
-        join_torii_url_with_path_segments, normalize_hex32_lower,
-        require_verifier_backend_registry_label_v1, validate_zk_proofs_filter,
-    };
-
-    #[test]
-    fn join_prover_reports_paths() {
-        let base = Url::parse("http://localhost:8080/api/").unwrap();
-        let u = join_torii_url(&base, "v1/zk/prover/reports");
-        assert_eq!(u.as_str(), "http://localhost:8080/api/v1/zk/prover/reports");
-        let u2 = join_torii_url(&base, "v1/zk/prover/reports/abcd");
-        assert_eq!(
-            u2.as_str(),
-            "http://localhost:8080/api/v1/zk/prover/reports/abcd"
-        );
-    }
-
-    #[test]
-    fn join_vote_tally_path() {
-        let base = Url::parse("http://localhost:8080/api/").unwrap();
-        let u = join_torii_url(&base, "v1/zk/vote/tally");
-        assert_eq!(u.as_str(), "http://localhost:8080/api/v1/zk/vote/tally");
-    }
-
-    #[test]
-    fn join_vk_path_encodes_slash_containing_backend_segment() {
-        let base = Url::parse("http://localhost:8080/api/").unwrap();
-        let u =
-            join_torii_url_with_path_segments(&base, "v1/zk/vk", &["halo2/ipa", "ivm_execution"]);
-
-        assert_eq!(
-            u.as_str(),
-            "http://localhost:8080/api/v1/zk/vk/halo2%2Fipa/ivm_execution"
-        );
-    }
-
-    #[test]
-    fn join_proof_path_encodes_slash_containing_backend_segment() {
-        let base = Url::parse("http://localhost:8080/api/").unwrap();
-        let proof_hash = "aa".repeat(32);
-        let u = join_torii_url_with_path_segments(
-            &base,
-            "v1/zk/proof",
-            &["halo2/ipa", proof_hash.as_str()],
-        );
-        let expected = format!("http://localhost:8080/api/v1/zk/proof/halo2%2Fipa/{proof_hash}");
-
-        assert_eq!(u.as_str(), expected.as_str());
-    }
-
-    #[test]
-    fn zk_client_backend_guard_accepts_exact_registry_labels() {
-        for &backend in iroha_data_model::zk::ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1 {
-            assert!(
-                is_verifier_backend_registry_label_v1(backend),
-                "registry label {backend} must be admitted"
-            );
-            assert_eq!(
-                require_verifier_backend_registry_label_v1(backend, "backend")
-                    .expect("exact registry label"),
-                backend
-            );
-        }
-    }
-
-    #[test]
-    fn zk_client_backend_guard_rejects_protocol_trusted_setup_and_path_labels() {
-        for backend in [
-            "unknown/privacy/backend",
-            "halo2/ipa-pasta-cycle-v1",
-            " halo2/ipa",
-            "halo2/ipa ",
-            "\thalo2/ipa",
-            "halo2/ipa\n",
-            "halo2/ipa\0",
-            "HALO2/IPA",
-            "stark/FRI",
-            "halo2/ipa:ivm-execution-v1",
-            "halo2/ipa::ivm-execution-v1",
-            "halo2/ipa/ivm-execution-v1",
-            "halo2/pasta/ipa/ivm-execution-v1",
-            "halo2//ipa",
-            "halo2/ipa:",
-            "halo2/ipa.",
-            "halo2/ipa/.ivm-execution-v1",
-            "halo2/ipa:ivm..execution-v1",
-            "../halo2/ipa",
-            "halo2/ipa/../tiny-add",
-            "halo2/ipa/orchard",
-            "fcmp++",
-            "groth16/bls12-377",
-            "stark/fri/miden",
-            "stark/fri/pq-masp-stark-fri",
-            "stark/fri/latest",
-            "stark/fri/random-profile",
-            "stark/fri/poseidon2-goldilocks/extra",
-            "stark/fri/sha256_goldilocks.v2",
-            "stark/fri/sha512-goldilocks",
-            "stark/fri/boi-audited",
-            "stark/fri/external-security-review",
-            "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
-            "stark/fri/dev-fixture",
-            "stark/fri/d-e-v",
-            "stark/fri/test",
-            "stark/fri/t-e-s-t",
-            "stark/fri/placeholder",
-            "stark/fri/kzg",
-            "stark/fri/debug",
-            "halo2/kzg",
-            "halo2/ipa:release-ready",
-            "halo2/ipa:certified-mainnet",
-            "halo2/ipa:third-party-audited",
-            "halo2/ipa:production-ready",
-            "halo2/ipa:claimed-production",
-            "halo2/ipa:dev-fixture",
-            "halo2/ipa:dev",
-            "halo2/ipa:d-e-v",
-            "halo2/ipa:dummy",
-            "halo2/ipa:f-a-k-e",
-            "halo2/ipa:stub",
-            "halo2/ipa:s-a-m-p-l-e",
-            "halo2/pasta/tiny-add",
-            "halo2/ipa/tiny-add",
-            "halo2/ipa:tiny-add",
-            "halo2/pasta/tiny-anon-transfer-2x2",
-            "halo2/pasta/tiny-commit-open",
-            "halo2/pasta/anon-transfer-2x2",
-            "halo2/ipa/anon-transfer-2x2",
-            "halo2/ipa:anon-transfer-2x2",
-            "halo2/pasta/anon-transfer-2x2-merkle2",
-            "halo2/ipa/anon-transfer-2x2-merkle8",
-            "halo2/ipa:anon-transfer-2x2-merkle16",
-            "halo2/pasta/vote-bool-commit",
-            "halo2/ipa/vote-bool-commit",
-            "halo2/ipa:vote-bool-commit",
-            "halo2/pasta/vote-bool-commit-merkle2",
-            "halo2/ipa/vote-bool-commit-merkle8",
-            "halo2/ipa:vote-bool-commit-merkle16",
-            "mock/dev",
-        ] {
-            assert!(
-                !is_verifier_backend_registry_label_v1(backend),
-                "unsupported backend {backend:?} must stay fail-closed"
-            );
-            let err = require_verifier_backend_registry_label_v1(backend, "backend")
-                .expect_err("unsupported backend rejected");
-            assert!(
-                format!("{err}").contains("exact supported verifier-registry label"),
-                "unexpected backend error for {backend:?}: {err}"
-            );
-        }
-    }
-
-    #[test]
-    fn zk_client_proof_filter_rejects_unsupported_backends_before_request() {
-        for backend in [
-            " halo2/ipa",
-            "halo2/ipa/orchard",
-            "stark/fri/miden",
-            "stark/fri/latest",
-            "stark/fri/boi-audited",
-            "halo2/ipa:release-ready",
-            "halo2/ipa:tiny-add",
-            "halo2/kzg",
-            "mock/dev",
-        ] {
-            let filter = ZkProofsFilter {
-                backend: Some(backend),
-                ..ZkProofsFilter::default()
-            };
-            let err = validate_zk_proofs_filter(&filter)
-                .expect_err("unsupported filter backend rejected");
-            assert!(format!("{err}").contains("exact supported verifier-registry label"));
-        }
-    }
-
-    #[test]
-    fn zk_client_proof_hash_canonicalizes_and_rejects_malformed_values() {
-        assert_eq!(
-            normalize_hex32_lower(&format!("0x{}", "AA".repeat(32)), "proof hash").expect("hash"),
-            "aa".repeat(32)
-        );
-
-        for hash in [
-            String::new(),
-            "abc".to_string(),
-            "z".repeat(64),
-            "a".repeat(63),
-            format!("0x0x{}", "aa".repeat(32)),
-        ] {
-            assert!(
-                normalize_hex32_lower(&hash, "proof hash").is_err(),
-                "malformed proof hash {hash:?} must be rejected"
-            );
-        }
-    }
+    include!("client/url_join_tests.rs");
 }
 
 /// Logic for `sync` and `async` Iroha websocket streams
@@ -24361,6 +24161,12 @@ mod tests {
         secrecy::SecretString,
     };
 
+    mod appeal_finance {
+        //! Appeal-finance HTTP client contract tests.
+
+        include!("client/appeal_finance.rs");
+    }
+
     const LOGIN: &str = "mad_hatter";
     const PASSWORD: &str = "ilovetea";
     // `mad_hatter:ilovetea` encoded with base64
@@ -24573,446 +24379,7 @@ mod tests {
         assert_no_http(|| client.get_gov_tally_json("tally#fragment"));
     }
 
-    #[test]
-    fn provider_bundle_attestation_uses_dedicated_public_musubi_route() {
-        assert_eq!(
-            PublicMusubiQueryPathV1::ProviderBundleAttestation.path(),
-            "/v1/musubi/queries/provider-bundle-attestation"
-        );
-    }
-
-    #[test]
-    fn public_musubi_query_uses_fixed_route_without_account_headers() {
-        let response = json_response(StatusCode::OK, r#"{"result":"finalized"}"#);
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let query = norito::json!({"package": "apps.sora/demo"});
-        let result: PublicMusubiQueryResultV1<Value> =
-            with_mock_http(respond_with(&snapshots, response), || {
-                post_public_musubi_query_v1(
-                    &base_url(),
-                    PublicMusubiQueryPathV1::ExactPackage,
-                    &query,
-                    Duration::from_secs(1),
-                )
-            })
-            .expect("public Musubi query");
-        assert!(matches!(result, PublicMusubiQueryResultV1::Found(_)));
-
-        let snapshot = snapshots.lock().expect("snapshot lock")[0].clone();
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/musubi/queries/exact-package");
-        assert_eq!(
-            snapshot.max_response_bytes,
-            MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES
-        );
-        assert!(snapshot.headers.iter().all(|(name, _)| {
-            ![
-                HEADER_ACCOUNT,
-                HEADER_SIGNATURE,
-                HEADER_TIMESTAMP_MS,
-                HEADER_NONCE,
-                "authorization",
-            ]
-            .iter()
-            .any(|forbidden| name.eq_ignore_ascii_case(forbidden))
-        }));
-    }
-
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn transaction_boundary_exact_release_json_fits_the_musubi_query_cap() {
-        const RETIRED_QUERY_CAP_BYTES: usize = 8 * 1024 * 1024;
-
-        fn padded_name(prefix: String) -> Name {
-            assert!(prefix.len() <= MAX_NAME_BYTES);
-            format!("{prefix}{}", "\\".repeat(MAX_NAME_BYTES - prefix.len()))
-                .parse()
-                .expect("maximal fixture name")
-        }
-
-        fn near_limit_account() -> (AccountId, KeyPair) {
-            let members = (0_u16..256)
-                .map(|index| {
-                    let mut seed = [0xC7; 32];
-                    seed[..2].copy_from_slice(&index.to_le_bytes());
-                    let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
-                        .expect("near-limit account keypair");
-                    MultisigMember::new(keypair.public_key().clone(), 1)
-                        .expect("near-limit account member")
-                })
-                .collect::<Vec<_>>();
-
-            for count in (1..=members.len()).rev() {
-                let account = AccountId::new_multisig(
-                    MultisigPolicy::new(1, members[..count].to_vec())
-                        .expect("near-limit account policy"),
-                );
-                let encoded =
-                    norito::to_bytes(&account).expect("near-limit account canonical encoding");
-                if encoded.len() <= MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1 {
-                    assert!(
-                        encoded.len() > MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1 - 256,
-                        "fixture must exercise the account bound"
-                    );
-                    validate_musubi_account_id_v1(&account)
-                        .expect("near-limit account is legal in Musubi");
-
-                    let mut signer_seed = [0xC7; 32];
-                    signer_seed[..2].copy_from_slice(&0_u16.to_le_bytes());
-                    let signer = KeyPair::try_from_seed(signer_seed.to_vec(), Algorithm::Ed25519)
-                        .expect("near-limit account signer");
-                    return (account, signer);
-                }
-            }
-            panic!("at least one multisig member must fit the Musubi account bound");
-        }
-
-        let maximal_prerelease = (0..MUSUBI_MAX_PRERELEASE_IDENTIFIERS_V1)
-            .map(|_| {
-                MusubiPrereleaseIdentifierV1::AlphaNumeric(
-                    "z".repeat(MUSUBI_MAX_PRERELEASE_IDENTIFIER_BYTES_V1),
-                )
-            })
-            .collect::<Vec<_>>();
-        let comparator_major_floor = u64::MAX
-            - u64::try_from(MUSUBI_MAX_VERSION_COMPARATORS_V1)
-                .expect("comparator maximum fits u64");
-        let requirement = MusubiVersionReqV1::Comparators(
-            (0..MUSUBI_MAX_VERSION_COMPARATORS_V1)
-                .map(|index| MusubiVersionComparatorV1 {
-                    op: MusubiComparatorOpV1::GreaterOrEqual,
-                    version: MusubiVersionV1::new(
-                        comparator_major_floor
-                            + u64::try_from(index).expect("comparator index fits u64"),
-                        u64::MAX,
-                        u64::MAX,
-                        maximal_prerelease.clone(),
-                    )
-                    .expect("maximal comparator version"),
-                })
-                .collect(),
-        );
-        requirement.validate().expect("maximal comparator AST");
-
-        let dependency_domain: Name = "\\"
-            .repeat(MAX_NAME_BYTES)
-            .parse()
-            .expect("maximal dependency domain");
-        let selected_version = MusubiVersionV1::new(u64::MAX, u64::MAX, u64::MAX, Vec::new())
-            .expect("stable selected version");
-        let mut dependencies = Vec::with_capacity(MUSUBI_MAX_DEPENDENCIES_V1);
-        let mut root_dependencies = Vec::with_capacity(MUSUBI_MAX_DEPENDENCIES_V1);
-        let mut nodes = Vec::with_capacity(MUSUBI_MAX_DEPENDENCIES_V1);
-        for index in 0..MUSUBI_MAX_DEPENDENCIES_V1 {
-            let alias = padded_name(format!("dep-{index:03}-"));
-            let package = MusubiPackageIdV1::new(
-                DataSpaceId::new(
-                    u64::MAX
-                        - u64::try_from(MUSUBI_MAX_DEPENDENCIES_V1 - index)
-                            .expect("dependency index fits u64"),
-                ),
-                MusubiPackageScopeV1::Domain(dependency_domain.clone()),
-                "p".repeat(64).parse().expect("maximal package name"),
-            );
-            let selected = MusubiReleaseIdV1::new(package.clone(), selected_version.clone());
-            dependencies.push(MusubiDependencyReqV1 {
-                alias: alias.clone(),
-                package: package.clone(),
-                requirement: requirement.clone(),
-            });
-            root_dependencies.push(MusubiExactDependencyEdgeV1 {
-                alias,
-                kind: MusubiDependencyKindV1::Normal,
-                package,
-                requirement: requirement.clone(),
-                selected: selected.clone(),
-            });
-            nodes.push(MusubiVerificationNodeV1 {
-                release: selected,
-                release_digest: iroha_data_model::musubi::MusubiReleaseDigestV1::new([0xFF; 32]),
-                archive_id: ArchiveId::new([0xFF; 32]),
-                source_digest: MusubiContentDigestV1::new([0xFF; 32]),
-                interface_digest: MusubiContentDigestV1::new([0xFF; 32]),
-                abi: MusubiAbiBindingV1::new([0xFF; 32]).expect("node ABI"),
-                dependencies: Vec::new(),
-            });
-        }
-
-        let exports = (0..MUSUBI_MAX_EXPORTS_V1)
-            .map(|index| padded_name(format!("export-{index:04}-")))
-            .collect::<Vec<_>>();
-        let keywords = (0..MUSUBI_MAX_KEYWORDS_V1)
-            .map(|index| {
-                format!("k{index:02}-{}", "k".repeat(60))
-                    .parse::<MusubiKeywordV1>()
-                    .expect("maximal keyword")
-            })
-            .collect::<Vec<_>>();
-        let metadata = MusubiReleaseMetadataV1 {
-            description: Some(
-                MusubiDescriptionV1::new(&"\\".repeat(4_096)).expect("maximal description"),
-            ),
-            readme: Some(MusubiDocumentRefV1::new(&"\\".repeat(2_048)).expect("maximal readme")),
-            license: Some(MusubiDocumentRefV1::new(&"\\".repeat(2_048)).expect("maximal license")),
-            repository: Some(
-                MusubiDocumentRefV1::new(&"\\".repeat(2_048)).expect("maximal repository"),
-            ),
-            keywords,
-        };
-        let root_domain_text = "\\".repeat(253);
-        let root_package = MusubiPackageIdV1::new(
-            DataSpaceId::new(u64::MAX),
-            MusubiPackageScopeV1::Domain(
-                root_domain_text.parse().expect("maximal namespace domain"),
-            ),
-            "r".repeat(64).parse().expect("maximal root package name"),
-        );
-        let root_release = MusubiReleaseIdV1::new(
-            root_package,
-            MusubiVersionV1::new(u64::MAX, u64::MAX, u64::MAX, maximal_prerelease)
-                .expect("maximal root release version"),
-        );
-        let resolution_snapshot = MusubiRegistrySnapshotV1 {
-            finalized_height: 1,
-            finalized_block_hash: [0x31; 32],
-            index_revision: 1,
-        };
-        let manifest_abi = MusubiAbiBindingV1::new([0xFF; 32]).expect("manifest ABI");
-        let archive_id = ArchiveId::new([0xFF; 32]);
-        let interface_digest = MusubiContentDigestV1::new([0xFF; 32]);
-        let publication_for = |dependency_count: usize| {
-            let lock = MusubiVerificationLockV1 {
-                schema: MusubiVerificationLockV1::SCHEMA.to_owned(),
-                version: MUSUBI_REGISTRY_VERSION_V1,
-                root: root_release.clone(),
-                root_dependencies: root_dependencies[..dependency_count].to_vec(),
-                nodes: nodes[..dependency_count].to_vec(),
-            };
-            let manifest = MusubiReleaseManifestV1 {
-                release: root_release.clone(),
-                edition: MusubiKotodamaEditionV1::V1,
-                abi: manifest_abi,
-                dependencies: dependencies[..dependency_count].to_vec(),
-                exports: exports.clone(),
-                interface_digest,
-                metadata: metadata.clone(),
-                archive_id,
-                verification_lock_digest: lock.digest(),
-            };
-            MusubiPublicationV1 {
-                manifest,
-                resolution: MusubiResolutionProofV1 {
-                    snapshot: resolution_snapshot,
-                    lock,
-                },
-            }
-        };
-
-        let chain_id: ChainId = "c"
-            .repeat(MAX_CHAIN_ID_BYTES)
-            .parse()
-            .expect("maximal chain id");
-        let network_id = test_network_id();
-        let namespace = MusubiNamespaceV1::new(&format!("{root_domain_text}.n"))
-            .expect("maximal domain-qualified namespace");
-        let (publisher, publisher_signer) = near_limit_account();
-        let transaction_frame_len = |dependency_count: usize| {
-            let publication = publication_for(dependency_count);
-            publication
-                .validate()
-                .expect("bounded publication fixture is structurally valid");
-            let instruction =
-                PublishMusubiReleaseV1::new(namespace.clone(), publication, None, 1, None);
-            let mut builder = TransactionBuilder::new(
-                network_id,
-                publisher.clone(),
-                FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([instruction]);
-            builder.set_creation_time(Duration::from_millis(1));
-            let signed = builder.sign_multisig([publisher_signer.private_key()]);
-            norito::encode_canonical(&signed)
-                .expect("canonical signed publication transaction frame")
-                .len()
-        };
-        let max_transaction_bytes =
-            usize::try_from(Parameters::default().transaction().max_tx_bytes().get())
-                .expect("transaction limit fits usize");
-        let mut admitted_dependency_count = 0_usize;
-        let mut rejected_dependency_count = MUSUBI_MAX_DEPENDENCIES_V1 + 1;
-        while admitted_dependency_count + 1 < rejected_dependency_count {
-            let candidate = admitted_dependency_count
-                + (rejected_dependency_count - admitted_dependency_count) / 2;
-            if transaction_frame_len(candidate) <= max_transaction_bytes {
-                admitted_dependency_count = candidate;
-            } else {
-                rejected_dependency_count = candidate;
-            }
-        }
-        assert!(admitted_dependency_count > 0);
-        assert!(
-            transaction_frame_len(admitted_dependency_count) <= max_transaction_bytes,
-            "selected publication must fit the default consensus transaction corridor"
-        );
-        if admitted_dependency_count < MUSUBI_MAX_DEPENDENCIES_V1 {
-            assert!(
-                transaction_frame_len(admitted_dependency_count + 1) > max_transaction_bytes,
-                "selected dependency prefix must be maximal for this bounded fixture"
-            );
-        }
-
-        let exact_snapshot_for = |manifest: MusubiReleaseManifestV1| {
-            let snapshot = MusubiRegistrySnapshotV1 {
-                finalized_height: u64::MAX,
-                finalized_block_hash: [0xFF; 32],
-                index_revision: u64::MAX,
-            };
-            let yank = MusubiReleaseYankV1 {
-                release: manifest.release.clone(),
-                yanked: false,
-                reason: MusubiReasonV1::new(&"\\".repeat(1_024)).expect("maximal yank reason"),
-                changed_by: publisher.clone(),
-                changed_at_height: u64::MAX - 2,
-                revision: u64::MAX,
-            };
-            let governance = MusubiArtifactGovernanceStateV1::TakenDown(MusubiArtifactTakedownV1 {
-                action_digest: MusubiGovernanceActionDigestV1::new([0xFF; 32]),
-                reason: MusubiReasonV1::new(&"\\".repeat(1_024)).expect("maximal takedown reason"),
-                applied_at_height: u64::MAX - 1,
-            });
-            let release_digest = manifest.release_digest();
-            let universal_release = MusubiResolverReleaseRowV1 {
-                release: manifest.release.clone(),
-                release_digest,
-                archive_id: manifest.archive_id,
-                source_digest: MusubiContentDigestV1::new([0xFF; 32]),
-                interface_digest: manifest.interface_digest,
-                abi: manifest.abi,
-                dependencies: manifest.dependencies.clone(),
-                selection: MusubiReleaseSelectionStateV1 {
-                    yank: yank.clone(),
-                    storage: MusubiArchiveAvailabilityV1 {
-                        archive_id: manifest.archive_id,
-                        availability: MusubiStorageAvailabilityV1::Selectable,
-                        healthy_replicas: 256,
-                        active_locations: 4,
-                        finalized_height: snapshot.finalized_height,
-                        finalized_block_hash: snapshot.finalized_block_hash,
-                        index_revision: snapshot.index_revision,
-                    },
-                    governance: governance.clone(),
-                },
-                index_revision: snapshot.index_revision,
-            };
-            let home_release = MusubiReleaseRecordV1 {
-                manifest,
-                release_digest,
-                published_by: publisher.clone(),
-                published_at_height: u64::MAX - 3,
-                yank,
-                artifact_governance: governance,
-                revisions: MusubiReleaseRevisionsV1 {
-                    yank: u64::MAX,
-                    artifact_governance: u64::MAX,
-                },
-            };
-            MusubiExactReleaseSnapshotV1 {
-                chain_id: chain_id.clone(),
-                genesis_hash: [0xFF; 32],
-                snapshot,
-                home_release,
-                universal_release,
-            }
-        };
-
-        let admitted_publication = publication_for(admitted_dependency_count);
-        let admitted_snapshot = exact_snapshot_for(admitted_publication.manifest);
-        admitted_snapshot
-            .validate()
-            .expect("consensus-legal transaction-boundary exact release snapshot");
-        let admitted_json = norito::json::to_vec(&admitted_snapshot)
-            .expect("encode consensus-legal exact release JSON");
-        eprintln!(
-            "Musubi exact-release boundary: dependencies={admitted_dependency_count}, transaction_bytes={}, response_bytes={}",
-            transaction_frame_len(admitted_dependency_count),
-            admitted_json.len()
-        );
-        assert!(
-            admitted_json.len() > RETIRED_QUERY_CAP_BYTES,
-            "the retired 8 MiB cap must be proven insufficient"
-        );
-        assert!(
-            admitted_json.len() <= MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES,
-            "the selected transaction-boundary exact-release response must fit the Musubi-only cap"
-        );
-        drop(admitted_json);
-        drop(admitted_snapshot);
-
-        let full_dependency_count = publication_for(MUSUBI_MAX_DEPENDENCIES_V1);
-        full_dependency_count
-            .validate()
-            .expect("adversarial full-dependency publication is structurally valid");
-        let full_dependency_snapshot = exact_snapshot_for(full_dependency_count.manifest);
-        full_dependency_snapshot
-            .validate()
-            .expect("adversarial full-dependency exact release snapshot");
-        let full_resolver_row_json =
-            norito::json::to_vec(&full_dependency_snapshot.universal_release)
-                .expect("encode adversarial full-dependency resolver row JSON");
-        assert!(
-            full_resolver_row_json.len() <= MUSUBI_RESOLVER_PAGE_JSON_ITEMS_BUDGET_BYTES_V1,
-            "one adversarial full-dependency resolver row must fit the resolver items budget"
-        );
-        let full_dependency_json = norito::json::to_vec(&full_dependency_snapshot)
-            .expect("encode adversarial full-dependency exact release JSON");
-        eprintln!(
-            "Musubi exact-release full-dependency fixture: dependencies={}, response_bytes={}",
-            MUSUBI_MAX_DEPENDENCIES_V1,
-            full_dependency_json.len()
-        );
-        assert!(
-            full_dependency_json.len() <= MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES,
-            "the fixed cap must retain headroom above this full-dependency exact-release fixture"
-        );
-    }
-
-    #[test]
-    fn public_musubi_query_surfaces_missing_and_stale_cursor() {
-        let query = norito::json!({"limit": 1_u64});
-        let missing: PublicMusubiQueryResultV1<Value> = with_mock_http(
-            respond_with(
-                &Arc::new(Mutex::new(Vec::new())),
-                empty_response(StatusCode::NOT_FOUND),
-            ),
-            || {
-                post_public_musubi_query_v1(
-                    &base_url(),
-                    PublicMusubiQueryPathV1::Versions,
-                    &query,
-                    Duration::from_secs(1),
-                )
-            },
-        )
-        .expect("missing query result");
-        assert!(matches!(missing, PublicMusubiQueryResultV1::NotFound));
-
-        let stale: PublicMusubiQueryResultV1<Value> = with_mock_http(
-            respond_with(
-                &Arc::new(Mutex::new(Vec::new())),
-                empty_response(StatusCode::GONE),
-            ),
-            || {
-                post_public_musubi_query_v1(
-                    &base_url(),
-                    PublicMusubiQueryPathV1::OrderedPrefix,
-                    &query,
-                    Duration::from_secs(1),
-                )
-            },
-        )
-        .expect("stale query result");
-        assert!(matches!(stale, PublicMusubiQueryResultV1::StaleCursor));
-    }
+    include!("client/musubi_tests.rs");
 
     fn validation_fee_plain_ballot_draft_fixture() -> (
         String,
@@ -29388,7 +28755,7 @@ mod tests {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
         );
-        let prepared = client.prepare_transaction_payload(&tx);
+        let prepared = Client::prepare_transaction_payload(&tx);
 
         assert_eq!(prepared.hash(), tx.hash());
         SignedTransaction::decode_all_versioned(prepared.as_bytes())
@@ -29455,7 +28822,7 @@ mod tests {
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
             );
-            let prepared = client.prepare_transaction_payload(&tx);
+            let prepared = Client::prepare_transaction_payload(&tx);
             let hash = client
                 .submit_prepared_transaction_payload(&prepared)
                 .expect("prepared transaction submission succeeds");
@@ -30973,7 +30340,6 @@ mod tests {
             })
             .expect("norito fallback succeeds");
         assert_eq!(decoded_norito, expected_json);
-        assert_eq!(decoded_norito, expected_json);
 
         let mislabeled_json_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let mislabeled_json_response = Response::builder()
@@ -31043,19 +30409,22 @@ mod tests {
             lane_block_height: 1,
             lane_block_view: 0,
             proposal_height: 1,
-            proposal_view: 0,
-            proposal_hash: Hash::new(b"client-autonomous-proposal"),
-            descriptor_hash: Hash::new(b"client-autonomous-descriptor"),
+            proposal_view: Some(0),
+            reservation_owner_hash: Hash::new(b"client-autonomous-owner"),
+            proposal_identity_hash: Hash::new(b"client-autonomous-provisional-slot"),
+            reservation_group_hash: Hash::new(b"client-autonomous-reservation-group"),
+            proposal_hash: None,
+            descriptor_hash: None,
             executable_payload_hash: None,
             source_bundle_hash: None,
             merge_entry_hash: None,
             application_block_height: None,
             application_block_hash: None,
-            reservation_count: 0,
-            transaction_count: 0,
+            reservation_count: 1,
+            transaction_count: 1,
             highest_durable_stage: SumeragiAutonomousLaneExecutionStage::ReservationsDurable,
             stuck_reason: Some(
-                SumeragiAutonomousLaneExecutionStuckReason::AwaitingPayloadAvailability,
+                SumeragiAutonomousLaneExecutionStuckReason::AwaitingExecutablePayload,
             ),
         }];
         let response = HttpResponse::builder()
@@ -31087,9 +30456,12 @@ mod tests {
             lane_block_height: 1,
             lane_block_view: 0,
             proposal_height: 1,
-            proposal_view: 0,
-            proposal_hash: Hash::new(b"client-autonomous-proposal"),
-            descriptor_hash: Hash::new(b"client-autonomous-descriptor"),
+            proposal_view: None,
+            reservation_owner_hash: Hash::new(b"client-autonomous-owner"),
+            proposal_identity_hash: Hash::new(b"client-autonomous-provisional-slot"),
+            reservation_group_hash: Hash::new(b"client-autonomous-reservation-group"),
+            proposal_hash: None,
+            descriptor_hash: None,
             executable_payload_hash: None,
             source_bundle_hash: None,
             merge_entry_hash: None,
@@ -31099,9 +30471,11 @@ mod tests {
             transaction_count: 1,
             highest_durable_stage: SumeragiAutonomousLaneExecutionStage::ReservationsDurable,
             stuck_reason: Some(
-                SumeragiAutonomousLaneExecutionStuckReason::AwaitingPayloadAvailability,
+                SumeragiAutonomousLaneExecutionStuckReason::AwaitingExecutablePayload,
             ),
         };
+        row.validate()
+            .expect("Queue-only client fixture must honestly omit proposal view and final hashes");
         status.autonomous_lane_executions = vec![row, row];
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
@@ -32725,346 +32099,6 @@ mod tests {
     }
 
     #[test]
-    fn sorafs_appeal_finance_readback_filter_sets_query_params() {
-        let client = Client::new(config_factory());
-        let url = join_torii_url(&client.torii_url, "v1/sorafs/appeals/finance/reports");
-        let filter = SorafsAppealFinanceReadbackFilter { limit: Some(25) };
-        let request = filter
-            .apply(client.default_request(HttpMethod::GET, url))
-            .build()
-            .expect("build request");
-        assert_eq!(request.uri().query(), Some("limit=25"));
-    }
-
-    #[test]
-    fn sorafs_appeal_pricing_readback_targets_endpoints() {
-        let client = client_with_base_url(base_url());
-        let config_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let status_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-
-        with_mock_http(
-            respond_with(&config_store, json_response(StatusCode::OK, "{}")),
-            || {
-                client
-                    .get_sorafs_appeal_pricing_config()
-                    .expect("pricing config request");
-            },
-        );
-        with_mock_http(
-            respond_with(&status_store, json_response(StatusCode::OK, "{}")),
-            || {
-                client
-                    .get_sorafs_appeal_pricing_status()
-                    .expect("pricing status request");
-            },
-        );
-
-        assert_eq!(
-            config_store
-                .lock()
-                .expect("config snapshots")
-                .first()
-                .expect("config snapshot")
-                .url
-                .path(),
-            "/v1/sorafs/appeals/pricing/config"
-        );
-        assert_eq!(
-            status_store
-                .lock()
-                .expect("status snapshots")
-                .first()
-                .expect("status snapshot")
-                .url
-                .path(),
-            "/v1/sorafs/appeals/pricing/status"
-        );
-    }
-
-    #[test]
-    fn sorafs_appeal_pricing_quote_sends_json_request() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, r#"{"schema":"quote"}"#);
-        let payload = norito::json::to_vec(&norito::json!({
-            "class": "content",
-            "backlog": 4_u64,
-            "evidence_size_mb": 12_u64,
-            "urgency": "normal",
-        }))
-        .expect("encode quote payload");
-
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .post_sorafs_appeal_pricing_quote_json(&payload)
-                .expect("appeal pricing quote request");
-        });
-
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/sorafs/appeals/pricing/quote");
-        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
-        assert_eq!(
-            headers.get("content-type"),
-            Some(&APPLICATION_JSON.to_owned())
-        );
-        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
-        assert!(!headers.contains_key(HEADER_SIGNATURE));
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode request body");
-        assert_eq!(
-            body.get("class").and_then(JsonValue::as_str),
-            Some("content")
-        );
-    }
-
-    #[test]
-    fn sorafs_appeal_finance_deposit_sends_signed_json_request() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, r#"{"schema":"deposit"}"#);
-        let payload = norito::json::to_vec(&norito::json!({
-            "case_id": "case-401",
-            "payer_account": "payer",
-            "destination_account": "treasury",
-            "asset_definition_id": "xor#wonderland",
-            "deposit_xor": "100",
-            "idempotency_key": "case-401-round-7",
-        }))
-        .expect("encode deposit payload");
-
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .post_sorafs_appeal_finance_deposit_json(&payload)
-                .expect("appeal finance deposit request");
-        });
-
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/sorafs/appeals/finance/deposits");
-        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
-        assert!(headers.contains_key(HEADER_ACCOUNT));
-        assert!(headers.contains_key(HEADER_SIGNATURE));
-        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
-        assert!(headers.contains_key(HEADER_NONCE));
-        assert_eq!(
-            headers.get("content-type"),
-            Some(&APPLICATION_JSON.to_owned())
-        );
-        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode request body");
-        assert_eq!(
-            body.get("case_id").and_then(JsonValue::as_str),
-            Some("case-401")
-        );
-    }
-
-    #[test]
-    fn sorafs_appeal_finance_deposit_get_normalizes_escrow_id_and_signs() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        let escrow_id = format!("0x{}", "AB".repeat(32));
-
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .get_sorafs_appeal_finance_deposit(&escrow_id)
-                .expect("appeal finance deposit get request");
-        });
-
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(
-            snapshot.url.path(),
-            format!("/v1/sorafs/appeals/finance/deposits/{}", "ab".repeat(32))
-        );
-        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
-        assert!(headers.contains_key(HEADER_ACCOUNT));
-        assert!(headers.contains_key(HEADER_SIGNATURE));
-        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
-        assert!(headers.contains_key(HEADER_NONCE));
-        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
-    }
-
-    #[test]
-    fn sorafs_appeal_finance_deposit_settle_sends_signed_json_request() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, r#"{"schema":"settle"}"#);
-        let payload = norito::json::to_vec(&norito::json!({
-            "deposit_confirmation": {
-                "escrow_id_hex": ("11".repeat(32)),
-                "case_id": "case-401",
-                "payer_account": "payer",
-                "destination_account": "treasury",
-                "asset_definition_id": "xor#wonderland",
-                "deposit_xor": "100",
-                "idempotency_key": "case-401-round-7"
-            },
-            "outcome": "uphold"
-        }))
-        .expect("encode settle payload");
-
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .post_sorafs_appeal_finance_deposit_settle_json(&payload)
-                .expect("appeal finance deposit settle request");
-        });
-
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(
-            snapshot.url.path(),
-            "/v1/sorafs/appeals/finance/deposits/settle"
-        );
-        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
-        assert!(headers.contains_key(HEADER_SIGNATURE));
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode request body");
-        assert_eq!(
-            body.get("outcome").and_then(JsonValue::as_str),
-            Some("uphold")
-        );
-    }
-
-    #[test]
-    fn sorafs_appeal_finance_deposit_reconcile_and_submit_target_endpoints() {
-        let client = client_with_base_url(base_url());
-        let reconcile_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let submit_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let payload = norito::json::to_vec(&norito::json!({
-            "deposit_confirmation": {
-                "escrow_id_hex": ("22".repeat(32)),
-                "case_id": "case-402",
-                "payer_account": "payer",
-                "destination_account": "treasury",
-                "asset_definition_id": "xor#wonderland",
-                "deposit_xor": "100",
-                "idempotency_key": "case-402-round-7"
-            },
-            "outcome": "frivolous"
-        }))
-        .expect("encode reconcile payload");
-
-        with_mock_http(
-            respond_with(&reconcile_store, json_response(StatusCode::OK, "{}")),
-            || {
-                client
-                    .post_sorafs_appeal_finance_deposit_reconcile_json(&payload)
-                    .expect("appeal finance deposit reconcile request");
-            },
-        );
-        with_mock_http(
-            respond_with(&submit_store, json_response(StatusCode::ACCEPTED, "{}")),
-            || {
-                client
-                    .post_sorafs_appeal_finance_deposit_submit_settlement_json(&payload)
-                    .expect("appeal finance deposit submit-settlement request");
-            },
-        );
-
-        assert_eq!(
-            reconcile_store
-                .lock()
-                .expect("reconcile snapshots")
-                .first()
-                .expect("reconcile snapshot")
-                .url
-                .path(),
-            "/v1/sorafs/appeals/finance/deposits/reconcile"
-        );
-        assert_eq!(
-            submit_store
-                .lock()
-                .expect("submit snapshots")
-                .first()
-                .expect("submit snapshot")
-                .url
-                .path(),
-            "/v1/sorafs/appeals/finance/deposits/submit-settlement"
-        );
-    }
-
-    #[test]
-    fn sorafs_appeal_finance_readback_targets_endpoints() {
-        let client = client_with_base_url(base_url());
-        let reports_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let rollups_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let receipts_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let filter = SorafsAppealFinanceReadbackFilter { limit: Some(7) };
-
-        with_mock_http(
-            respond_with(&reports_store, json_response(StatusCode::OK, "{}")),
-            || {
-                client
-                    .get_sorafs_appeal_finance_reports(filter)
-                    .expect("appeal finance reports request");
-            },
-        );
-        with_mock_http(
-            respond_with(&rollups_store, json_response(StatusCode::OK, "{}")),
-            || {
-                client
-                    .get_sorafs_appeal_finance_weekly_rollups(filter)
-                    .expect("appeal finance weekly rollups request");
-            },
-        );
-        with_mock_http(
-            respond_with(&receipts_store, json_response(StatusCode::OK, "{}")),
-            || {
-                client
-                    .get_sorafs_appeal_finance_settlement_receipts(filter)
-                    .expect("appeal finance settlement receipts request");
-            },
-        );
-
-        assert_eq!(
-            reports_store
-                .lock()
-                .expect("reports snapshots")
-                .first()
-                .expect("reports snapshot")
-                .url
-                .path(),
-            "/v1/sorafs/appeals/finance/reports"
-        );
-        assert_eq!(
-            rollups_store
-                .lock()
-                .expect("rollups snapshots")
-                .first()
-                .expect("rollups snapshot")
-                .url
-                .path(),
-            "/v1/sorafs/appeals/finance/weekly-rollups"
-        );
-        assert_eq!(
-            receipts_store
-                .lock()
-                .expect("receipts snapshots")
-                .first()
-                .expect("receipts snapshot")
-                .url
-                .path(),
-            "/v1/sorafs/appeals/finance/settlement-receipts"
-        );
-    }
-
-    #[test]
-    fn sorafs_appeal_finance_json_rejects_empty_payload() {
-        let client = client_with_base_url(base_url());
-        let err = client
-            .post_sorafs_appeal_finance_deposit_json(&[])
-            .expect_err("empty payload must be rejected");
-        assert!(err.to_string().contains("appeal finance deposit"));
-    }
-
-    #[test]
     fn sorafs_moderation_screening_filter_sets_query_params() {
         let client = Client::new(config_factory());
         let url = join_torii_url(&client.torii_url, "v1/sorafs/moderation/screening-results");
@@ -34028,36 +33062,36 @@ mod tests {
             proof_request_path: "/v1/sccp/proof-requests/{message_id}".to_owned(),
             recent_messages_path: "/v1/sccp/messages/recent".to_owned(),
             registry_limits: SccpRegistryLimits {
-                max_governed_lanes: 16,
-                max_live_governed_routes: 64,
-                max_live_routes_per_lane: 8,
-                max_retained_routes_per_lane: 64,
-                max_retained_native_trust_anchors_per_lane: 4_096,
+                governed_lanes: 16,
+                live_governed_routes: 64,
+                live_routes_per_lane: 8,
+                retained_routes_per_lane: 64,
+                retained_native_trust_anchors_per_lane: 4_096,
             },
             resource_limits: SccpResourceLimits {
-                max_outbound_messages_per_block: 512,
-                max_outbound_message_payload_bytes: 4_096,
-                max_pending_outbound_messages: 65_536,
-                max_pending_outbound_payload_bytes: 256 * 1024 * 1024,
-                max_proofs_per_transaction: 1,
-                max_proofs_per_block: 4,
-                max_proof_bytes_per_proof: 8 * 1024 * 1024,
-                max_proof_bytes_per_transaction: 8 * 1024 * 1024,
-                max_proof_bytes_per_block: 32 * 1024 * 1024,
-                max_native_headers_per_transaction: 1_004,
-                max_native_headers_per_block: 4_016,
-                max_ethereum_light_client_updates_per_transaction: 128,
-                max_ethereum_light_client_updates_per_block: 512,
-                max_native_header_bytes_per_transaction: 8 * 1024 * 1024,
-                max_native_header_bytes_per_block: 32 * 1024 * 1024,
-                max_secp256k1_recoveries_per_transaction: 1_005,
-                max_secp256k1_recoveries_per_block: 4_020,
-                max_bls_aggregate_checks_per_transaction: 1_004,
-                max_bls_aggregate_checks_per_block: 4_016,
-                max_bls_signer_contributions_per_transaction: 131_713,
-                max_bls_signer_contributions_per_block: 526_852,
-                max_bn254_pairing_checks_per_transaction: 1,
-                max_bn254_pairing_checks_per_block: 4,
+                outbound_messages_per_block: 512,
+                outbound_message_payload_bytes: 4_096,
+                pending_outbound_messages: 65_536,
+                pending_outbound_payload_bytes: 256 * 1024 * 1024,
+                proofs_per_transaction: 1,
+                proofs_per_block: 4,
+                proof_bytes_per_proof: 8 * 1024 * 1024,
+                proof_bytes_per_transaction: 8 * 1024 * 1024,
+                proof_bytes_per_block: 32 * 1024 * 1024,
+                native_headers_per_transaction: 1_004,
+                native_headers_per_block: 4_016,
+                ethereum_light_client_updates_per_transaction: 128,
+                ethereum_light_client_updates_per_block: 512,
+                native_header_bytes_per_transaction: 8 * 1024 * 1024,
+                native_header_bytes_per_block: 32 * 1024 * 1024,
+                secp256k1_recoveries_per_transaction: 1_005,
+                secp256k1_recoveries_per_block: 4_020,
+                bls_aggregate_checks_per_transaction: 1_004,
+                bls_aggregate_checks_per_block: 4_016,
+                bls_signer_contributions_per_transaction: 131_713,
+                bls_signer_contributions_per_block: 526_852,
+                bn254_pairing_checks_per_transaction: 1,
+                bn254_pairing_checks_per_block: 4,
             },
             proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
             native_message_submit_path: Some("/v1/bridge/messages".to_owned()),
@@ -34370,6 +33404,62 @@ mod tests {
     }
 
     #[test]
+    fn sccp_capability_json_retains_canonical_limit_field_names() {
+        let encoded = norito::json::to_value(&sample_sccp_capabilities())
+            .expect("encode SCCP capabilities JSON value");
+        let root = encoded.as_object().expect("SCCP capabilities object");
+        let registry_limits = root
+            .get("registry_limits")
+            .and_then(JsonValue::as_object)
+            .expect("SCCP registry limits object");
+        let expected_registry_fields = [
+            "max_governed_lanes",
+            "max_live_governed_routes",
+            "max_live_routes_per_lane",
+            "max_retained_routes_per_lane",
+            "max_retained_native_trust_anchors_per_lane",
+        ];
+        assert_eq!(registry_limits.len(), expected_registry_fields.len());
+        for field in expected_registry_fields {
+            assert!(registry_limits.contains_key(field), "missing {field}");
+        }
+
+        let resource_limits = root
+            .get("resource_limits")
+            .and_then(JsonValue::as_object)
+            .expect("SCCP resource limits object");
+        let expected_resource_fields = [
+            "max_outbound_messages_per_block",
+            "max_outbound_message_payload_bytes",
+            "max_pending_outbound_messages",
+            "max_pending_outbound_payload_bytes",
+            "max_proofs_per_transaction",
+            "max_proofs_per_block",
+            "max_proof_bytes_per_proof",
+            "max_proof_bytes_per_transaction",
+            "max_proof_bytes_per_block",
+            "max_native_headers_per_transaction",
+            "max_native_headers_per_block",
+            "max_ethereum_light_client_updates_per_transaction",
+            "max_ethereum_light_client_updates_per_block",
+            "max_native_header_bytes_per_transaction",
+            "max_native_header_bytes_per_block",
+            "max_secp256k1_recoveries_per_transaction",
+            "max_secp256k1_recoveries_per_block",
+            "max_bls_aggregate_checks_per_transaction",
+            "max_bls_aggregate_checks_per_block",
+            "max_bls_signer_contributions_per_transaction",
+            "max_bls_signer_contributions_per_block",
+            "max_bn254_pairing_checks_per_transaction",
+            "max_bn254_pairing_checks_per_block",
+        ];
+        assert_eq!(resource_limits.len(), expected_resource_fields.len());
+        for field in expected_resource_fields {
+            assert!(resource_limits.contains_key(field), "missing {field}");
+        }
+    }
+
+    #[test]
     fn sccp_json_media_type_is_exact_and_parameter_tolerant() {
         assert!(Client::is_sccp_json_content_type("application/json"));
         assert!(Client::is_sccp_json_content_type(
@@ -34452,20 +33542,18 @@ mod tests {
         validate_sccp_capabilities(&valid).expect("valid SCCP capability limits");
 
         let registry_mutations: [fn(&mut SccpCapabilities); 5] = [
-            |value: &mut SccpCapabilities| value.registry_limits.max_governed_lanes = 15,
+            |value: &mut SccpCapabilities| value.registry_limits.governed_lanes = 15,
             |value: &mut SccpCapabilities| {
-                value.registry_limits.max_live_governed_routes = 63;
+                value.registry_limits.live_governed_routes = 63;
             },
             |value: &mut SccpCapabilities| {
-                value.registry_limits.max_live_routes_per_lane = 7;
+                value.registry_limits.live_routes_per_lane = 7;
             },
             |value: &mut SccpCapabilities| {
-                value.registry_limits.max_retained_routes_per_lane = 63;
+                value.registry_limits.retained_routes_per_lane = 63;
             },
             |value: &mut SccpCapabilities| {
-                value
-                    .registry_limits
-                    .max_retained_native_trust_anchors_per_lane = 4_095;
+                value.registry_limits.retained_native_trust_anchors_per_lane = 4_095;
             },
         ];
         for mutate in registry_mutations {
@@ -34488,29 +33576,29 @@ mod tests {
             };
         }
         assert_zero_resource_limit_rejects!(
-            max_outbound_messages_per_block,
-            max_outbound_message_payload_bytes,
-            max_pending_outbound_messages,
-            max_pending_outbound_payload_bytes,
-            max_proofs_per_transaction,
-            max_proofs_per_block,
-            max_proof_bytes_per_proof,
-            max_proof_bytes_per_transaction,
-            max_proof_bytes_per_block,
-            max_native_headers_per_transaction,
-            max_native_headers_per_block,
-            max_ethereum_light_client_updates_per_transaction,
-            max_ethereum_light_client_updates_per_block,
-            max_native_header_bytes_per_transaction,
-            max_native_header_bytes_per_block,
-            max_secp256k1_recoveries_per_transaction,
-            max_secp256k1_recoveries_per_block,
-            max_bls_aggregate_checks_per_transaction,
-            max_bls_aggregate_checks_per_block,
-            max_bls_signer_contributions_per_transaction,
-            max_bls_signer_contributions_per_block,
-            max_bn254_pairing_checks_per_transaction,
-            max_bn254_pairing_checks_per_block,
+            outbound_messages_per_block,
+            outbound_message_payload_bytes,
+            pending_outbound_messages,
+            pending_outbound_payload_bytes,
+            proofs_per_transaction,
+            proofs_per_block,
+            proof_bytes_per_proof,
+            proof_bytes_per_transaction,
+            proof_bytes_per_block,
+            native_headers_per_transaction,
+            native_headers_per_block,
+            ethereum_light_client_updates_per_transaction,
+            ethereum_light_client_updates_per_block,
+            native_header_bytes_per_transaction,
+            native_header_bytes_per_block,
+            secp256k1_recoveries_per_transaction,
+            secp256k1_recoveries_per_block,
+            bls_aggregate_checks_per_transaction,
+            bls_aggregate_checks_per_block,
+            bls_signer_contributions_per_transaction,
+            bls_signer_contributions_per_block,
+            bn254_pairing_checks_per_transaction,
+            bn254_pairing_checks_per_block,
         );
 
         macro_rules! assert_unsafe_json_resource_limit_rejects {
@@ -34528,35 +33616,33 @@ mod tests {
             };
         }
         assert_unsafe_json_resource_limit_rejects!(
-            max_outbound_message_payload_bytes,
-            max_pending_outbound_messages,
-            max_pending_outbound_payload_bytes,
-            max_proof_bytes_per_proof,
-            max_proof_bytes_per_transaction,
-            max_proof_bytes_per_block,
-            max_native_header_bytes_per_transaction,
-            max_native_header_bytes_per_block,
+            outbound_message_payload_bytes,
+            pending_outbound_messages,
+            pending_outbound_payload_bytes,
+            proof_bytes_per_proof,
+            proof_bytes_per_transaction,
+            proof_bytes_per_block,
+            native_header_bytes_per_transaction,
+            native_header_bytes_per_block,
         );
 
         let mut drifted_outbox = valid.clone();
-        drifted_outbox
-            .resource_limits
-            .max_outbound_messages_per_block = 511;
+        drifted_outbox.resource_limits.outbound_messages_per_block = 511;
         let _ = validate_sccp_capabilities(&drifted_outbox)
             .expect_err("drifted fixed SCCP outbound message cap must reject");
         let mut drifted_payload = valid.clone();
         drifted_payload
             .resource_limits
-            .max_outbound_message_payload_bytes = 4_095;
+            .outbound_message_payload_bytes = 4_095;
         let _ = validate_sccp_capabilities(&drifted_payload)
             .expect_err("drifted fixed SCCP outbound payload cap must reject");
 
         let mut per_proof_over_transaction = valid.clone();
         per_proof_over_transaction
             .resource_limits
-            .max_proof_bytes_per_proof = per_proof_over_transaction
+            .proof_bytes_per_proof = per_proof_over_transaction
             .resource_limits
-            .max_proof_bytes_per_transaction
+            .proof_bytes_per_transaction
             + 1;
         let _ = validate_sccp_capabilities(&per_proof_over_transaction)
             .expect_err("per-proof bytes above transaction bytes must reject");
@@ -34575,35 +33661,32 @@ mod tests {
             };
         }
         assert_transaction_over_block_rejects!(
-            (max_proofs_per_transaction, max_proofs_per_block),
-            (max_proof_bytes_per_transaction, max_proof_bytes_per_block),
+            (proofs_per_transaction, proofs_per_block),
+            (proof_bytes_per_transaction, proof_bytes_per_block),
+            (native_headers_per_transaction, native_headers_per_block),
             (
-                max_native_headers_per_transaction,
-                max_native_headers_per_block
+                ethereum_light_client_updates_per_transaction,
+                ethereum_light_client_updates_per_block
             ),
             (
-                max_ethereum_light_client_updates_per_transaction,
-                max_ethereum_light_client_updates_per_block
+                native_header_bytes_per_transaction,
+                native_header_bytes_per_block
             ),
             (
-                max_native_header_bytes_per_transaction,
-                max_native_header_bytes_per_block
+                secp256k1_recoveries_per_transaction,
+                secp256k1_recoveries_per_block
             ),
             (
-                max_secp256k1_recoveries_per_transaction,
-                max_secp256k1_recoveries_per_block
+                bls_aggregate_checks_per_transaction,
+                bls_aggregate_checks_per_block
             ),
             (
-                max_bls_aggregate_checks_per_transaction,
-                max_bls_aggregate_checks_per_block
+                bls_signer_contributions_per_transaction,
+                bls_signer_contributions_per_block
             ),
             (
-                max_bls_signer_contributions_per_transaction,
-                max_bls_signer_contributions_per_block
-            ),
-            (
-                max_bn254_pairing_checks_per_transaction,
-                max_bn254_pairing_checks_per_block
+                bn254_pairing_checks_per_transaction,
+                bn254_pairing_checks_per_block
             ),
         );
     }

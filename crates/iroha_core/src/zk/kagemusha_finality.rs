@@ -970,10 +970,11 @@ mod tests {
                     block_hash: HashOf::from_untyped_unchecked(Hash::new(b"parent block")),
                     payload_hash: Hash::new(b"parent payload"),
                 },
-                execution_commitment: ExecutionCommitment::without_topups(
+                execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
                     Hash::new(b"parent parent state"),
                     Hash::new(b"parent post state"),
                     Hash::new(b"parent ordinary writes"),
+                    1,
                     Hash::new(b"parent executed block wire"),
                 ),
                 signers: vec![0, 1, 2],
@@ -1002,12 +1003,13 @@ mod tests {
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"finalized block")),
             payload_hash: Hash::new(b"finalized payload"),
         };
-        let execution_commitment = ExecutionCommitment::new(
+        let execution_commitment = ExecutionCommitment::new_without_merge_carrier(
             Hash::new(b"parent state"),
             commitment.post_state_root,
             commitment.ordinary_writes_root,
             Some(commitment.topup_anchor_root),
             2,
+            1,
             Hash::new(b"finalized executed block wire"),
         )
         .expect("execution commitment");

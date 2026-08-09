@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { blake2b256 } from "../src/blake2b.js";
-import { parseStrictLosslessIntegerJson } from "../src/strictLosslessJson.js";
+import { parseStrictLosslessIntegerJson } from "../src/numericV1.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(__filename), "..", "..", "..");

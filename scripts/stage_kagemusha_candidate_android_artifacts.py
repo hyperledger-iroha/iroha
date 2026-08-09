@@ -18,7 +18,7 @@ from typing import Any, Mapping, Sequence
 sys.path.insert(0, os.fspath(Path(__file__).resolve().parent))
 from check_android_device_lab_slot import (
     KAGEMUSHA_CANDIDATE_ARTIFACT_FILE_NAMES_V4,
-    validate_kagemusha_candidate_stage_manifest_v1,
+    validate_kagemusha_candidate_stage_manifest_v2,
 )
 
 
@@ -475,7 +475,7 @@ def stage_artifacts(
         raise StageError("--serial is invalid")
 
     try:
-        manifest = validate_kagemusha_candidate_stage_manifest_v1(
+        manifest = validate_kagemusha_candidate_stage_manifest_v2(
             stage_root,
             candidate_sha256=candidate_sha256,
             stage_sha256=stage_sha256,

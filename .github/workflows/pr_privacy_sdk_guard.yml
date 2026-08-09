@@ -29,6 +29,7 @@ on:
       - "ci/check_privacy_sdk_guard.sh"
       - "ci/check_privacy_swift_sdk.sh"
       - "ci/privacy_sdk_cargo_lockfile.sh"
+      - "ci/privacy_sdk_cargo_lockfile_test_cleanup.sh"
       - "ci/privacy_sdk_cargo_lockfile_test.sh"
       - "ci/privacy_sdk_cargo_wrapper.sh"
       - "ci/verify_privacy_python_wheel.py"
@@ -41,7 +42,13 @@ on:
       - "scripts/tests/check_privacy_exact12_sdk_manifest_parity_test.py"
       - "scripts/tests/check_privacy_jvm_native_gate_test.py"
       - "scripts/tests/check_privacy_python_witness_boundary_test.py"
+      - "scripts/check_swift_pod_bridge.sh"
+      - "scripts/tests/check_privacy_csharp_native_contract_test.py"
+      - "scripts/tests/check_privacy_jvm_native_contract_test.py"
+      - "scripts/tests/check_privacy_swift_native_contract_test.py"
       - "scripts/tests/mobile_sdk_python312_contract.sh"
+      - "docs/norito_bridge_release.md"
+      - "specs/sorafs_reference_sdk_plan.md"
       - "crates/connect_norito_bridge/Cargo.toml"
       - "crates/connect_norito_bridge/include/connect_norito_bridge.h"
       - "crates/connect_norito_bridge/include/NoritoBridge.h"
@@ -143,6 +150,7 @@ on:
       - "python/iroha_python/tests/zk_x509_test.py"
       - "python/iroha_python/tests/zkat_test.py"
       - "python/iroha_python/README.md"
+      - "IrohaSwift/Package.swift"
       - "IrohaSwift/README.md"
       - "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
       - "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift"
@@ -154,6 +162,7 @@ on:
       - "IrohaSwift/Sources/IrohaSwift/TransactionEncoder.swift"
       - "IrohaSwift/Sources/IrohaSwift/TxBuilder.swift"
       - "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/NativeBridgeLoaderTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/PrivacyExact12CapabilityManifestV1Tests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/PrivacyExact12FixtureBundleTests.swift"
@@ -251,7 +260,6 @@ jobs:
       - name: Verify final privacy SDK Cargo lock isolation
         if: always()
         run: ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}"
-
   privacy_swift_sdk_parse:
     needs: privacy_jvm_sdk_tests
     runs-on: macos-14
@@ -308,7 +316,7 @@ jobs:
           echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
       - name: Install Apple Rust targets and prime frozen dependencies
         run: |
-          rustup target add --toolchain 1.93.1-aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin
+          rustup target add --toolchain 1.93.1-aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
           cargo fetch --locked
       - name: Bind the external privacy Swift Cargo envelope
         run: |
@@ -324,6 +332,8 @@ jobs:
           echo "RUSTDOC=$(rustup which --toolchain 1.93.1-aarch64-apple-darwin rustdoc)" >> "$GITHUB_ENV"
       - name: Make reviewed privacy Swift source read-only
         run: chmod -R a-w "$GITHUB_WORKSPACE"
+      - name: Swift privacy native fail-closed contract
+        run: python3 -I -B scripts/tests/check_privacy_swift_native_contract_test.py
       - name: Rebuild exact ABI22 XCFramework under full Xcode
         run: scripts/build_norito_xcframework.sh
       - name: Privacy Swift SDK parse and native ABI22 tests
@@ -427,6 +437,10 @@ jobs:
             --manifest "$input/native-sdk-abi22-csharp.json" \
             --source-root "$GITHUB_WORKSPACE"
       - name: Privacy C# SDK tests through authenticated ABI22
+        env:
+          PRIVACY_CSHARP_NATIVE_ARTIFACT: ${{ runner.temp }}/privacy-jvm-native-abi22/libconnect_norito_bridge.so
+          PRIVACY_CSHARP_NATIVE_MANIFEST: ${{ runner.temp }}/privacy-jvm-native-abi22/native-sdk-abi22-csharp.json
+          PRIVACY_CSHARP_PYTHON_BIN: ${{ steps.privacy-csharp-python.outputs.python-path }}
         run: ci/check_privacy_csharp_sdk.sh
       - name: Revalidate ABI22 C# privacy input after execution
         if: always()

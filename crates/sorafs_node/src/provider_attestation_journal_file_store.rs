@@ -2105,9 +2105,12 @@ mod tests {
         let root = TempDir::new().expect("state root");
         let root_path = canonical_root(&root);
         let binding = binding(0x31);
-        let store = store(&root_path, binding.clone());
+        let journal_store = store(&root_path, binding.clone());
         assert_eq!(
-            store.load_local().await.expect("load pristine store"),
+            journal_store
+                .load_local()
+                .await
+                .expect("load pristine store"),
             MusubiProviderAttestationJournalStoreSnapshotV1::empty()
         );
 
@@ -2115,7 +2118,7 @@ mod tests {
         let expected_revision =
             musubi_provider_attestation_journal_checkpoint_revision_v1(&checkpoint);
         assert_eq!(
-            store
+            journal_store
                 .compare_and_swap_local(None, checkpoint.clone())
                 .await
                 .expect("store first checkpoint"),
@@ -2123,7 +2126,7 @@ mod tests {
                 revision: expected_revision
             }
         );
-        drop(store);
+        drop(journal_store);
 
         let reopened = store(&root_path, binding);
         let loaded = reopened.load_local().await.expect("load reopened store");

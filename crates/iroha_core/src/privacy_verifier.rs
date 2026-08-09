@@ -1873,7 +1873,7 @@ pub(crate) enum PrivacyVerificationErrorV1 {
     #[error(transparent)]
     Envelope(Box<PrivacyEnvelopeFailureV1>),
     /// The selected protocol has no complete native verifier.
-    #[cfg_attr(feature = "zk-stark", allow(dead_code))]
+    #[cfg(not(feature = "zk-stark"))]
     #[error(transparent)]
     EngineUnavailable(Box<PrivacyEngineUnavailableFailureV1>),
     /// Native VeRange decoding or verification failed.
@@ -1988,6 +1988,7 @@ pub(crate) struct PrivacyEnvelopeFailureV1 {
 }
 
 #[derive(Debug, Error)]
+#[cfg(not(feature = "zk-stark"))]
 #[error("native privacy engine for {protocol_id:?} is not available")]
 pub(crate) struct PrivacyEngineUnavailableFailureV1 {
     protocol_id: PrivacyProtocolIdV1,
@@ -5038,18 +5039,7 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn pgc_rejects_cross_suite_proof_replay() {
-        let fixture = PgcFixture::new();
-        let (verange_envelope, _, _) = valid_envelope();
-        let mut replayed = fixture.envelope.clone();
-        replayed.proof = verange_envelope.proof;
-
-        assert!(matches!(
-            verify_privacy_envelope_v1(&replayed, fixture.verification_context()),
-            Err(PrivacyVerificationErrorV1::Envelope(_))
-        ));
-    }
+    include!("privacy_verifier/cross_suite_replay_test.rs");
 
     #[test]
     fn verified_orchard_effect_is_complete_and_derived_from_authoritative_frontier() {
@@ -7325,57 +7315,7 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn bootle_lantern_trusted_policy_is_mandatory_valid_active_and_exact() {
-        let fixture = bootle_lantern_fixture();
-
-        let mut missing = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
-        missing.bootle_lantern_policy = None;
-        assert!(matches!(
-            verify_privacy_envelope_v1(&fixture.envelope, missing),
-            Err(PrivacyVerificationErrorV1::BootleLanternState(detail))
-                if detail.code == PrivacyBootleLanternStateFailureCodeV1::MissingTrustedPolicy
-        ));
-
-        let mut corrupt = fixture.policy.clone();
-        corrupt.record_digest.0[0] ^= 1;
-        let mut corrupt_context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
-        corrupt_context.bootle_lantern_policy = Some(&corrupt);
-        assert!(matches!(
-            verify_privacy_envelope_v1(&fixture.envelope, corrupt_context),
-            Err(PrivacyVerificationErrorV1::BootleLanternState(detail))
-                if detail.code == PrivacyBootleLanternStateFailureCodeV1::InvalidTrustedPolicy
-        ));
-
-        let mut revoked = fixture.policy.clone();
-        revoked.epoch += 1;
-        revoked.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Revoked;
-        redigest_bootle_lantern_policy(&mut revoked);
-        revoked
-            .validate_revocation_successor(&fixture.policy)
-            .expect("canonical terminal successor");
-        let mut revoked_context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
-        revoked_context.bootle_lantern_policy = Some(&revoked);
-        assert!(matches!(
-            verify_privacy_envelope_v1(&fixture.envelope, revoked_context),
-            Err(PrivacyVerificationErrorV1::BootleLanternState(detail))
-                if detail.code == PrivacyBootleLanternStateFailureCodeV1::PolicyRevoked
-        ));
-
-        let mut rotated = fixture.policy.clone();
-        rotated.epoch += 1;
-        rotated.required_disclosure_bitmap |= 1;
-        redigest_bootle_lantern_policy(&mut rotated);
-        rotated
-            .validate_rotation_successor(&fixture.policy)
-            .expect("canonical active successor");
-        let mut rotated_context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
-        rotated_context.bootle_lantern_policy = Some(&rotated);
-        assert!(matches!(
-            verify_privacy_envelope_v1(&fixture.envelope, rotated_context),
-            Err(PrivacyVerificationErrorV1::NativeBootleLantern(_))
-        ));
-    }
+    include!("privacy_verifier/bootle_lantern_policy_test.rs");
 
     #[test]
     fn bootle_lantern_wire_rejects_truncation_extension_malleation_and_cross_suite_replay() {
@@ -7531,62 +7471,5 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn every_governed_envelope_binding_fails_closed_when_tampered() {
-        let (envelope, activation, chain_id) = valid_envelope();
-        let mutations: [(&str, fn(&mut PrivacyProofEnvelopeV1)); 9] = [
-            ("protocol", |value| {
-                value.protocol_id = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1
-            }),
-            ("parameter-id", |value| value.parameter_id.0[0] ^= 1),
-            ("parameter-digest", |value| value.parameter_digest.0[0] ^= 1),
-            ("verifier-digest", |value| value.verifier_digest.0[0] ^= 1),
-            ("schema-digest", |value| {
-                value.statement_schema_digest.0[0] ^= 1
-            }),
-            ("engine-manifest", |value| {
-                value.engine_manifest_digest.0[0] ^= 1
-            }),
-            ("statement-digest", |value| value.statement_digest.0[0] ^= 1),
-            ("proof-system", |value| {
-                value.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha256Goldilocks
-            }),
-            ("engine", |value| {
-                value.engine_id = PrivacyEngineIdV1::NativeGoldilocksStarkFri
-            }),
-        ];
-        for (label, mutate) in mutations {
-            let mut candidate = envelope.clone();
-            mutate(&mut candidate);
-            assert_rejected(&candidate, &activation, &chain_id, label);
-        }
-    }
-
-    #[test]
-    fn every_statement_context_artifact_binding_fails_closed_when_tampered() {
-        let (envelope, activation, chain_id) = valid_envelope();
-        let mutations: [(&str, fn(&mut PrivacyStatementContextV1)); 5] = [
-            ("statement-parameter-id", |context| {
-                context.parameter_id.0[0] ^= 1
-            }),
-            ("statement-parameter-digest", |context| {
-                context.parameter_digest.0[0] ^= 1
-            }),
-            ("statement-verifier-digest", |context| {
-                context.verifier_digest.0[0] ^= 1
-            }),
-            ("statement-schema-digest", |context| {
-                context.statement_schema_digest.0[0] ^= 1
-            }),
-            ("statement-engine-manifest", |context| {
-                context.engine_manifest_digest.0[0] ^= 1
-            }),
-        ];
-        for (label, mutate) in mutations {
-            let mut candidate = envelope.clone();
-            mutate(&mut verange_statement_mut(&mut candidate).context);
-            refresh_statement_digest(&mut candidate);
-            assert_rejected(&candidate, &activation, &chain_id, label);
-        }
-    }
+    include!("privacy_verifier/governed_binding_tests.rs");
 }

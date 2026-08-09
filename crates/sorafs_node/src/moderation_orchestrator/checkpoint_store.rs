@@ -96,6 +96,10 @@ impl ModerationCheckpointStoreRecordV1 {
 /// committed predecessor. Credentials and sealing keys remain inside the
 /// provider and must never appear in records, configuration, or diagnostics.
 pub trait ModerationCheckpointStoreV1: ModerationRuntimeProviderV1 {
+    /// Return the archive-lifetime-stable Ed25519 trust anchor authenticating
+    /// terminal-set attestations. HSM-internal rotation must preserve it in V1.
+    fn attestation_public_key(&self) -> [u8; 32];
+
     /// Load the latest committed record for this configured moderation namespace.
     fn load_latest(
         &self,
@@ -107,11 +111,19 @@ pub trait ModerationCheckpointStoreV1: ModerationRuntimeProviderV1 {
         expected_revision: Option<[u8; 32]>,
         next: &ModerationCheckpointStoreRecordV1,
     ) -> Result<(), ModerationCheckpointStoreExternalErrorV1>;
+
+    /// Sign a terminal-set statement only when its source record is the exact
+    /// currently committed record in this checkpoint namespace.
+    fn attest_terminal_set(
+        &self,
+        statement: &ModerationPanelNotificationSourceAttestationV1,
+    ) -> Result<[u8; 64], ModerationCheckpointStoreExternalErrorV1>;
 }
 
 pub(super) struct QualifiedModerationCheckpointStoreV1 {
     handle: String,
     qualification: ModerationRuntimeProviderQualificationV1,
+    attestation_public_key: [u8; 32],
     store: Arc<dyn ModerationCheckpointStoreV1>,
 }
 
@@ -119,12 +131,21 @@ impl QualifiedModerationCheckpointStoreV1 {
     pub(super) fn try_new(
         handle: &str,
         qualification: ModerationRuntimeProviderQualificationV1,
+        expected_attestation_public_key: [u8; 32],
         store: Arc<dyn ModerationCheckpointStoreV1>,
     ) -> Result<Self, ModerationRuntimeProviderQualificationErrorV1> {
         qualify_moderation_runtime_provider_v1(handle, qualification, store.as_ref())?;
+        let observed_public_key = store.attestation_public_key();
+        revalidate_moderation_runtime_provider_v1(handle, qualification, store.as_ref())?;
+        if observed_public_key != expected_attestation_public_key
+            || PublicKey::from_bytes(Algorithm::Ed25519, &observed_public_key).is_err()
+        {
+            return Err(ModerationRuntimeProviderQualificationErrorV1::ArchivePublicKeyChanged);
+        }
         Ok(Self {
             handle: handle.to_owned(),
             qualification,
+            attestation_public_key: expected_attestation_public_key,
             store,
         })
     }
@@ -161,6 +182,47 @@ impl QualifiedModerationCheckpointStoreV1 {
             .map_err(|_| ModerationCheckpointStoreExternalErrorV1::Ambiguous)?;
         result
     }
+
+    pub(super) fn attest_terminal_set(
+        &self,
+        statement: &ModerationPanelNotificationSourceAttestationV1,
+    ) -> Result<[u8; 64], ModerationCheckpointStoreExternalErrorV1> {
+        self.revalidate()
+            .map_err(|_| ModerationCheckpointStoreExternalErrorV1::Unavailable)?;
+        if self.store.attestation_public_key() != self.attestation_public_key {
+            return Err(ModerationCheckpointStoreExternalErrorV1::Rejected);
+        }
+        let latest = self
+            .store
+            .load_latest()?
+            .ok_or(ModerationCheckpointStoreExternalErrorV1::Rejected)?;
+        let expected_chain_id = statement
+            .chain_id
+            .parse::<iroha_data_model::ChainId>()
+            .map_err(|_| ModerationCheckpointStoreExternalErrorV1::Rejected)?;
+        if validate_moderation_panel_notification_source_attestation_for_broker_v1(
+            statement,
+            &expected_chain_id,
+            &self.handle,
+            self.qualification,
+            self.attestation_public_key,
+            &latest,
+        )
+        .is_err()
+        {
+            return Err(ModerationCheckpointStoreExternalErrorV1::Rejected);
+        }
+        let result = self.store.attest_terminal_set(statement);
+        self.revalidate()
+            .map_err(|_| ModerationCheckpointStoreExternalErrorV1::Ambiguous)?;
+        if self.store.attestation_public_key() != self.attestation_public_key {
+            return Err(ModerationCheckpointStoreExternalErrorV1::Ambiguous);
+        }
+        if self.store.load_latest()?.as_ref() != Some(&latest) {
+            return Err(ModerationCheckpointStoreExternalErrorV1::Ambiguous);
+        }
+        result
+    }
 }
 
 impl fmt::Debug for QualifiedModerationCheckpointStoreV1 {
@@ -169,6 +231,7 @@ impl fmt::Debug for QualifiedModerationCheckpointStoreV1 {
             .debug_struct("QualifiedModerationCheckpointStoreV1")
             .field("handle", &self.handle)
             .field("qualification", &self.qualification)
+            .field("attestation_public_key", &self.attestation_public_key)
             .field("store", &"<runtime-only>")
             .finish()
     }
@@ -407,14 +470,14 @@ fn persist_local_cache(
     Ok(())
 }
 
-fn checkpoint_namespace(chain_id: &iroha_data_model::ChainId) -> [u8; 32] {
+pub(super) fn checkpoint_namespace(chain_id: &iroha_data_model::ChainId) -> [u8; 32] {
     domain_hash(
         MODERATION_CHECKPOINT_NAMESPACE_DOMAIN_V1,
         &[chain_id.as_str().as_bytes()],
     )
 }
 
-fn record_revision(record: &ModerationCheckpointStoreRecordV1) -> [u8; 32] {
+pub(super) fn record_revision(record: &ModerationCheckpointStoreRecordV1) -> [u8; 32] {
     let predecessor_revision = record.predecessor_revision.unwrap_or([0; 32]);
     let predecessor_checkpoint_digest = record.predecessor_checkpoint_digest.unwrap_or([0; 32]);
     domain_hash(

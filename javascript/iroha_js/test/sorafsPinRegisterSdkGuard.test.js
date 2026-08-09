@@ -380,6 +380,16 @@ test("SoraFS pin-register SDK guard locks required workflow lanes", () => {
     /DOTNET_BIN="\$\{SORAFS_PIN_REGISTER_DOTNET_BIN:-dotnet\}"/,
     "SoraFS C# SDK runner must keep the documented dotnet override variable",
   );
+  assert.match(
+    read("ci/check_sorafs_pin_register_csharp_sdk.sh"),
+    /--filter-method "\*RegisterSoraFsPinManifestAsync\*"/,
+    "SoraFS C# SDK runner must use the Microsoft Testing Platform method filter",
+  );
+  assert.doesNotMatch(
+    read("ci/check_sorafs_pin_register_csharp_sdk.sh"),
+    /FullyQualifiedName~RegisterSoraFsPinManifestAsync/,
+    "SoraFS C# SDK runner must not use the ignored VSTest filter syntax",
+  );
 });
 
 test("SoraFS JavaScript SDK runner rejects non-Node-24 overrides before tests", () => {

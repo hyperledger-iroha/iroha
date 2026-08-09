@@ -46,12 +46,13 @@ use super::{
     ZkAmsMkheErrorV1,
     collective::{
         ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveEncryptionOpeningV1,
-        ZkAmsMkheCollectivePublicKeyV1,
+        ZkAmsMkheCollectivePublicKeyV1, validate_compact_for_key,
     },
     manifest::{ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1, release_profile_v1},
     packing::{
         ZkAmsT256PackedPlaintextV1, ZkAmsT256PackingLayoutV1,
         decode_zk_ams_t256_packed_plaintext_v1, packed_plaintext_rns_binding_digest_v1,
+        rns_polynomial_digest,
     },
     phase23_encrypted::{
         ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1,
@@ -127,8 +128,6 @@ const EVALUATION_POINT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.eva
 const CHALLENGE_SET_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.challenge-set";
 const IPA_TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.ipa";
 const BITNESS_SUMCHECK_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.bitness-sumcheck";
-const NATIVE_BGV_OPENING_RECEIPT_DOMAIN_V1: &[u8] =
-    b"iroha.zk-ams.v1.phase23.rns-link.native-bgv-opening-receipt";
 const IPA_GENERATOR_LABEL_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.ipa-generators";
 const BITNESS_ALGORITHM_LABEL_V1: &[u8] = b"rns-link-algorithm";
 const BITNESS_CONTEXT_LABEL_V1: &[u8] = b"rns-link-context";
@@ -827,6 +826,8 @@ impl ZkAmsPhase23RnsLinkWholeProofBindingV1 {
     }
 }
 
+// TODO: Bind the first operational consumer's statement and replay context in
+// its consuming API before this local check can authorize any state change.
 /// Opaque capability for one native, in-process packed BGV opening.
 ///
 /// This is intentionally narrower than an RNS-Link proof receipt. It is minted
@@ -835,75 +836,105 @@ impl ZkAmsPhase23RnsLinkWholeProofBindingV1 {
 /// image, and both native RLWE equations have been recomputed. It neither
 /// authenticates the carry/quotient records in the whole-proof wire envelope
 /// nor proves equality to a Hyrax commitment.
-pub(super) struct VerifiedZkAmsPhase23NativeBgvOpeningV1 {
-    key_digest: [u8; 32],
-    layout_digest: [u8; 32],
-    plaintext_digest: [u8; 32],
-    ciphertext_digest: [u8; 32],
+///
+/// The capability borrows the exact checked artifacts, is move-only, and can
+/// be consumed once. It is not a serializable digest token and cannot be used
+/// to authorize a substituted object or a later job. No operational consumer
+/// exists yet; a future consumer must add its own statement/replay context at
+/// the call site instead of treating this local result as cross-job authority.
+pub(super) struct VerifiedZkAmsPhase23NativeBgvOpeningV1<'a> {
+    key: &'a ZkAmsMkheCollectivePublicKeyV1,
+    layout: ZkAmsT256PackingLayoutV1,
+    plaintext: &'a ZkAmsT256PackedPlaintextV1,
+    ciphertext: &'a ZkAmsMkheCollectiveCiphertextV1,
     rns_binding_digest: [u8; 32],
-    digest: [u8; 32],
 }
 
-impl fmt::Debug for VerifiedZkAmsPhase23NativeBgvOpeningV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("VerifiedZkAmsPhase23NativeBgvOpeningV1")
-            .field("key_digest", &hex::encode(self.key_digest))
-            .field("layout_digest", &hex::encode(self.layout_digest))
-            .field("plaintext_digest", &hex::encode(self.plaintext_digest))
-            .field("ciphertext_digest", &hex::encode(self.ciphertext_digest))
-            .field("rns_binding_digest", &hex::encode(self.rns_binding_digest))
-            .field("digest", &hex::encode(self.digest))
-            .finish()
+/// RAII owner for canonical decoded slots. Deliberately neither `Clone` nor
+/// `Debug`; all named bytes are erased on success, error, and unwind.
+struct ZeroizingNativeDecodedPlaintextV1(Vec<[u8; 32]>);
+
+#[cfg(test)]
+std::thread_local! {
+    static NATIVE_DECODED_PLAINTEXT_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+fn native_decoded_plaintext_zeroized_drop_count_v1() -> usize {
+    NATIVE_DECODED_PLAINTEXT_ZEROIZED_DROPS_V1
+        .try_with(std::cell::Cell::get)
+        .unwrap_or(0)
+}
+
+impl Drop for ZeroizingNativeDecodedPlaintextV1 {
+    fn drop(&mut self) {
+        let values = core::hint::black_box(&mut self.0);
+        for value in values.iter_mut() {
+            value.fill(0);
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        #[cfg(test)]
+        if values.iter().all(|value| *value == [0; 32]) {
+            let _ = NATIVE_DECODED_PLAINTEXT_ZEROIZED_DROPS_V1
+                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
+        let _ = core::hint::black_box(&mut *values);
     }
 }
 
-impl VerifiedZkAmsPhase23NativeBgvOpeningV1 {
-    /// Recheck that this opaque capability names the exact public artifacts a
-    /// sibling consumer intends to use. The secret opening is not retained.
-    pub(super) fn validate_for(
-        &self,
-        key: &ZkAmsMkheCollectivePublicKeyV1,
-        layout: ZkAmsT256PackingLayoutV1,
-        plaintext: &ZkAmsT256PackedPlaintextV1,
-        ciphertext: &ZkAmsMkheCollectiveCiphertextV1,
+impl<'a> VerifiedZkAmsPhase23NativeBgvOpeningV1<'a> {
+    /// Consume this local result once after revalidating the exact borrowed
+    /// public artifacts, and run the intended in-process use while those
+    /// immutable borrows remain live. No transferable digest authority is
+    /// returned by this boundary.
+    pub(super) fn consume(
+        self,
+        consumer: impl FnOnce(
+            &'a ZkAmsMkheCollectivePublicKeyV1,
+            ZkAmsT256PackingLayoutV1,
+            &'a ZkAmsT256PackedPlaintextV1,
+            &'a ZkAmsMkheCollectiveCiphertextV1,
+        ) -> Result<(), ZkAmsMkheErrorV1>,
     ) -> Result<(), ZkAmsMkheErrorV1> {
-        if self.key_digest != key.digest()
-            || self.layout_digest != layout.digest
-            || self.plaintext_digest != plaintext.digest
-            || self.ciphertext_digest != ciphertext.digest()
-            || self.rns_binding_digest == [0; 32]
-            || self.digest == [0; 32]
-            || self.digest != native_bgv_opening_receipt_digest_v1(self)
-        {
+        let current_rns_binding_digest = validate_native_bgv_public_artifacts_v1(
+            self.key,
+            self.layout,
+            self.plaintext,
+            self.ciphertext,
+        )?;
+        if current_rns_binding_digest != self.rns_binding_digest {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
-        Ok(())
+        consumer(self.key, self.layout, self.plaintext, self.ciphertext)
     }
 }
 
-/// Verify one real release-profile encryption opening and mint a capability
-/// that contains no witness material.
-pub(super) fn verify_zk_ams_phase23_native_bgv_opening_v1(
+fn validate_native_bgv_public_artifacts_v1(
     key: &ZkAmsMkheCollectivePublicKeyV1,
     layout: ZkAmsT256PackingLayoutV1,
     plaintext: &ZkAmsT256PackedPlaintextV1,
     ciphertext: &ZkAmsMkheCollectiveCiphertextV1,
-    opening: &ZkAmsMkheCollectiveEncryptionOpeningV1,
-) -> Result<VerifiedZkAmsPhase23NativeBgvOpeningV1, ZkAmsMkheErrorV1> {
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let profile = release_profile_v1();
     if profile.moduli.len() != ZK_AMS_PHASE23_RNS_LINK_RELEASE_RNS_LIMB_COUNT_V1 {
         return Err(ZkAmsMkheErrorV1::InvalidProfile);
     }
-
-    // Decoding independently rechecks the exact layout, canonical packed
-    // digest, chunk metadata, and every unused slot before any receipt exists.
-    let decoded = decode_zk_ams_t256_packed_plaintext_v1(layout, plaintext)?;
+    validate_compact_for_key(ciphertext, key, &profile)?;
+    if ciphertext.evaluation_key_digest() != Some(key.digest()) {
+        return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+    }
+    let decoded = ZeroizingNativeDecodedPlaintextV1(decode_zk_ams_t256_packed_plaintext_v1(
+        layout, plaintext,
+    )?);
     let used_slots = usize::try_from(plaintext.used_slots)
         .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    if decoded.len() != ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1
-        || used_slots > decoded.len()
-        || decoded[used_slots..].iter().any(|value| *value != [0; 32])
+    if decoded.0.len() != ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1
+        || used_slots > decoded.0.len()
+        || decoded.0[used_slots..]
+            .iter()
+            .any(|value| *value != [0; 32])
     {
         return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
     }
@@ -911,22 +942,39 @@ pub(super) fn verify_zk_ams_phase23_native_bgv_opening_v1(
     if rns_binding_digest == [0; 32] {
         return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
     }
+    Ok(rns_binding_digest)
+}
 
-    // This adapter validates the complete public context, the state-owned
-    // canonical/RNS plaintext identity, witness bounds, and both release-RNS
-    // RLWE equations before invoking the closure.
+/// Verify one real release-profile encryption opening and mint a move-only,
+/// in-process result borrowing the exact checked public objects.
+pub(super) fn verify_zk_ams_phase23_native_bgv_opening_v1<'a>(
+    key: &'a ZkAmsMkheCollectivePublicKeyV1,
+    layout: ZkAmsT256PackingLayoutV1,
+    plaintext: &'a ZkAmsT256PackedPlaintextV1,
+    ciphertext: &'a ZkAmsMkheCollectiveCiphertextV1,
+    opening: ZkAmsMkheCollectiveEncryptionOpeningV1,
+) -> Result<VerifiedZkAmsPhase23NativeBgvOpeningV1<'a>, ZkAmsMkheErrorV1> {
+    let profile = release_profile_v1();
+    let rns_binding_digest =
+        validate_native_bgv_public_artifacts_v1(key, layout, plaintext, ciphertext)?;
+
+    // The owned opening is single-use and zeroizes when this call returns or
+    // unwinds. Its adapter rechecks the exact public context and both release-
+    // RNS RLWE equations before lending any witness reference.
     opening.with_validated_proof_witness_v1(
         key,
         layout,
         plaintext,
         ciphertext,
         |canonical_plaintext, plaintext_lift, ephemeral, error_zero, error_one| {
-            if canonical_plaintext.len() != profile.ring_degree
+            if canonical_plaintext != plaintext.coefficients.as_slice()
+                || canonical_plaintext.len() != profile.ring_degree
                 || plaintext_lift.coefficients.len()
                     != profile
                         .ring_degree
                         .checked_mul(profile.moduli.len())
                         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+                || rns_polynomial_digest(&profile, plaintext_lift)? != rns_binding_digest
                 || ephemeral.coefficients.len() != profile.ring_degree
                 || error_zero.coefficients.len() != profile.ring_degree
                 || error_one.coefficients.len() != profile.ring_degree
@@ -937,31 +985,13 @@ pub(super) fn verify_zk_ams_phase23_native_bgv_opening_v1(
         },
     )?;
 
-    let mut receipt = VerifiedZkAmsPhase23NativeBgvOpeningV1 {
-        key_digest: key.digest(),
-        layout_digest: layout.digest,
-        plaintext_digest: plaintext.digest,
-        ciphertext_digest: ciphertext.digest(),
+    Ok(VerifiedZkAmsPhase23NativeBgvOpeningV1 {
+        key,
+        layout,
+        plaintext,
+        ciphertext,
         rns_binding_digest,
-        digest: [0; 32],
-    };
-    receipt.digest = native_bgv_opening_receipt_digest_v1(&receipt);
-    receipt.validate_for(key, layout, plaintext, ciphertext)?;
-    Ok(receipt)
-}
-
-fn native_bgv_opening_receipt_digest_v1(
-    receipt: &VerifiedZkAmsPhase23NativeBgvOpeningV1,
-) -> [u8; 32] {
-    let mut frame = Vec::with_capacity(NATIVE_BGV_OPENING_RECEIPT_DOMAIN_V1.len() + 1 + 5 * 32);
-    frame.extend_from_slice(NATIVE_BGV_OPENING_RECEIPT_DOMAIN_V1);
-    frame.push(RNS_LINK_VERSION_V1);
-    frame.extend_from_slice(&receipt.key_digest);
-    frame.extend_from_slice(&receipt.layout_digest);
-    frame.extend_from_slice(&receipt.plaintext_digest);
-    frame.extend_from_slice(&receipt.ciphertext_digest);
-    frame.extend_from_slice(&receipt.rns_binding_digest);
-    keccak256(&frame)
+    })
 }
 
 // Compile-time API guards: mutable readiness and KAT evidence have no place in
@@ -3563,6 +3593,42 @@ mod tests {
         assert_eq!(
             verify_tiny_relation(&absent_chunk, &points),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
+        );
+    }
+
+    #[test]
+    fn native_decoded_plaintext_owner_zeroizes_success_error_and_unwind() {
+        let owner = || ZeroizingNativeDecodedPlaintextV1(vec![[0x5a; 32]; 2]);
+
+        let before_success = native_decoded_plaintext_zeroized_drop_count_v1();
+        drop(owner());
+        assert_eq!(
+            native_decoded_plaintext_zeroized_drop_count_v1(),
+            before_success + 1
+        );
+
+        fn reject_owner(_owner: ZeroizingNativeDecodedPlaintextV1) -> Result<(), ZkAmsMkheErrorV1> {
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        }
+        let before_error = native_decoded_plaintext_zeroized_drop_count_v1();
+        assert_eq!(
+            reject_owner(owner()),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        );
+        assert_eq!(
+            native_decoded_plaintext_zeroized_drop_count_v1(),
+            before_error + 1
+        );
+
+        let before_unwind = native_decoded_plaintext_zeroized_drop_count_v1();
+        let unwind = catch_unwind(AssertUnwindSafe(|| {
+            let _owner = owner();
+            panic!("intentional native decoded-plaintext erasure audit");
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(
+            native_decoded_plaintext_zeroized_drop_count_v1(),
+            before_unwind + 1
         );
     }
 

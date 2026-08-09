@@ -153,62 +153,7 @@ impl Drop for AddressRuntimeGuard {
 #[error("failed to load config from fixtures")]
 struct FixtureConfigLoadError;
 
-const FIXTURE_SORANET_TRANSPORT_PUBLIC_KEY: &str =
-    "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B";
-const FIXTURE_SORANET_TRANSPORT_PRIVATE_KEY: &str =
-    "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89";
-const FIXTURE_STREAMING_PUBLIC_KEY: &str =
-    "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB";
-const FIXTURE_STREAMING_PRIVATE_KEY: &str =
-    "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F";
-
-fn fixture_soranet_transport_key_pair() -> KeyPair {
-    let public_key = FIXTURE_SORANET_TRANSPORT_PUBLIC_KEY
-        .parse::<PublicKey>()
-        .expect("fixture SoraNet transport public key");
-    let private_key = FIXTURE_SORANET_TRANSPORT_PRIVATE_KEY
-        .parse::<PrivateKey>()
-        .expect("fixture SoraNet transport private key");
-    KeyPair::new(public_key, private_key).expect("matching fixture SoraNet transport key pair")
-}
-
-fn fixture_streaming_key_pair() -> KeyPair {
-    KeyPair::new(
-        FIXTURE_STREAMING_PUBLIC_KEY
-            .parse::<PublicKey>()
-            .expect("fixture streaming public key"),
-        FIXTURE_STREAMING_PRIVATE_KEY
-            .parse::<PrivateKey>()
-            .expect("fixture streaming private key"),
-    )
-    .expect("matching fixture streaming key pair")
-}
-
-fn soranet_transport_layer(key_pair: &KeyPair) -> Table {
-    Table::new()
-        .write(
-            "soranet_transport_public_key",
-            key_pair.public_key().to_string(),
-        )
-        .write(
-            "soranet_transport_private_key",
-            ExposedPrivateKey(key_pair.private_key().clone()).to_string(),
-        )
-}
-
-fn canonical_test_base_table() -> Table {
-    let source = fs::read_to_string(fixtures_dir().join("base.toml"))
-        .expect("read dedicated SoraNet transport test base config");
-    let mut table: Table = toml::from_str(&source).expect("parse transport test base config");
-    let hash_body = Hash::new(b"iroha-config dedicated SoraNet transport tests").to_string();
-    let canonical = norito::literal::format("hash", &hash_body.to_ascii_uppercase());
-    table
-        .get_mut("genesis")
-        .and_then(TomlValue::as_table_mut)
-        .expect("base config genesis table")
-        .insert("expected_hash".into(), TomlValue::String(canonical));
-    table
-}
+include!("fixtures/soranet_transport_identity_tests.rs");
 
 fn load_config_from_fixtures(path: impl AsRef<Path>) -> Result<Config, FixtureConfigLoadError> {
     let config = ConfigReader::new()
@@ -1020,6 +965,7 @@ fn minimal_config_snapshot() {
                     moderation_orchestrator: None,
                     evidence_viewer: None,
                     reputation_runtime: None,
+                    reserve_transparency_runtime: None,
                     por_replay_archive: None,
                     hedging_billing_runtime: None,
                     provider_ingest_runtime: None,
@@ -1066,6 +1012,15 @@ fn minimal_config_snapshot() {
                         enabled: false,
                         signer_handle: None,
                         signer_public_key: None,
+                        signer_revision: None,
+                        signer_policy_digest: None,
+                        admission_provider_handle: None,
+                        admission_provider_revision: None,
+                        admission_provider_policy_digest: None,
+                        admission_max_pending: 65536,
+                        admission_max_tracked_tokens: 65536,
+                        admission_reconcile_max_items: 256,
+                        admission_lease_ttl_ms: 120000,
                         key_version: 1,
                         default_ttl_secs: 900,
                         default_max_streams: 4,
@@ -1166,7 +1121,7 @@ fn minimal_config_snapshot() {
                             4194304,
                         ),
                         max_request_bytes: Bytes(
-                            134283264,
+                            135397376,
                         ),
                         max_future_skew_secs: 60,
                         allow_insecure_http: false,
@@ -1971,7 +1926,12 @@ fn minimal_config_snapshot() {
                 blocks_in_memory: 1024,
                 block_sync_roster_retention: 7200,
                 roster_sidecar_retention: 512,
-                eviction_required_replicas: 3,
+                replica_advert: KuraReplicaAdvertPolicy {
+                    eviction_required_replicas: 3,
+                    evictable_window: 4096,
+                    ttl: 3600s,
+                    refresh_interval: 900s,
+                },
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity: 256,
                 fsync_mode: Batched,
@@ -4507,250 +4467,6 @@ fn missing_fields() {
 }
 
 #[test]
-fn soranet_transport_identity_is_required_even_with_streaming_identity() {
-    let mut layer = canonical_test_base_table();
-    layer.remove("soranet_transport_private_key");
-    let error = ConfigReader::new()
-        .with_env(MockEnv::new())
-        .with_toml_source(TomlSource::inline(layer))
-        .read_and_complete::<UserConfig>()
-        .expect("missing private source remains structurally readable")
-        .parse()
-        .expect_err("dedicated SoraNet transport private source must be required");
-    let message = strip_ansi_codes(&format!("{error:?}"));
-    assert_contains!(
-        message,
-        "missing private-key source; configure exactly one of soranet_transport_private_key or soranet_transport_private_key_file"
-    );
-}
-
-#[test]
-fn owner_held_identity_files_populate_all_runtime_key_pairs() {
-    let mut layer = canonical_test_base_table();
-    let node_private = layer
-        .remove("private_key")
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .expect("base validator private key");
-    let soranet_private = layer
-        .remove("soranet_transport_private_key")
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .expect("base SoraNet private key");
-    let streaming = layer
-        .get_mut("streaming")
-        .and_then(TomlValue::as_table_mut)
-        .expect("base streaming table");
-    let streaming_private = streaming
-        .remove("identity_private_key")
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .expect("base streaming private key");
-
-    let private_dir = TestDir::create("private-keys");
-    let node_path = private_dir.path().join("node.key");
-    let soranet_path = private_dir.path().join("soranet.key");
-    let streaming_path = private_dir.path().join("streaming.key");
-    fs::write(&node_path, format!("{node_private}\n")).expect("write node private key");
-    fs::write(&soranet_path, format!("{soranet_private}\n")).expect("write SoraNet private key");
-    fs::write(&streaming_path, format!("{streaming_private}\n"))
-        .expect("write streaming private key");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        for path in [&node_path, &soranet_path, &streaming_path] {
-            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-                .expect("restrict private-key file permissions");
-        }
-    }
-
-    streaming.insert(
-        "identity_private_key_file".into(),
-        TomlValue::String(streaming_path.to_string_lossy().into_owned()),
-    );
-    layer.insert(
-        "private_key_file".into(),
-        TomlValue::String(node_path.to_string_lossy().into_owned()),
-    );
-    layer.insert(
-        "soranet_transport_private_key_file".into(),
-        TomlValue::String(soranet_path.to_string_lossy().into_owned()),
-    );
-
-    let config = ConfigReader::new()
-        .with_env(MockEnv::new())
-        .with_toml_source(TomlSource::inline(layer))
-        .read_and_complete::<UserConfig>()
-        .expect("owner-held identity config should complete")
-        .parse()
-        .expect("owner-held identity config should parse");
-
-    assert_eq!(
-        ExposedPrivateKey(config.common.key_pair.private_key().clone()).to_string(),
-        node_private
-    );
-    assert_eq!(
-        ExposedPrivateKey(
-            config
-                .common
-                .soranet_transport_key_pair
-                .private_key()
-                .clone()
-        )
-        .to_string(),
-        soranet_private
-    );
-    assert_eq!(
-        ExposedPrivateKey(
-            config
-                .streaming
-                .key_material
-                .identity()
-                .private_key()
-                .clone()
-        )
-        .to_string(),
-        streaming_private
-    );
-}
-
-#[test]
-fn inline_and_file_private_key_sources_are_rejected() {
-    let mut layer = canonical_test_base_table();
-    let private_dir = TestDir::create("ambiguous-private-key");
-    let private_path = private_dir.path().join("node.key");
-    fs::write(&private_path, "").expect("write private-key test file");
-    layer.insert(
-        "private_key_file".into(),
-        TomlValue::String(private_path.to_string_lossy().into_owned()),
-    );
-
-    let error = ConfigReader::new()
-        .with_env(MockEnv::new())
-        .with_toml_source(TomlSource::inline(layer))
-        .read_and_complete::<UserConfig>()
-        .expect("duplicate private sources remain structurally readable")
-        .parse()
-        .expect_err("duplicate private sources must fail");
-    let message = strip_ansi_codes(&format!("{error:?}"));
-    assert_contains!(
-        message,
-        "private_key and private_key_file are mutually exclusive"
-    );
-}
-
-#[test]
-fn soranet_transport_identity_env_pair_populates_actual_common() {
-    let key_pair = fixture_soranet_transport_key_pair();
-    let env = MockEnv::new()
-        .set(
-            "P2P_SORANET_TRANSPORT_PUBLIC_KEY",
-            key_pair.public_key().to_string(),
-        )
-        .set(
-            "P2P_SORANET_TRANSPORT_PRIVATE_KEY",
-            ExposedPrivateKey(key_pair.private_key().clone()).to_string(),
-        );
-    let config = ConfigReader::new()
-        .with_env(env.clone())
-        .with_toml_source(TomlSource::inline(canonical_test_base_table()))
-        .read_and_complete::<UserConfig>()
-        .expect("transport env pair should complete user config")
-        .parse()
-        .expect("transport env pair should parse");
-
-    assert_eq!(config.common.soranet_transport_key_pair, key_pair);
-    assert_eq!(
-        config.common.soranet_transport_key_pair.algorithm(),
-        Algorithm::Ed25519
-    );
-    assert_ne!(
-        config.common.soranet_transport_key_pair.public_key(),
-        config.streaming.key_material.identity().public_key()
-    );
-    assert!(!env.unvisited().contains("P2P_SORANET_TRANSPORT_PUBLIC_KEY"));
-    assert!(
-        !env.unvisited()
-            .contains("P2P_SORANET_TRANSPORT_PRIVATE_KEY")
-    );
-}
-
-#[test]
-fn soranet_transport_identity_rejects_mismatched_pair_without_disclosing_keys() {
-    let mut layer = soranet_transport_layer(&fixture_soranet_transport_key_pair());
-    layer.insert(
-        "soranet_transport_private_key".into(),
-        TomlValue::String(FIXTURE_STREAMING_PRIVATE_KEY.to_owned()),
-    );
-    let error = ConfigReader::new()
-        .with_env(MockEnv::new())
-        .with_toml_source(TomlSource::inline(canonical_test_base_table()))
-        .with_toml_source(TomlSource::inline(layer))
-        .read_and_complete::<UserConfig>()
-        .expect("mismatched pair remains syntactically valid")
-        .parse()
-        .expect_err("mismatched SoraNet transport pair must fail");
-    let message = strip_ansi_codes(&format!("{error:?}"));
-
-    assert_contains!(message, "Invalid dedicated SoraNet transport identity");
-    assert_contains!(message, "[REDACTED]");
-    assert!(!message.contains(FIXTURE_SORANET_TRANSPORT_PUBLIC_KEY));
-    assert!(!message.contains(FIXTURE_STREAMING_PRIVATE_KEY));
-}
-
-#[test]
-fn soranet_transport_identity_rejects_non_ed25519_pair() {
-    let bls = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::BlsNormal)
-        .expect("derive non-Ed25519 transport test pair");
-    let error = ConfigReader::new()
-        .with_env(MockEnv::new())
-        .with_toml_source(TomlSource::inline(canonical_test_base_table()))
-        .with_toml_source(TomlSource::inline(soranet_transport_layer(&bls)))
-        .read_and_complete::<UserConfig>()
-        .expect("BLS pair remains syntactically valid")
-        .parse()
-        .expect_err("BLS SoraNet transport pair must fail");
-    let message = strip_ansi_codes(&format!("{error:?}"));
-
-    assert_contains!(message, "Invalid dedicated SoraNet transport identity");
-    assert_contains!(
-        message,
-        "soranet_transport_public_key/private_key must be Ed25519"
-    );
-}
-
-#[test]
-fn soranet_transport_identity_rejects_streaming_public_key_reuse() {
-    let error = ConfigReader::new()
-        .with_env(MockEnv::new())
-        .with_toml_source(TomlSource::inline(canonical_test_base_table()))
-        .with_toml_source(TomlSource::inline(soranet_transport_layer(
-            &fixture_streaming_key_pair(),
-        )))
-        .read_and_complete::<UserConfig>()
-        .expect("reused pair remains syntactically valid")
-        .parse()
-        .expect_err("SoraNet transport key reuse must fail");
-    let message = strip_ansi_codes(&format!("{error:?}"));
-
-    assert_contains!(message, "Invalid dedicated SoraNet transport identity");
-    assert_contains!(
-        message,
-        "soranet_transport_public_key must not reuse streaming.identity_public_key"
-    );
-}
-
-#[test]
-fn extra_fields() {
-    let error = load_config_from_fixtures("bad.extra_fields.toml")
-        .expect_err("should fail with extra field");
-
-    let msg = strip_ansi_codes(&format!("{error:?}"));
-
-    assert_contains!(msg, "Found unrecognised parameters");
-    assert_contains!(msg, "unknown parameter: `bar`");
-    assert_contains!(msg, "unknown parameter: `foo`");
-}
-
-#[test]
 fn sorafs_penalty_and_telemetry_roundtrip() {
     let config = load_config_from_fixtures("sorafs_penalty_and_telemetry.toml")
         .expect("config should parse with SoraFS governance overrides");
@@ -5481,23 +5197,7 @@ fn tls_fallback_defaults_to_tls_only() {
     );
 }
 
-#[test]
-fn torii_transport_trusted_proxy_cidrs_default_to_empty() {
-    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
-
-    let cfg: Actual = ConfigReader::new()
-        .read_toml_with_extends(fixtures_dir().join("base.toml"))
-        .expect("base file should be valid")
-        .read_and_complete::<User>()
-        .expect("user config")
-        .parse()
-        .expect("actual config");
-
-    assert!(
-        cfg.torii.transport.trusted_proxy_cidrs.is_empty(),
-        "trusted proxy CIDRs should default to empty until operators opt in"
-    );
-}
+include!("fixtures/trusted_proxy_defaults_test.rs");
 
 #[test]
 fn torii_internal_api_trust_defaults_to_exact_loopback_hosts() {
@@ -5545,81 +5245,7 @@ fn network_defaults_carry_maximal_sumeragi_v2_progress_frames() {
     );
 }
 
-#[test]
-fn sumeragi_v2_defaults_match_fresh_network_profile() {
-    use defaults::sumeragi::npos;
-    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
+include!("fixtures/sumeragi_v2_default_profile_test.rs");
 
-    assert_eq!(defaults::sumeragi::PROTOCOL_VERSION, 4);
-    assert_eq!(defaults::sumeragi::BLOCK_CADENCE_MS, 1_000);
-    assert_eq!(defaults::sumeragi::ROUND_TIMEOUT_CADENCE_MULTIPLIER, 10);
-    assert_eq!(defaults::sumeragi::RETRANSMIT_DIVISOR, 5);
-    assert_eq!(defaults::sumeragi::BLOCK_MAX_TRANSACTIONS.get(), 512);
-    assert_eq!(
-        defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES.get(),
-        16 * 1024 * 1024,
-    );
-    assert_eq!(defaults::sumeragi::QUEUE_COMMAND_CAPACITY.get(), 1_024);
-    assert_eq!(
-        defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get(),
-        2
-    );
-    assert_eq!(defaults::sumeragi::QUEUE_BODY_CAPACITY.get(), 163);
-    assert_eq!(
-        defaults::sumeragi::QUEUE_BODY_CAPACITY.get(),
-        5 * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
-            + 3 * defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()
-            + 2
-    );
-    assert_eq!(
-        defaults::sumeragi::QUEUE_BODY_BYTES.get(),
-        231 * 1024 * 1024
-    );
-    assert_eq!(
-        defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
-        33 * 1024 * 1024
-    );
-    assert_eq!(defaults::sumeragi::BODY_ENVELOPE_HEADROOM_BYTES, 64 * 1024);
-    assert_eq!(defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES, 64 * 1024);
-    assert_eq!(
-        defaults::sumeragi::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
-        64 * 1024
-    );
-    assert_eq!(defaults::sumeragi::QUEUE_CHUNK_CAPACITY.get(), 2_048);
-    assert_eq!(defaults::sumeragi::QUEUE_READY_BODY_CAPACITY.get(), 128);
-    assert_eq!(npos::EPOCH_LENGTH_BLOCKS, 3_600);
-
-    let cfg: Actual = ConfigReader::new()
-        .read_toml_with_extends(fixtures_dir().join("base.toml"))
-        .expect("base file should be valid")
-        .read_and_complete::<User>()
-        .expect("user config")
-        .parse()
-        .expect("actual config");
-    assert_eq!(cfg.sumeragi.block.max_transactions.get(), 512);
-    assert_eq!(cfg.sumeragi.block.max_payload_bytes.get(), 16 * 1024 * 1024);
-    assert_eq!(cfg.sumeragi.queues.commands.get(), 1_024);
-    assert_eq!(
-        cfg.sumeragi
-            .queues
-            .authenticated_non_validator_sources
-            .get(),
-        2
-    );
-    assert_eq!(cfg.sumeragi.queues.bodies.get(), 163);
-    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 231 * 1024 * 1024);
-    assert_eq!(
-        cfg.sumeragi.queues.body_source_bytes.get(),
-        33 * 1024 * 1024
-    );
-    assert_eq!(cfg.sumeragi.queues.chunks.get(), 2_048);
-    assert_eq!(cfg.sumeragi.queues.ready_bodies.get(), 128);
-    cfg.sumeragi
-        .v2_config(
-            Duration::from_secs(1),
-            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
-        )
-        .expect("default parsed configuration must satisfy the v2 contract");
-}
 // type alias used through fixtures for newer error-stack API
 type Result<T, E> = core::result::Result<T, Report<E>>;

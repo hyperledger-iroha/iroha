@@ -5,7 +5,6 @@ import type {
   BrowserTransactionMetadataValue,
   BrowserTransactionUnsigned,
 } from "./transaction-codec.js";
-import type { IvmArtifactAdmissionWasmVerifier } from "./ivm-artifact-admission-wasm.js";
 import type { NetworkId } from "./index.js";
 
 export const SMART_CONTRACT_CODE_CHUNK_BYTES: 65536;
@@ -125,7 +124,6 @@ export interface BrowserDeploymentStateResponse {
 
 export interface BrowserContractDeploymentOptions
   extends BrowserContractArtifactInput {
-  artifactAdmissionVerifier: IvmArtifactAdmissionWasmVerifier;
   /** Exact genesis-derived domain for every deployment transaction. */
   networkId: NetworkId;
   chain?: never;
@@ -197,12 +195,6 @@ export interface BrowserContractDeploymentResult {
   readonly observedBlockHashHex: string;
   readonly ledgerTimeMs: string;
   readonly nodeCapabilities: ValidatedBrowserDeploymentNodeCapabilities;
-  readonly artifactAdmission: Readonly<{
-    verifierSha256Hex: string;
-    headerLength: number;
-    codeOffset: number;
-    entrypointCount: number;
-  }>;
   readonly transactions: readonly Readonly<{
     kind: BrowserContractDeploymentStep["kind"];
     hashHex: string;

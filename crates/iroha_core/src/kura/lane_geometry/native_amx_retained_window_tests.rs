@@ -57,4 +57,23 @@ fn native_amx_retained_windows_require_one_exact_contiguous_suffix() {
         .expect("parse canonical Native receipt temp filename"),
         Some((NativeAmxEvidenceKind::Receipt, 1, true)),
     );
+    for prune_intent_v2 in [
+        "native_amx_evidence_prune_intent_v2.norito",
+        "native_amx_evidence_prune_intent_v2.norito.tmp",
+    ] {
+        assert_eq!(
+            Kura::parse_native_amx_evidence_path(Path::new(prune_intent_v2))
+                .expect("accept the clean-break Native evidence prune-intent V2 filename"),
+            None,
+        );
+    }
+    for legacy_prune_intent_v1 in [
+        "native_amx_evidence_prune_intent_v1.norito",
+        "native_amx_evidence_prune_intent_v1.norito.tmp",
+    ] {
+        assert!(
+            Kura::parse_native_amx_evidence_path(Path::new(legacy_prune_intent_v1)).is_err(),
+            "{legacy_prune_intent_v1} must not enter the clean-break V2 allowlist",
+        );
+    }
 }

@@ -4982,8 +4982,10 @@ mod tests {
         time::Instant,
     };
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
+        NetworkId,
+        block::BlockHeader,
         isi::{InstructionBox, sorafs::CompleteReplicationOrder},
         metadata::Metadata,
         musubi::{
@@ -5559,7 +5561,7 @@ mod tests {
             .content_length(fixture.plan.content_length)
             .car_digest(*car_stats.car_archive_digest.as_bytes())
             .car_size(car_stats.car_size)
-            .pin_policy(PinPolicy::default())
+            .pin_policy(sorafs_manifest::PinPolicy::default())
             .build()
             .expect("completed-attestation fixture manifest")
     }
@@ -6866,7 +6868,10 @@ mod tests {
         }
     }
 
-    struct TestPayloadBuilder;
+    struct TestPayloadBuilder {
+        chain_id: ChainId,
+        network_id: NetworkId,
+    }
 
     impl ProviderIngestCompletionPayloadBuilderV1 for TestPayloadBuilder {
         fn build_payload<'a>(
@@ -6876,12 +6881,14 @@ mod tests {
             'a,
             Result<TransactionPayload, ProviderIngestCompletionPayloadErrorV1>,
         > {
+            let chain_id = self.chain_id.clone();
+            let network_id = self.network_id;
             Box::pin(async move {
-                if request.authorization.order_id() == [0x3B; 32] {
+                if request.chain_id != chain_id || request.authorization.order_id() == [0x3B; 32] {
                     return Err(ProviderIngestCompletionPayloadErrorV1::Rejected);
                 }
                 let mut builder = TransactionBuilder::new(
-                    request.network_id,
+                    network_id,
                     request.provider_owner,
                     FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -7151,6 +7158,12 @@ mod tests {
             observe_calls: AtomicUsize::new(0),
             events: Mutex::new(Vec::new()),
         });
+        let payload_builder = Arc::new(TestPayloadBuilder {
+            chain_id: chain_id.clone(),
+            network_id: NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(genesis_block_hash)),
+            ),
+        });
         let runtime = ProviderIngestRuntimeV1::new(
             LOCAL_PROVIDER,
             chain_id,
@@ -7161,7 +7174,7 @@ mod tests {
             ledger.clone(),
             fetch.clone(),
             storage,
-            Arc::new(TestPayloadBuilder),
+            payload_builder,
             Arc::new(TestResolver {
                 wrong_authority: AtomicBool::new(wrong_signer),
                 signer_policy_revision: Arc::new(AtomicU64::new(1)),

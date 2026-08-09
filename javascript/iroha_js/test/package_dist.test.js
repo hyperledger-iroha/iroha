@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { build as buildWithEsbuild } from "esbuild";
 
 import * as packageExports from "../dist/index.js";
+import * as packageTransactionExports from "../dist/transaction.js";
 import { NexusAppClient as PackageNexusAppClient } from "../dist/nexusApp.js";
 import * as packagePrivacyCapabilitiesExports from "../dist/privacyCapabilities.js";
 import * as packageSccpExports from "../dist/sccp.js";
@@ -34,8 +35,8 @@ const nexusFixtureNetworkId = packageExports.NetworkId.parse(
 );
 
 const {
-  PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1,
   PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES,
+  PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1,
   PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
   isPrivacyNativeAvailable,
   privacyCompiledProfileCatalogV1,
@@ -257,6 +258,19 @@ test("package dist exposes the current general-purpose SDK entrypoint", () => {
   }
 });
 
+test("package dist does not expose Private Kaigi fee proof synthesis", () => {
+  for (const [surface, exports] of [
+    ["root", packageExports],
+    ["transaction", packageTransactionExports],
+  ]) {
+    assert.equal(
+      Object.hasOwn(exports, "buildPrivateKaigiFeeSpend"),
+      false,
+      `${surface} must not expose fixture-backed fee proof synthesis`,
+    );
+  }
+});
+
 test("package dist quantity builders reject numbers and noncanonical strings", () => {
   assert.equal(typeof packageExports.NumericV1?.decodeQuantityJson, "function");
   assert.equal(typeof packageExports.KotodamaQuantity, "function");
@@ -367,7 +381,6 @@ test("package publishes the exact general-purpose subpath inventory", () => {
     "./crypto",
     "./instruction-builders",
     "./ivm-artifact",
-    "./ivm-artifact-admission-wasm",
     "./kotodama-compiler",
     "./nexus-app",
     "./norito",
@@ -635,11 +648,12 @@ test("package Nexus browser defaults build, finalize, and submit the shared cano
   assert.equal(submissions.length, 1, "invalid signatures must fail before Torii I/O");
 });
 
-test("package dist entrypoint exports only the canonical privacy compiled-profile catalog bridge", () => {
+test("package dist entrypoint exports only the canonical local privacy catalog bridge", () => {
   for (const name of ["isPrivacyNativeAvailable", "privacyCompiledProfileCatalogV1"]) {
     assert.equal(typeof packageExports[name], "function", `${name} must be exported`);
   }
   for (const retired of [
+    "privacyCapabilitiesV1",
     "privacyProofRequestV1",
     "privacyBuildProofV1",
     "privacyVerifyProofV1",
@@ -659,7 +673,7 @@ test("package dist entrypoint exports only the canonical privacy compiled-profil
   assert.equal(Number.isInteger(PRIVACY_REQUIRED_BRIDGE_ABI_VERSION), true);
 });
 
-test("package dist privacy native availability clears probed capability output", () => {
+test("package dist privacy native availability clears probed local catalog output", () => {
   const acceptedOutput = Buffer.from(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
   withNativeBinding(
     completePrivacyCompiledProfileCatalogBinding({
@@ -693,21 +707,25 @@ test("package dist privacy native availability clears probed capability output",
   );
 });
 
-test("package dist privacy availability admits the capability-snapshot first-release bridge", () => {
-  let capabilityCalls = 0;
+test("package dist privacy availability admits the local compiled-profile catalog bridge", () => {
+  let catalogCalls = 0;
   const binding = completePrivacyCompiledProfileCatalogBinding({
     privacyCompiledProfileCatalogV1() {
-      capabilityCalls += 1;
+      catalogCalls += 1;
       return Uint8Array.from(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
     },
   });
 
   withNativeBinding(binding, () => {
     assert.equal(isPrivacyNativeAvailable(), true);
-    assert.deepEqual(privacyCompiledProfileCatalogV1(), PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
+    assert.deepEqual(
+      privacyCompiledProfileCatalogV1(),
+      PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE,
+    );
   });
-  assert.equal(capabilityCalls, 2);
+  assert.equal(catalogCalls, 2);
   for (const retired of [
+    "privacyCapabilitiesV1",
     "privacyProofRequestV1",
     "privacyBuildProofV1",
     "privacyVerifyProofV1",
@@ -717,7 +735,7 @@ test("package dist privacy availability admits the capability-snapshot first-rel
   }
 });
 
-test("package dist privacy capability wrapper sanitizes native exceptions", () => {
+test("package dist privacy compiled-profile catalog wrapper sanitizes native exceptions", () => {
   const witness = "package-dist-private-witness-never-echo";
   withNativeBinding(
     completePrivacyCompiledProfileCatalogBinding({
@@ -736,7 +754,7 @@ test("package dist privacy capability wrapper sanitizes native exceptions", () =
   );
 });
 
-test("package dist privacy capability bridge rejects invalid ABI versions before dispatch", () => {
+test("package dist privacy compiled-profile catalog bridge rejects invalid ABI versions before dispatch", () => {
   for (const abiVersion of [
     PRIVACY_REQUIRED_BRIDGE_ABI_VERSION - 1,
     String(PRIVACY_REQUIRED_BRIDGE_ABI_VERSION),
@@ -766,7 +784,7 @@ test("package dist privacy capability bridge rejects invalid ABI versions before
   }
 });
 
-test("package dist privacy capability wrapper respects sliced native output views", () => {
+test("package dist privacy compiled-profile catalog wrapper respects sliced native output views", () => {
   const prefixLength = 3;
   const backing = Uint8Array.from([
     0xff,
@@ -799,7 +817,7 @@ test("package dist privacy capability wrapper respects sliced native output view
   assert.deepEqual(published, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
 });
 
-test("package dist privacy capability wrapper accepts maximum Norito header padding", () => {
+test("package dist privacy compiled-profile catalog wrapper accepts maximum Norito header padding", () => {
   const paddedArchive = privacyNoritoFrameWithPadding(0x50, 64);
   withNativeBinding(
     completePrivacyCompiledProfileCatalogBinding({
@@ -811,7 +829,7 @@ test("package dist privacy capability wrapper accepts maximum Norito header padd
   );
 });
 
-test("package dist privacy capability wrapper accepts complete field-bitset flags", () => {
+test("package dist privacy compiled-profile catalog wrapper accepts complete field-bitset flags", () => {
   const flaggedArchive = privacyNoritoFrameWithFlags(0x50, 0x26);
   withNativeBinding(
     completePrivacyCompiledProfileCatalogBinding({
@@ -823,7 +841,7 @@ test("package dist privacy capability wrapper accepts complete field-bitset flag
   );
 });
 
-test("package dist privacy capability wrapper defensively copies native output", () => {
+test("package dist privacy compiled-profile catalog wrapper defensively copies native output", () => {
   const nativeOutput = Buffer.from(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
   let published;
 
@@ -857,6 +875,7 @@ test("package declarations expose readonly snapshot metadata without retired pri
   );
 
   for (const retiredPattern of [
+    /\bexport function privacyCapabilitiesV1\s*\(/u,
     /\bexport interface PrivacyCapabilities\s*\{/u,
     /\bexport interface PrivacyProductionGate\s*\{/u,
     /\bexport function privacyProofRequestV1\s*\(/u,
@@ -885,6 +904,18 @@ test("package declarations expose readonly snapshot metadata without retired pri
   );
   assert.match(
     rootDeclarations,
+    /export function privacyCompiledProfileCatalogV1\s*\(\): Buffer;/u,
+  );
+  assert.match(
+    rootDeclarations,
+    /network readiness requires `getPrivacyCapabilitiesV1` and a[\s\S]*fresh committed Torii response/u,
+  );
+  assert.doesNotMatch(
+    readFileSync(new URL("../browser.d.ts", import.meta.url), "utf8"),
+    /\bprivacyCompiledProfileCatalogV1\b/u,
+  );
+  assert.match(
+    rootDeclarations,
     /export type OpenVerifyBackendTag = "halo2-ipa-pasta" \| "stark";/u,
   );
   assert.match(
@@ -893,7 +924,7 @@ test("package declarations expose readonly snapshot metadata without retired pri
   );
 });
 
-test("package dist privacy capability wrapper rejects malformed Norito output archives", () => {
+test("package dist privacy compiled-profile catalog wrapper rejects malformed Norito output archives", () => {
   for (const malformedArchive of malformedPrivacyNativeOutputArchives(0x50)) {
     withNativeBinding(
       completePrivacyCompiledProfileCatalogBinding({
@@ -907,15 +938,18 @@ test("package dist privacy capability wrapper rejects malformed Norito output ar
       () => {
         assert.throws(
           () => privacyCompiledProfileCatalogV1(),
-          /native privacyCompiledProfileCatalogV1 returned an invalid local compiled-profile catalog archive/u,
+          /native privacyCompiledProfileCatalogV1 returned an invalid typed privacy compiled-profile catalog/u,
         );
       },
     );
   }
 });
 
-test("package dist privacy capability wrapper rejects oversized native output", () => {
-  const oversized = Buffer.alloc(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES + 1, 0x7f);
+test("package dist privacy compiled-profile catalog wrapper rejects oversized native output", () => {
+  const oversized = Buffer.alloc(
+    PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES + 1,
+    0x7f,
+  );
   withNativeBinding(
     completePrivacyCompiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {
@@ -933,7 +967,7 @@ test("package dist privacy capability wrapper rejects oversized native output", 
   assert.equal(oversized.at(-1), 0x7f);
 });
 
-test("package dist privacy native availability rejects every unsafe capability output", () => {
+test("package dist privacy native availability rejects every unsafe local catalog output", () => {
   const overrides = [
     () => "json is not Norito",
     () => new Uint8Array(),
@@ -957,7 +991,7 @@ test("package dist privacy native availability rejects every unsafe capability o
   }
 });
 
-test("package dist privacy capability wrapper rejects wrong result schemas", () => {
+test("package dist privacy compiled-profile catalog wrapper rejects wrong result schemas", () => {
   const wrongSchemaArchive = privacyNoritoFrameWithSchemaOverride(0x50, 21, 0x42);
   withNativeBinding(
     completePrivacyCompiledProfileCatalogBinding({
@@ -972,7 +1006,7 @@ test("package dist privacy capability wrapper rejects wrong result schemas", () 
       assert.equal(isPrivacyNativeAvailable(), false);
       assert.throws(
         () => privacyCompiledProfileCatalogV1(),
-        /native privacyCompiledProfileCatalogV1 returned an invalid local compiled-profile catalog archive/u,
+        /native privacyCompiledProfileCatalogV1 returned an invalid typed privacy compiled-profile catalog/u,
       );
     },
   );

@@ -4,8 +4,22 @@ This note summarises the authorization and abuse controls around SoraFS control-
 
 ## Surfaces and tokens
 
-- `RegisterPinManifest` is public on the universal lane. Submission collects the SoraFS public pin fee from the submitter into the governance treasury, records the fee metadata on the pin record, activates the manifest immediately, and auto-issues the minimum replication order whenever active capacity declarations can satisfy the manifest policy.
-- The remaining SoraFS instructions are gated by dedicated tokens: pin approve/retire/alias, capacity declare/telemetry/dispute, replication order issue/expire (`CanIssueSorafsReplicationOrder`) and complete (`CanCompleteSorafsReplicationOrder`), pricing set, and provider credit upsert. `ApprovePinManifest` remains available to attach or ratify the council envelope on an already active manifest.
+- `RegisterPinManifest` is a paid public operation for any authenticated
+  transaction account on the universal lane; there is no general pin
+  permission token. Submission charges deterministic global/per-account count
+  and byte quotas, collects the SoraFS public pin fee into the governance
+  treasury, records fee metadata, and derives `submitted_epoch` from consensus
+  time. A manifest activates immediately only when council approval is not
+  required; otherwise it stays pending without a public alias or automatic
+  replication order.
+- `ApprovePinManifest` and `RetirePinManifest` do not use broad permission
+  tokens or accept caller-selected epochs. Any authenticated account may relay
+  the bounded threshold council envelope for a pending approval; the envelope,
+  not the relayer, supplies governance authority. Retirement is restricted to
+  the authenticated submitter. Core derives both event epochs from consensus
+  time and releases pin quota on retirement. Alias attachment/binding keeps
+  `CanBindSorafsAlias`. Other capacity, replication, pricing, and provider
+  credit instructions retain their dedicated scoped authorization.
 - Provider→account bindings must be present before issuing replication orders or submitting capacity telemetry. Configuration may seed them only before genesis. After genesis, submit an exact `ProposeSorafsProviderGovernance` establish/rebind/remove action and enact it through the native Parliament referendum; the direct `RegisterProviderOwner`/`UnregisterProviderOwner` surfaces always reject. Rebind and removal are compare-and-set operations and refuse live capacity or reserve state.
 - A capacity declaration is admitted only when its exact governed owner has enough unslashed bond in an owner-funded native reserve partition to cover both the declared stake and the credit projection's required bond. The active reserve asset is protocol custody: ordinary transfer, burn, custody-account removal, and backing-definition removal reject; only an exact pending owner-requested withdrawal approved by the reserve decision authority can debit it. Outstanding treasury-funded credit principal is excluded, and `bonded + slashed` must equal the remaining owner-funded custody; withdrawals preserve the slash lien and update only the unslashed projection. `UpsertProviderCredit` is not a funding instruction and cannot mint collateral or erase slash history.
 - Repair command endpoints accept exactly one caller-signed Iroha transaction
@@ -55,9 +69,13 @@ per_provider_submitters = { "deadbeef..." = ["<i105-account-id>"] }
   ```bash
   iroha_cli app sorafs pin register \
     --manifest /var/lib/sorafs/manifests/pin.to \
-    --submitted-epoch 0 \
     --config /etc/iroha/config.toml
   ```
+  Registration is a paid public operation for the authenticated account in the
+  client config; it does not require a general pin permission token. Core
+  derives the submission epoch from block consensus time and enforces the
+  global/per-account count and byte quotas. The retired client epoch flag is
+  not accepted.
 - Audit or rotate tokens/allow-lists by reloading the Torii config and verifying the rejects:
   ```bash
   curl -H "X-SoraNet-Privacy-Token: privacy-prod-token" \
@@ -112,4 +130,8 @@ per_provider_submitters = { "deadbeef..." = ["<i105-account-id>"] }
 5. Confirm submitters are funded with the configured SoraFS public pin-fee asset and that `governance.sorafs_pin_fee_*` points at the expected treasury before opening storage ingest.
 6. Enable `torii.soranet_privacy_ingest` only after populating `tokens` and `allow_cidrs`; rotate credentials by reloading the config and watch `soranet_privacy_ingest_reject_total` for namespace/token rejects.
 7. Verify ingress with a signed sample request (e.g., `curl -H "X-SoraNet-Privacy-Token: privacy-prod-token" …/v1/soranet/privacy/event`) and confirm the endpoint returns `202 Accepted`.
-8. Monitor `soranet_privacy_ingest_reject_total{reason}`, `soranet_privacy_throttles_total`, and the SoraFS quota metrics to catch abuse early; keep the checklist alongside change tickets for token/allow-list rotations.
+8. Monitor `soranet_privacy_ingest_reject_total{reason}`,
+   `soranet_privacy_throttles_total`, and the SoraFS operational gauges to catch
+   abuse early. Use finalized `PinManifestPageV1.charged_usage`, not sampled
+   Prometheus inventory, as the authoritative live pin count/byte charge; keep
+   the checklist alongside change tickets for token/allow-list rotations.

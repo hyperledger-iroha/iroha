@@ -19,6 +19,8 @@ object SumeragiV2Wire {
         "iroha:kagemusha:v2:post-state-root".toByteArray(StandardCharsets.UTF_8)
     /** Canonical Native AMX application-manifest wire version. */
     const val NATIVE_AMX_APPLICATION_MANIFEST_VERSION: Int = 1
+    /** Exact first-release merge-carrier projection version. */
+    const val MERGE_CARRIER_COMMITMENT_VERSION: Int = 1
     /** Maximum participant route/incarnation leaves committed by one global block. */
     const val MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES: Long = 1_024
     private val NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT_DOMAIN =
@@ -163,6 +165,32 @@ object SumeragiV2Wire {
         }
     }
 
+    /** Exact merge-ledger entry identity authenticated by global finality. */
+    class MergeCarrierCommitment(
+        @JvmField val version: Int,
+        @JvmField val entryHash: Hash32,
+    ) : WireValue() {
+        init {
+            require(version == MERGE_CARRIER_COMMITMENT_VERSION) {
+                "unsupported merge-carrier commitment version"
+            }
+        }
+
+        override fun encode(): ByteArray = struct(u16(version), entryHash.bytes())
+
+        companion object {
+            internal fun decode(bytes: ByteArray): MergeCarrierCommitment =
+                decodeStruct(bytes) { reader ->
+                    MergeCarrierCommitment(
+                        reader.field("merge_carrier.version") {
+                            it.u16Only("merge_carrier.version")
+                        },
+                        Hash32(reader.field("merge_carrier.entry_hash") { it.hash() }),
+                    )
+                }
+        }
+    }
+
     /** Deterministic state-transition result authenticated by votes and certificates. */
     class ExecutionCommitment(
         @JvmField val parentStateRoot: Hash32,
@@ -173,6 +201,8 @@ object SumeragiV2Wire {
         @JvmField val nativeAmxApplicationManifestVersion: Int,
         @JvmField val nativeAmxApplicationManifestRoot: Hash32,
         @JvmField val nativeAmxApplicationManifestCount: Long,
+        @JvmField val mergeCarrier: MergeCarrierCommitment? = null,
+        @JvmField val executedBlockWireLen: Long,
         @JvmField val executedBlockWireHash: Hash32,
     ) : WireValue() {
         init {
@@ -214,6 +244,9 @@ object SumeragiV2Wire {
                 (nativeAmxApplicationManifestCount == 0L) ==
                     (nativeAmxApplicationManifestRoot == emptyManifestRoot),
             ) { "Native AMX application-manifest count/root projection is not canonical" }
+            require(executedBlockWireLen != 0L) {
+                "executed block wire length must be non-zero"
+            }
         }
 
         override fun encode(): ByteArray = struct(
@@ -225,6 +258,8 @@ object SumeragiV2Wire {
             u16(nativeAmxApplicationManifestVersion),
             nativeAmxApplicationManifestRoot.bytes(),
             u32(nativeAmxApplicationManifestCount),
+            option(mergeCarrier?.encode()),
+            u64(executedBlockWireLen),
             executedBlockWireHash.bytes(),
         )
 
@@ -234,6 +269,7 @@ object SumeragiV2Wire {
                 parentStateRoot: Hash32,
                 postStateRoot: Hash32,
                 ordinaryWritesRoot: Hash32,
+                executedBlockWireLen: Long,
                 executedBlockWireHash: Hash32,
             ): ExecutionCommitment = ExecutionCommitment(
                 parentStateRoot,
@@ -244,6 +280,8 @@ object SumeragiV2Wire {
                 NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 nativeAmxApplicationManifestEmptyRoot(),
                 0,
+                null,
+                executedBlockWireLen,
                 executedBlockWireHash,
             )
 
@@ -272,26 +310,53 @@ object SumeragiV2Wire {
 
             internal fun decode(bytes: ByteArray): ExecutionCommitment =
                 decodeStruct(bytes) { reader ->
-                    ExecutionCommitment(
-                        Hash32(reader.field("execution.parent_state_root") { it.hash() }),
-                        Hash32(reader.field("execution.post_state_root") { it.hash() }),
-                        Hash32(reader.field("execution.ordinary_writes_root") { it.hash() }),
-                        reader.field("execution.topup_anchor_root") { optionHash(it) },
-                        reader.field("execution.topup_anchor_count") {
-                            it.u32Only("execution.topup_anchor_count")
-                        },
+                    val parentStateRoot =
+                        Hash32(reader.field("execution.parent_state_root") { it.hash() })
+                    val postStateRoot =
+                        Hash32(reader.field("execution.post_state_root") { it.hash() })
+                    val ordinaryWritesRoot =
+                        Hash32(reader.field("execution.ordinary_writes_root") { it.hash() })
+                    val topupAnchorRoot =
+                        reader.field("execution.topup_anchor_root") { optionHash(it) }
+                    val topupAnchorCount = reader.field("execution.topup_anchor_count") {
+                        it.u32Only("execution.topup_anchor_count")
+                    }
+                    val manifestVersion =
                         reader.field("execution.native_amx_application_manifest_version") {
                             it.u16Only("execution.native_amx_application_manifest_version")
+                        }
+                    val manifestRoot = Hash32(
+                        reader.field("execution.native_amx_application_manifest_root") {
+                            it.hash()
                         },
-                        Hash32(
-                            reader.field("execution.native_amx_application_manifest_root") {
-                                it.hash()
-                            },
-                        ),
+                    )
+                    val manifestCount =
                         reader.field("execution.native_amx_application_manifest_count") {
                             it.u32Only("execution.native_amx_application_manifest_count")
-                        },
-                        Hash32(reader.field("execution.executed_block_wire_hash") { it.hash() }),
+                        }
+                    val mergeCarrier = reader.field("execution.merge_carrier") {
+                        optionDecode(it, "execution.merge_carrier") {
+                            MergeCarrierCommitment.decode(it)
+                        }
+                    }
+                    val executedBlockWireLen =
+                        reader.field("execution.executed_block_wire_len") {
+                            it.u64Only("execution.executed_block_wire_len")
+                        }
+                    val executedBlockWireHash =
+                        Hash32(reader.field("execution.executed_block_wire_hash") { it.hash() })
+                    ExecutionCommitment(
+                        parentStateRoot,
+                        postStateRoot,
+                        ordinaryWritesRoot,
+                        topupAnchorRoot,
+                        topupAnchorCount,
+                        manifestVersion,
+                        manifestRoot,
+                        manifestCount,
+                        mergeCarrier,
+                        executedBlockWireLen,
+                        executedBlockWireHash,
                     )
                 }
         }

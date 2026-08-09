@@ -6,15 +6,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildBurnAssetInstruction,
-  buildCancelAssetLockInstruction,
-  buildSetAssetTransferAvailabilityInstruction,
-  CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1,
   buildMintAssetInstruction,
   buildMintTriggerRepetitionsInstruction,
   buildBurnTriggerRepetitionsInstruction,
   buildRegisterDomainInstruction,
   buildRegisterAccountInstruction,
-  buildRegisterAssetDefinitionInstruction,
   buildGrantAccountPermissionInstruction,
   buildSetAccountKeyValueInstruction,
   buildSetAssetDefinitionAliasInstruction,
@@ -82,6 +78,12 @@ import {
   nativeBinding,
   noritoRequiredMethods,
 } from "./helpers/native.js";
+import {
+  assertNativeAndPureInstructionParity,
+  normalizedHashHex,
+  toByteArray,
+  withPureJsInstructionCodec,
+} from "./helpers/instructionCodec.js";
 
 const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
 const descriptorTest = baseTest;
@@ -244,16 +246,6 @@ const ACCOUNT_ID_CANONICAL = hasNoritoBinding()
   : ACCOUNT_ID;
 const ASSET_DEFINITION_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 const ASSET_ID = `${ASSET_DEFINITION_ID}#${ACCOUNT_ID}`;
-const LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64 = [
-  "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQCxAQAAAAAAACBu70EtkU8QAiQjaXJvaGFfZGF0YV9tb2RlbDo6aXNpOjp6",
-  "azo6VW5zaGllbGSKA4IBAAAAAAAATlJUMAAAHLVezH/ZJiWyvuM+SRpKDABSAQAAAAAAAGVNTsPtTT6lAgAAAAAA",
-  "AAAAIAFoAXIBRQFOAZwBBAFGAUEBqgFYAR4BxQHzAYABFgEZTwAAAABKIQAAAAAAAAABAAHOAX8BpAFsAZ0BzgF+",
-  "AaQBsQElAeIB4wFrAdsBYwHqATMBBwE+AXUBkAGsAZIBgQFqAeEB6AFhAbcBBAGLAQMLBQEAAAABBAAAAABJAQAA",
-  "AAAAAABAAREBEQERAREBEQERAREBEQERAREBEQERAREBEQERAREBEQERAREBEQERAREBEQERAREBEQERAREBEQER",
-  "AREBEQERAREBEUkBAAAAAAAAAEABIgEiASIBIgEiASIBIgEiASIBIgEiASIBIgEiASIBIgEiASIBIgEiASIBIgEi",
-  "ASIBIgEiASIBIgEiASIBIgEiASIBIgEiPgoJaGFsbzIvaXBhGQoJaGFsbzIvaXBhDQUAAAAAAAAAcHJvb2YYCglo",
-  "YWxvMi9pcGEMC3ZrX3Vuc2hpZWxkAQA=",
-].join("");
 const ASSET_ID_INPUT = `${ASSET_DEFINITION_ID}#${ACCOUNT_ID_INPUT}`;
 const ASSET_ID_CANONICAL = hasNoritoBinding()
   ? canonicalizeAssetIdUsingNorito(ASSET_ID)
@@ -272,10 +264,6 @@ const SAMPLE_ACCOUNT_I105_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105(SORA_I105_DISC
 const SAMPLE_ACCOUNT_COMPRESSED_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105(SORA_I105_DISCRIMINANT);
 const SAMPLE_ACCOUNT_CANONICAL = exportedNormalizeAccountId(SAMPLE_ACCOUNT_I105_LITERAL);
 const SAMPLE_ACCOUNT_LOCAL8_LITERAL = buildLocal8Literal(SAMPLE_ACCOUNT_ADDRESS);
-
-function toByteArray(bytes) {
-  return Array.from(Buffer.from(bytes));
-}
 
 function readCompactFieldPayload(buffer, offset, context) {
   let cursor = offset;
@@ -346,31 +334,6 @@ function encodeAndDecode(instruction) {
   }
 }
 
-function withPureJsInstructionCodec(body) {
-  const hadBinding = Object.prototype.hasOwnProperty.call(
-    globalThis,
-    "__IROHA_NORITO_BINDING__",
-  );
-  const previous = globalThis.__IROHA_NORITO_BINDING__;
-  globalThis.__IROHA_NORITO_BINDING__ = {
-    noritoEncodeInstruction() {
-      throw new Error("unsupported instruction");
-    },
-    noritoDecodeInstruction() {
-      throw new Error("unsupported instruction");
-    },
-  };
-  try {
-    return body();
-  } finally {
-    if (hadBinding) {
-      globalThis.__IROHA_NORITO_BINDING__ = previous;
-    } else {
-      delete globalThis.__IROHA_NORITO_BINDING__;
-    }
-  }
-}
-
 function withNativeInstructionDecoder(decoded, body) {
   const hadBinding = Object.prototype.hasOwnProperty.call(
     globalThis,
@@ -391,61 +354,6 @@ function withNativeInstructionDecoder(decoded, body) {
       delete globalThis.__IROHA_NORITO_BINDING__;
     }
   }
-}
-
-function assertNativeAndPureInstructionParity(instruction, context) {
-  const pureEncoded = Buffer.from(
-    withPureJsInstructionCodec(() => noritoEncodeInstruction(instruction)),
-  );
-  const nativeEncoded = Buffer.from(
-    nativeBinding.noritoEncodeInstruction(JSON.stringify(instruction)),
-  );
-  assert.deepEqual(pureEncoded, nativeEncoded, `${context} bytes`);
-  assert.deepEqual(
-    JSON.parse(nativeBinding.noritoDecodeInstruction(pureEncoded)),
-    instruction,
-    `${context} native decode`,
-  );
-  assert.deepEqual(
-    withPureJsInstructionCodec(() => noritoDecodeInstruction(nativeEncoded)),
-    instruction,
-    `${context} pure decode`,
-  );
-  return pureEncoded;
-}
-
-function crc16(tag, body) {
-  let crc = 0xffff;
-  const processByte = (byte) => {
-    crc ^= (byte & 0xff) << 8;
-    for (let i = 0; i < 8; i += 1) {
-      if ((crc & 0x8000) !== 0) {
-        crc = ((crc << 1) ^ 0x1021) & 0xffff;
-      } else {
-        crc = (crc << 1) & 0xffff;
-      }
-    }
-  };
-
-  for (const byte of Buffer.from(tag, "utf8")) {
-    processByte(byte);
-  }
-  processByte(":".charCodeAt(0));
-  for (const byte of Buffer.from(body, "utf8")) {
-    processByte(byte);
-  }
-  return crc & 0xffff;
-}
-
-function normalizedHashHex(bytes) {
-  const buffer = Buffer.from(bytes);
-  if (buffer.length !== 32) {
-    throw new TypeError("hash literal test helper requires 32 bytes");
-  }
-  buffer[buffer.length - 1] |= 1;
-  const body = buffer.toString("hex").toUpperCase();
-  const checksum = crc16("hash", body).toString(16).toUpperCase().padStart(4, "0");
-  return `hash:${body}#${checksum}`;
 }
 
 const NORITO_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
@@ -583,385 +491,6 @@ test("normalizeAssetHoldingId exported canonicalizes asset-holding identifiers",
   assert.equal(canonical, ASSET_ID_CANONICAL);
 });
 
-baseTest("buildCancelAssetLockInstruction emits the exact two-field V1 payload", () => {
-  const instruction = buildCancelAssetLockInstruction({
-    lockId: "merchant-lock-001",
-    expectedRemainingAmount: "1500",
-  });
-  assert.deepEqual(instruction, {
-    CancelAssetLock: {
-      escrow_id: CANCEL_ASSET_LOCK_ESCROW_ID,
-      expected_remaining_amount: "1500",
-    },
-  });
-  assert.equal(
-    instruction.CancelAssetLock.escrow_id,
-    normalizedHashHex(blake2b256(Buffer.from("merchant-lock-001", "utf8"))),
-  );
-});
-
-baseTest("buildSetAssetTransferAvailabilityInstruction emits exact CAS state", () => {
-  assert.deepEqual(
-    buildSetAssetTransferAvailabilityInstruction({
-      accountId: ACCOUNT_ID,
-      assetDefinitionId: ASSET_DEFINITION_ID,
-      expectedRevision: 7,
-      incoming: "Disabled",
-      outgoing: "Enabled",
-      reason: "suspend incoming retail transfers",
-    }),
-    {
-      SetAssetTransferAvailability: {
-        account_id: ACCOUNT_ID,
-        asset_definition_id: ASSET_DEFINITION_ID,
-        expected_revision: "7",
-        incoming: "Disabled",
-        outgoing: "Enabled",
-        reason: "suspend incoming retail transfers",
-      },
-    },
-  );
-  assert.equal(
-    buildSetAssetTransferAvailabilityInstruction({
-      accountId: ACCOUNT_ID,
-      assetDefinitionId: ASSET_DEFINITION_ID,
-      expectedRevision: 0n,
-      incoming: "Enabled",
-      outgoing: "Enabled",
-    }).SetAssetTransferAvailability.reason,
-    null,
-  );
-});
-
-baseTest("asset availability builder rejects ambiguous or noncanonical input", () => {
-  const valid = {
-    accountId: ACCOUNT_ID,
-    assetDefinitionId: ASSET_DEFINITION_ID,
-    expectedRevision: 0,
-    incoming: "Enabled",
-    outgoing: "Disabled",
-  };
-  for (const [field, value] of [
-    ["incoming", "enabled"],
-    ["outgoing", "Frozen"],
-    ["expectedRevision", -1],
-    ["reason", ""],
-    ["reason", " padded"],
-    ["reason", "line\u000abreached"],
-    ["reason", "ר".repeat(257)],
-    ["accountId", ` ${ACCOUNT_ID}`],
-    ["assetDefinitionId", `${ASSET_DEFINITION_ID} `],
-  ]) {
-    assert.throws(
-      () =>
-        buildSetAssetTransferAvailabilityInstruction({
-          ...valid,
-          [field]: value,
-        }),
-      undefined,
-      `accepted invalid ${field}`,
-    );
-  }
-  assert.throws(
-    () =>
-      buildSetAssetTransferAvailabilityInstruction({
-        ...valid,
-        expected_revision: 0,
-      }),
-    /not supported/u,
-  );
-});
-
-baseTest("pure JS codec roundtrips directional asset availability", () => {
-  const instruction = buildSetAssetTransferAvailabilityInstruction({
-    accountId: ACCOUNT_ID,
-    assetDefinitionId: ASSET_DEFINITION_ID,
-    expectedRevision: 3,
-    incoming: "Disabled",
-    outgoing: "Enabled",
-    reason: "operator review",
-  });
-  withPureJsInstructionCodec(() => {
-    const encoded = noritoEncodeInstruction(instruction);
-    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
-  });
-});
-
-baseTest("asset availability preserves the complete u64 revision domain", () => {
-  const instruction = buildSetAssetTransferAvailabilityInstruction({
-    accountId: ACCOUNT_ID,
-    assetDefinitionId: ASSET_DEFINITION_ID,
-    expectedRevision: 0xffff_ffff_ffff_ffffn,
-    incoming: "Enabled",
-    outgoing: "Disabled",
-  });
-  assert.equal(
-    instruction.SetAssetTransferAvailability.expected_revision,
-    "18446744073709551615",
-  );
-  withPureJsInstructionCodec(() => {
-    const encoded = noritoEncodeInstruction(instruction);
-    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
-  });
-  assert.throws(
-    () =>
-      buildSetAssetTransferAvailabilityInstruction({
-        accountId: ACCOUNT_ID,
-        assetDefinitionId: ASSET_DEFINITION_ID,
-        expectedRevision: 0x1_0000_0000_0000_0000n,
-        incoming: "Enabled",
-        outgoing: "Disabled",
-      }),
-    /unsigned 64-bit/u,
-  );
-});
-
-baseTest("pure JS codec rejects noncanonical availability reasons", () => {
-  const base = buildSetAssetTransferAvailabilityInstruction({
-    accountId: ACCOUNT_ID,
-    assetDefinitionId: ASSET_DEFINITION_ID,
-    expectedRevision: 0,
-    incoming: "Disabled",
-    outgoing: "Enabled",
-  });
-  withPureJsInstructionCodec(() => {
-    for (const reason of ["line\u000abreached", "ר".repeat(257)]) {
-      assert.throws(
-        () =>
-          noritoEncodeInstruction({
-            SetAssetTransferAvailability: {
-              ...base.SetAssetTransferAvailability,
-              reason,
-            },
-          }),
-        undefined,
-      );
-    }
-  });
-});
-
-test("native and pure JS codecs byte-match for asset availability", () => {
-  const instruction = buildSetAssetTransferAvailabilityInstruction({
-    accountId: ACCOUNT_ID,
-    assetDefinitionId: ASSET_DEFINITION_ID,
-    expectedRevision: 3,
-    incoming: "Disabled",
-    outgoing: "Enabled",
-    reason: "operator review",
-  });
-  assertNativeAndPureInstructionParity(
-    instruction,
-    "SetAssetTransferAvailability",
-  );
-});
-
-baseTest("buildCancelAssetLockInstruction rejects legacy and ambiguous inputs", () => {
-  assert.throws(
-    () => buildCancelAssetLockInstruction({ lockId: "merchant-lock-001" }),
-    /expectedRemainingAmount/,
-  );
-  assert.throws(
-    () =>
-      buildCancelAssetLockInstruction({
-        lockId: "merchant-lock-001",
-        expectedRemainingAmount: "1",
-        expected_remaining_amount: "1",
-      }),
-    /not supported/,
-  );
-  assert.throws(
-    () =>
-      buildCancelAssetLockInstruction({
-        lockId: "",
-        expectedRemainingAmount: "1",
-      }),
-    /non-empty string/,
-  );
-  assert.throws(
-    () =>
-      buildCancelAssetLockInstruction({
-        lockId: " merchant-lock-001",
-        expectedRemainingAmount: "1",
-      }),
-    /surrounding whitespace/,
-  );
-  for (const lockId of ["\uFEFFmerchant-lock-001", "merchant-lock-001\uFEFF"]) {
-    assert.throws(
-      () =>
-        buildCancelAssetLockInstruction({
-          lockId,
-          expectedRemainingAmount: "1",
-        }),
-      /surrounding whitespace/,
-    );
-  }
-  for (const lockId of ["\ud800", "\udfff", "merchant\ud800lock"]) {
-    assert.throws(
-      () =>
-        buildCancelAssetLockInstruction({
-          lockId,
-          expectedRemainingAmount: "1",
-        }),
-      /unpaired UTF-16 surrogates/u,
-    );
-  }
-  for (const expectedRemainingAmount of [0n, "0", "-1", "01", "1.0", "+1", 1]) {
-    assert.throws(
-      () =>
-        buildCancelAssetLockInstruction({
-          lockId: "merchant-lock-001",
-          expectedRemainingAmount,
-        }),
-      undefined,
-      `accepted invalid expected remaining amount ${String(expectedRemainingAmount)}`,
-    );
-  }
-});
-
-baseTest("buildCancelAssetLockInstruction bounds the exact UTF-8 lock-id preimage", () => {
-  const exactBound = "🔒".repeat(1_024);
-  assert.equal(Buffer.byteLength(exactBound, "utf8"), 4_096);
-  assert.equal(CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1, 4_096);
-  assert.doesNotThrow(() =>
-    buildCancelAssetLockInstruction({
-      lockId: exactBound,
-      expectedRemainingAmount: "1",
-    }),
-  );
-
-  const overBound = `${exactBound}a`;
-  assert.equal(Buffer.byteLength(overBound, "utf8"), 4_097);
-  assert.throws(
-    () =>
-      buildCancelAssetLockInstruction({
-        lockId: overBound,
-        expectedRemainingAmount: "1",
-      }),
-    /at most 4096 UTF-8 bytes/u,
-  );
-});
-
-baseTest("pure JS codec roundtrips CancelAssetLock and rejects the legacy shape", () => {
-  withPureJsInstructionCodec(() => {
-    const instruction = buildCancelAssetLockInstruction({
-      lockId: "merchant-lock-001",
-      expectedRemainingAmount: "1.25",
-    });
-    const encoded = noritoEncodeInstruction(instruction);
-    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
-
-    assert.throws(
-      () =>
-        noritoEncodeInstruction({
-          CancelAssetLock: { escrow_id: instruction.CancelAssetLock.escrow_id },
-        }),
-      /expected_remaining_amount is required/,
-    );
-    for (const expected_remaining_amount of ["0", "01", "1.0"]) {
-      assert.throws(
-        () =>
-          noritoEncodeInstruction({
-            CancelAssetLock: {
-              escrow_id: instruction.CancelAssetLock.escrow_id,
-              expected_remaining_amount,
-            },
-          }),
-        undefined,
-        `pure JS codec accepted ${expected_remaining_amount}`,
-      );
-    }
-    for (const escrow_id of [
-      CANCEL_ASSET_LOCK_ESCROW_ID.slice(5, 69),
-      CANCEL_ASSET_LOCK_ESCROW_ID.replace(
-        /^hash:([0-9A-F]+)#/u,
-        (_, body) => `hash:${body.toLowerCase()}#`,
-      ),
-      CANCEL_ASSET_LOCK_ESCROW_ID.toLowerCase(),
-    ]) {
-      assert.throws(
-        () =>
-          noritoEncodeInstruction({
-            CancelAssetLock: {
-              ...instruction.CancelAssetLock,
-              escrow_id,
-            },
-          }),
-        /canonical uppercase hash/u,
-      );
-    }
-  });
-});
-
-test("native and pure JS codecs byte-match and cross-decode CancelAssetLock V1", () => {
-  const instruction = buildCancelAssetLockInstruction({
-    lockId: "merchant-lock-001",
-    expectedRemainingAmount: "1.25",
-  });
-  assert.equal(
-    instruction.CancelAssetLock.escrow_id,
-    CANCEL_ASSET_LOCK_ESCROW_ID,
-  );
-
-  const pureEncoded = withPureJsInstructionCodec(() =>
-    noritoEncodeInstruction(instruction),
-  );
-  const nativeEncoded = nativeBinding.noritoEncodeInstruction(
-    JSON.stringify(instruction),
-  );
-  assert.deepEqual(toByteArray(pureEncoded), toByteArray(nativeEncoded));
-
-  assert.deepEqual(
-    JSON.parse(nativeBinding.noritoDecodeInstruction(pureEncoded)),
-    instruction,
-  );
-  assert.deepEqual(
-    withPureJsInstructionCodec(() =>
-      noritoDecodeInstruction(nativeEncoded),
-    ),
-    instruction,
-  );
-
-  assert.throws(
-    () =>
-      nativeBinding.noritoEncodeInstruction(
-        JSON.stringify({
-          CancelAssetLock: {
-            escrow_id: instruction.CancelAssetLock.escrow_id,
-          },
-        }),
-      ),
-    /missing field/,
-  );
-  assert.throws(
-    () =>
-      nativeBinding.noritoEncodeInstruction(
-        JSON.stringify({
-          CancelAssetLock: {
-            escrow_id: instruction.CancelAssetLock.escrow_id,
-            expected_remaining_amount: "0",
-          },
-        }),
-      ),
-    /must be positive/,
-  );
-  for (const escrowId of [
-    instruction.CancelAssetLock.escrow_id.slice(5, 69),
-    instruction.CancelAssetLock.escrow_id.toLowerCase(),
-  ]) {
-    assert.throws(
-      () =>
-        nativeBinding.noritoEncodeInstruction(
-          JSON.stringify({
-            CancelAssetLock: {
-              ...instruction.CancelAssetLock,
-              escrow_id: escrowId,
-            },
-          }),
-        ),
-      /canonical|hash:|uppercase|checksum/u,
-    );
-  }
-});
 
 test("buildMintAssetInstruction produces canonical Norito payload", () => {
   const instruction = buildMintAssetInstruction({ assetId: ASSET_ID, quantity: 42n });
@@ -1563,62 +1092,6 @@ test("buildRegisterAccountInstruction defaults metadata and validates", () => {
         metadata: ["invalid"],
       }),
     /plain object/i,
-  );
-});
-
-test("buildRegisterAssetDefinitionInstruction preserves alias metadata", () => {
-  const instruction = buildRegisterAssetDefinitionInstruction({
-    assetDefinitionId: ASSET_DEFINITION_ID,
-    name: "demo",
-    description: "Demo settlement PoC asset",
-    alias: "demo#settlement.main",
-    scale: 2,
-    metadata: { purpose: "poc" },
-    owningDomain: null,
-    balanceScopePolicy: "Global",
-  });
-  assert.deepEqual(instruction, {
-    Register: {
-      AssetDefinition: {
-        id: ASSET_DEFINITION_ID,
-        name: "demo",
-        description: "Demo settlement PoC asset",
-        alias: "demo#settlement.main",
-        spec: { scale: 2 },
-        mintable: "Infinitely",
-        logo: null,
-        metadata: { purpose: "poc" },
-        balance_scope_policy: "Global",
-        owning_domain: null,
-      },
-    },
-  });
-  assert.deepEqual(encodeAndDecode(instruction), canonicalizeClone(instruction));
-  assert.throws(
-    () =>
-      buildRegisterAssetDefinitionInstruction({
-        assetDefinitionId: ASSET_DEFINITION_ID,
-      }),
-    /owningDomain is required/u,
-  );
-  assert.throws(
-    () =>
-      buildRegisterAssetDefinitionInstruction({
-        assetDefinitionId: ASSET_DEFINITION_ID,
-        owningDomain: null,
-      }),
-    /balanceScopePolicy is required/u,
-  );
-  assert.throws(
-    () =>
-      buildRegisterAssetDefinitionInstruction({
-        assetDefinitionId: ASSET_DEFINITION_ID,
-        name: "demo",
-        owningDomain: null,
-        balanceScopePolicy: "Global",
-        confidentialPolicy: { mode: "Convertible" },
-      }),
-    /cannot carry confidential policy/u,
   );
 });
 

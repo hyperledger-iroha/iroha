@@ -56,7 +56,7 @@ APPLIED_PHASE_ADMISSION_MUTATION_SHA256 = {
         "88ded7c0489d2296bb9b79c8b46668c3e91cdc18c8822649352f18df46a7c538"
     ),
     APPLIED_PHASE_ADMISSION_MUTATION_RUNNER: (
-        "77368edad02e9ff8a03d1da3c6bb019f0a5d466db6801b30d106fc1b89c5c953"
+        "dd49c24d04c5a35444a7ff59e47419ada1eb7d61387cf46e761b17a38a96d1b3"
     ),
 }
 APPLIED_PHASE_ADMISSION_MUTATION_FORMAL_GLOBS = (
@@ -65,16 +65,16 @@ APPLIED_PHASE_ADMISSION_MUTATION_FORMAL_GLOBS = (
 )
 _APPLIED_PHASE_ADMISSION_RUST_ITEM_SHA256 = {
     "preflight_runtime_command_admission": (
-        "fc18530f15c1747fb163f49bd5280196d5cc5fdd1b18375c25d0959aa03b2f45"
+        "48f242c3baa8277604c1f289dd49fa4f68e16064cb3bbdb10655986a6f403248"
     ),
-    "command_admission_is_suppressed": (
-        "fce6a75c2eb169762a2b5b35e4c976439810cdc481da1caa90483f374bc9b325"
+    "command_admission_preflight": (
+        "a422db92ff534cc9731dccd5bb34d35cba57a41a013bf5e7bb2bf396247de0f9"
     ),
     "serialized_runtime_enqueue": (
-        "fc3d0aa4c02e7bcb74bb3159983d039bc19d76a7b23b768c45c0e3878618ae65"
+        "187bb6f6b246f9265f4ae623ca27875dbec9c5c9c1dd61d610d6d8f969008a1a"
     ),
     "enqueue_with_lifecycle_owner": (
-        "2a24aecb7bb4698c6b016e2fba4a03c2aa5284ddef50fd1504b81cca128eaf79"
+        "1199c4024bc64326b625c1c86ce48fc6cdcb15735d1cb44fd3123e18bdb6997e"
     ),
     "applied_phase_test": (
         "c44468d94b67f58e5bbd8b97bd2271c030f6f337fdc71dbbd9c9b00d3f17598a"
@@ -518,34 +518,43 @@ reducer::Event::Signed { .. } => self
             errors,
         )
 
-    suppressed = _require_rust_item(
+    runtime_preflight = _require_rust_item(
         runtime_path,
         runtime_source,
-        "command_admission_is_suppressed",
+        "command_admission_preflight",
         errors,
     )
     _require_rust_item_context(
         runtime_path,
-        suppressed,
+        runtime_preflight,
         runtime_context,
-        "checked command-admission suppression",
+        "checked command-admission preflight",
         errors,
     )
     _require_rust_item_token_sha256(
         runtime_path,
-        suppressed,
+        runtime_preflight,
         _APPLIED_PHASE_ADMISSION_RUST_ITEM_SHA256[
-            "command_admission_is_suppressed"
+            "command_admission_preflight"
         ],
-        "checked command-admission suppression",
+        "checked command-admission preflight",
         errors,
     )
     _require_rust_token_sequence(
         runtime_path,
-        suppressed,
+        runtime_preflight,
         """
-RuntimeCommandAdmissionPreflight::Admit => Ok(false),
-RuntimeCommandAdmissionPreflight::Coalesce => Ok(true),
+RuntimeCommandAdmissionPreflight::ReuseDormant { .. }
+    if class != CommandClass::Completion =>
+{
+    self.latch_fail_closed(
+        "restart-dormant producer changed its frozen completion service class",
+    );
+    Err(EnqueueError::FailClosed)
+}
+preflight @ (RuntimeCommandAdmissionPreflight::Admit
+| RuntimeCommandAdmissionPreflight::ReuseDormant { .. }
+| RuntimeCommandAdmissionPreflight::Coalesce) => Ok(preflight),
 RuntimeCommandAdmissionPreflight::Reject => {
     self.latch_fail_closed(
         "runtime command admission conflicted with frozen reducer authority",
@@ -553,7 +562,7 @@ RuntimeCommandAdmissionPreflight::Reject => {
     Err(EnqueueError::FailClosed)
 }
 """,
-        "admit/coalesce/reject outcomes must remain distinct",
+        "admit, dormant reuse, coalesce, and reject outcomes must remain distinct",
         errors,
     )
 
@@ -590,14 +599,31 @@ RuntimeCommandAdmissionPreflight::Reject => {
         runtime_path,
         runtime_enqueue,
         """
-if self.command_admission_is_suppressed(tag, &command)? {
-    return Ok(());
-}
-let result = self
-    .ingress
-    .enqueue(TaggedCommand::new(tag, class, command, Instant::now()));
+let preflight = self.command_admission_preflight(tag, class, &command)?;
+let tagged = match preflight {
+    RuntimeCommandAdmissionPreflight::Coalesce => return Ok(()),
+    RuntimeCommandAdmissionPreflight::Admit => {
+        TaggedCommand::new(tag, class, command, Instant::now())
+    }
+    RuntimeCommandAdmissionPreflight::ReuseDormant {
+        causal_lifecycle_key,
+        admission_ordinal,
+        producer_stage,
+    } => self.restored_tagged_command(
+        tag,
+        class,
+        command,
+        Instant::now(),
+        causal_lifecycle_key,
+        admission_ordinal,
+        producer_stage,
+    )?,
+    RuntimeCommandAdmissionPreflight::Reject => unreachable!("reject handled above"),
+};
+let result = self.ingress.enqueue(tagged);
 """,
-        "preflight suppression must precede physical enqueue and ordinal allocation",
+        "preflight must coalesce or restore the exact dormant owner before "
+        "physical enqueue and fresh ordinal allocation",
         errors,
     )
 
@@ -627,13 +653,15 @@ let result = self
         runtime_path,
         owned_enqueue,
         """
-if self.command_admission_is_suppressed(tag, &command)? {
+let preflight = self.command_admission_preflight(tag, class, &command)?;
+if preflight == RuntimeCommandAdmissionPreflight::Coalesce {
     return Ok(());
 }
-let owner = ownership.owner();
-let tagged = TaggedCommand::with_causal_origin(
+let tagged = match preflight {
+    RuntimeCommandAdmissionPreflight::Admit => TaggedCommand::with_causal_origin(
 """,
-        "owned preflight suppression must precede tagged owner construction",
+        "owned preflight must coalesce or select exact dormant reuse before "
+        "tagged owner construction",
         errors,
     )
 

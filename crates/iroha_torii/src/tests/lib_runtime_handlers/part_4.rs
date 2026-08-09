@@ -1775,11 +1775,17 @@ async fn node_query_projection_checkpoint_handler_returns_persisted_payload() {
     .await
     .expect("ok");
     assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert_eq!(
+        response.headers().get(axum::http::header::CONTENT_TYPE),
+        Some(&axum::http::HeaderValue::from_static(
+            crate::utils::NORITO_MIME_TYPE,
+        ))
+    );
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("body");
     let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
-        norito::json::from_slice(&body).expect("decode json");
+        norito::decode_from_bytes(&body).expect("decode default Norito response");
     assert_eq!(checkpoint.indexed_height, 55);
     assert_eq!(
         checkpoint.indexed_block_hash_hex,
@@ -1949,11 +1955,17 @@ async fn node_query_projection_checkpoint_plan_handler_returns_preview_payload()
     .await
     .expect("ok");
     assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert_eq!(
+        response.headers().get(axum::http::header::CONTENT_TYPE),
+        Some(&axum::http::HeaderValue::from_static(
+            crate::utils::NORITO_MIME_TYPE,
+        ))
+    );
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("body");
     let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
-        norito::json::from_slice(&body).expect("decode json");
+        norito::decode_from_bytes(&body).expect("decode default Norito response");
     assert_eq!(checkpoint.emitted_at_unix, 1_714_002_111);
     assert!(
         !checkpoint.shards.is_empty(),
@@ -2000,11 +2012,17 @@ async fn node_query_projection_checkpoint_publish_handler_persists_payload() {
     .await
     .expect("ok");
     assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert_eq!(
+        response.headers().get(axum::http::header::CONTENT_TYPE),
+        Some(&axum::http::HeaderValue::from_static(
+            crate::utils::NORITO_MIME_TYPE,
+        ))
+    );
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("body");
     let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
-        norito::json::from_slice(&body).expect("decode json");
+        norito::decode_from_bytes(&body).expect("decode default Norito response");
     assert_eq!(checkpoint.emitted_at_unix, 1_714_002_333);
     assert!(
         !checkpoint.shards.is_empty(),
@@ -2047,10 +2065,14 @@ async fn node_query_projection_checkpoint_publish_handler_seeds_local_projection
     let app = mk_app_state_for_tests_with_world(world);
     let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
     let storage_dir = tempfile::tempdir().expect("temp storage dir");
+    let canonical_storage_root = storage_dir
+        .path()
+        .canonicalize()
+        .expect("canonical temp storage root");
     inner.sorafs_node = sorafs_node::NodeHandle::new(
         sorafs_node::config::StorageConfig::builder()
             .enabled(true)
-            .data_dir(storage_dir.path().join("storage"))
+            .data_dir(canonical_storage_root.join("storage"))
             .build(),
     );
     let app = Arc::new(inner);
@@ -2072,11 +2094,17 @@ async fn node_query_projection_checkpoint_publish_handler_seeds_local_projection
     .await
     .expect("ok");
     assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert_eq!(
+        response.headers().get(axum::http::header::CONTENT_TYPE),
+        Some(&axum::http::HeaderValue::from_static(
+            crate::utils::NORITO_MIME_TYPE,
+        ))
+    );
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("body");
     let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
-        norito::json::from_slice(&body).expect("decode json");
+        norito::decode_from_bytes(&body).expect("decode default Norito response");
 
     for shard in &checkpoint.shards {
         let manifest_digest_bytes =
@@ -2111,11 +2139,17 @@ async fn node_query_projection_shard_catalog_handler_returns_catalog_payload() {
     .await
     .expect("ok");
     assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert_eq!(
+        response.headers().get(axum::http::header::CONTENT_TYPE),
+        Some(&axum::http::HeaderValue::from_static(
+            crate::utils::NORITO_MIME_TYPE,
+        ))
+    );
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("body");
     let catalog: crate::runtime::NodeProjectionShardCatalogResponse =
-        norito::json::from_slice(&body).expect("decode json");
+        norito::decode_from_bytes(&body).expect("decode default Norito response");
     assert_eq!(catalog.resource, "accounts");
     assert_eq!(catalog.limit, 32);
     assert_eq!(catalog.offset, 0);

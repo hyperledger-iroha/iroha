@@ -7362,187 +7362,7 @@ mod sorafs_tests {
         *tier = replacement;
     }
 
-    #[test]
-    fn xor_quantity_ratio_is_exact_checked_and_rounds_at_nano_boundaries() {
-        let zero = Quantity::zero();
-        let one_nano = xor_quantity_nanos(1);
-        let two_nanos = xor_quantity_nanos(2);
-
-        assert_eq!(
-            round_xor_quantity_ratio(&xor_quantity_nanos(8), 5_000, 10_000)
-                .expect("bounded exact ratio"),
-            xor_quantity_nanos(4)
-        );
-        assert_eq!(
-            round_xor_quantity_ratio(&one_nano, 1, 2).expect("half nano rounds away from zero"),
-            one_nano
-        );
-        assert_eq!(
-            round_xor_quantity_ratio(&two_nanos, 1, 3)
-                .expect("sub-nano result rounds to the XOR scale"),
-            xor_quantity_nanos(1)
-        );
-        assert_eq!(
-            round_xor_quantity_ratio(&xor_quantity_nanos(1), 1, 3)
-                .expect("sub-half-nano result rounds to zero"),
-            zero
-        );
-        assert_eq!(
-            round_xor_quantity_ratio(&Quantity::zero(), u128::MAX, 1)
-                .expect("zero remains zero for any bounded multiplier"),
-            Quantity::zero()
-        );
-
-        let fractional: Quantity = "1.234567891"
-            .parse()
-            .expect("canonical fractional Quantity");
-        assert_eq!(
-            round_xor_quantity_ratio(&fractional, 1, 2).expect("bounded fractional ratio"),
-            "0.617283946"
-                .parse::<Quantity>()
-                .expect("canonical rounded Quantity")
-        );
-        assert_eq!(
-            round_xor_quantity_ratio(&xor_quantity_nanos(1), 1, 0),
-            Err(NumericOperationError::DivisionByZero)
-        );
-        assert_eq!(
-            xor_quantity_nanos(1).checked_sub(&xor_quantity_nanos(2)),
-            Err(NumericOperationError::QuantityUnderflow)
-        );
-        assert_eq!(
-            round_xor_quantity_ratio(&max_positive_quantity(), 2, 1),
-            Err(NumericOperationError::MantissaOverflow)
-        );
-    }
-
-    #[test]
-    fn integer_ratio_helper_rejects_invalid_or_overflowing_economic_inputs() {
-        assert_eq!(checked_mul_div_round_u128(5, 1, 2), Ok(3));
-        assert_eq!(
-            checked_mul_div_round_u128(1, 1, 0),
-            Err(PricingComputationError::DivisionByZero(
-                "u128 multiply/divide"
-            ))
-        );
-        assert_eq!(
-            checked_mul_div_round_u128(u128::MAX, 2, 1),
-            Err(PricingComputationError::ArithmeticOverflow(
-                "u128 multiply/divide"
-            ))
-        );
-    }
-
-    #[test]
-    fn checked_keypair_helpers_preserve_requested_algorithm() {
-        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
-        assert_eq!(checked_ed25519_keypair().algorithm(), Algorithm::Ed25519);
-    }
-
-    fn block_header_at_epoch(epoch: u64) -> iroha_data_model::block::BlockHeader {
-        iroha_data_model::block::BlockHeader::new(
-            nonzero!(1_u64),
-            None,
-            None,
-            None,
-            epoch
-                .checked_mul(1_000)
-                .expect("test consensus epoch must fit milliseconds"),
-            0,
-        )
-    }
-
-    pub(super) fn block_header() -> iroha_data_model::block::BlockHeader {
-        block_header_at_epoch(5)
-    }
-
-    fn capacity_dispute_block_header() -> iroha_data_model::block::BlockHeader {
-        iroha_data_model::block::BlockHeader::new(
-            nonzero!(1_u64),
-            None,
-            None,
-            None,
-            1_700_000_128_000,
-            0,
-        )
-    }
-
-    fn activate_reputation_policy(
-        stx: &mut StateTransaction<'_, '_>,
-        authority: &AccountId,
-    ) -> [u8; 32] {
-        let policy = ReputationJournalAuthorityPolicyV1 {
-            version: REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
-            revision: 1,
-            predecessor_policy_digest: None,
-            por_recorder_authority: authority.clone(),
-            dispute_recorder_authority: authority.clone(),
-            token_recorder_authority: authority.clone(),
-            max_source_age_ms: 24 * 60 * 60 * 1_000,
-        };
-        let digest = policy.canonical_digest().expect("reputation policy digest");
-        SetSorafsReputationJournalAuthorityPolicy::new(policy)
-            .execute(authority, stx)
-            .expect("activate reputation recorder policy");
-        digest
-    }
-
-    fn repair_block_header(
-        height: u64,
-        creation_time_ms: u64,
-    ) -> iroha_data_model::block::BlockHeader {
-        iroha_data_model::block::BlockHeader::new(
-            std::num::NonZeroU64::new(height).expect("non-zero test block height"),
-            None,
-            None,
-            None,
-            creation_time_ms,
-            0,
-        )
-    }
-
-    fn transact_repair(
-        state: &mut State,
-        height: u64,
-        creation_time_ms: u64,
-        operation: impl FnOnce(
-            &mut crate::state::StateTransaction<'_, '_>,
-        ) -> Result<(), InstructionExecutionError>,
-    ) -> Result<(), InstructionExecutionError> {
-        let header = repair_block_header(height, creation_time_ms);
-        let block_hash = iroha_crypto::HashOf::new(&header);
-        let mut block = state.block(header);
-        let mut transaction = block.transaction();
-        operation(&mut transaction)?;
-        transaction.apply();
-        block.commit().expect("commit repair test block");
-        state.push_block_hash_for_testing(block_hash);
-        Ok(())
-    }
-
-    fn committed_repair_fixture(
-        ticket_id: &str,
-        source_identity: [u8; 32],
-        mutate: impl FnOnce(
-            &RepairReportV1,
-            &mut crate::state::StateTransaction<'_, '_>,
-        ) -> Result<(), InstructionExecutionError>,
-    ) -> State {
-        let mut state = make_state();
-        let provider = ProviderId::new([0xF1; 32]);
-        grant_repair_operator(&mut state, &alice(), provider);
-        let report = repair_report(ticket_id, provider, [0xF2; 32], &alice(), 4_000);
-        transact_repair(&mut state, 1, 4_000_000, |transaction| {
-            SubmitSorafsRepairTask::new(
-                source_identity,
-                to_bytes(&report).expect("encode repair fixture report"),
-            )
-            .execute(&alice(), transaction)?;
-            mutate(&report, transaction)
-        })
-        .expect("commit repair fixture");
-        state
-    }
+    include!("sorafs/core_ratio_and_repair_tests.rs");
 
     #[test]
     fn repair_committed_event_query_returns_anchored_empty_page_for_proven_empty_state() {
@@ -16361,15 +16181,7 @@ mod sorafs_tests {
         );
     }
 
-    #[test]
-    fn storage_class_metadata_defaults_when_missing() {
-        let metadata = Metadata::default();
-        let provider = ProviderId::new([0x11; 32]);
-        let class =
-            super::storage_class_from_declaration_metadata(provider, &metadata, StorageClass::Warm)
-                .expect("fallback must succeed");
-        assert_eq!(class, StorageClass::Warm);
-    }
+    include!("sorafs/storage_class_default_test.rs");
 
     #[test]
     fn storage_class_metadata_overrides_case_insensitively() {
@@ -17039,6 +16851,122 @@ mod sorafs_tests {
                 ManifestDigest::new([0xEF; 32])
             )))
         );
+    }
+
+    #[test]
+    fn pin_manifest_page_enforces_byte_ceiling_and_authenticated_status_index() {
+        use crate::smartcontracts::ValidSingularQuery;
+
+        const RECORD_COUNT: u64 = 24;
+        let mut state = make_state();
+        let mut first_digest = None;
+        for ordinal in 1..=RECORD_COUNT {
+            let digest = ManifestDigest::new([u8::try_from(ordinal).expect("small ordinal"); 32]);
+            first_digest.get_or_insert(digest);
+            let record = PinManifestRecord::new(
+                digest,
+                default_root_cid(),
+                default_chunker(),
+                default_chunk_digest(),
+                por_root_for_manifest(digest),
+                default_content_length(),
+                default_policy(),
+                alice(),
+                5,
+                None,
+                None,
+                Metadata::default(),
+            );
+            state.world.pin_manifests.insert(digest, record.clone());
+            state
+                .world
+                .smart_contract_state
+                .insert(pin_status_index_key(&record.status, &digest), Vec::new());
+        }
+        state.world.smart_contract_state.insert(
+            pin_global_usage_key().clone(),
+            encode_pin_accounting_state(
+                &PinResourceUsage {
+                    manifest_count: RECORD_COUNT,
+                    content_bytes: default_content_length()
+                        .checked_mul(RECORD_COUNT)
+                        .expect("fixture usage fits u64"),
+                },
+                "byte-ceiling query fixture global usage",
+            )
+            .expect("encode byte-ceiling query fixture usage"),
+        );
+        let block_hash = iroha_crypto::HashOf::new(&block_header());
+        state.push_block_hash_for_testing(block_hash);
+
+        let page = FindSorafsPinManifests::new(
+            None,
+            Some(PinStatusKindV1::Pending),
+            None,
+            u32::try_from(RECORD_COUNT).expect("fixture count fits u32"),
+            PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1,
+        )
+        .execute(&state.view())
+        .expect("byte-bounded finalized page");
+        assert!(
+            page.has_more,
+            "the minimum byte ceiling must truncate this fixture"
+        );
+        assert!(
+            !page.manifests.is_empty(),
+            "the minimum byte ceiling fits one row"
+        );
+        assert!(
+            page.manifests.len() < usize::try_from(RECORD_COUNT).expect("fixture count fits usize")
+        );
+        assert_eq!(
+            page.next_after_digest,
+            page.manifests.last().map(|entry| entry.digest)
+        );
+        assert!(
+            norito::encode_canonical(&page)
+                .expect("encode byte-bounded page")
+                .len()
+                <= usize::try_from(PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1)
+                    .expect("page byte limit fits usize")
+        );
+
+        let cursor = page
+            .next_after_digest
+            .expect("truncated page carries an exclusive cursor");
+        let next_page = FindSorafsPinManifests::new(
+            Some(page.finalized_cursor),
+            Some(PinStatusKindV1::Pending),
+            Some(cursor),
+            u32::try_from(RECORD_COUNT).expect("fixture count fits u32"),
+            PIN_MANIFEST_QUERY_MAX_PAGE_BYTES_V1,
+        )
+        .execute(&state.view())
+        .expect("exclusive cursor continues from the next digest");
+        assert!(
+            next_page
+                .manifests
+                .first()
+                .is_some_and(|entry| entry.digest > cursor)
+        );
+
+        let first_digest = first_digest.expect("fixture contains records");
+        state.world.smart_contract_state.insert(
+            pin_status_index_key(&PinStatus::Pending, &first_digest),
+            vec![1],
+        );
+        assert!(matches!(
+            FindSorafsPinManifests::new(
+                None,
+                Some(PinStatusKindV1::Pending),
+                None,
+                1,
+                PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1,
+            )
+            .execute(&state.view()),
+            Err(QueryExecutionFail::Conversion(message))
+                if message.contains("status-index marker is not empty")
+        ));
     }
 
     #[test]

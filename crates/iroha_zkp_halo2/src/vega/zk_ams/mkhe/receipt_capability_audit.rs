@@ -410,13 +410,13 @@ mod tests {
         ZkAmsMkheErrorV1,
     >;
     type VerifyNativeBgvOpeningV1 =
-        fn(
-            &ZkAmsMkheCollectivePublicKeyV1,
+        for<'a> fn(
+            &'a ZkAmsMkheCollectivePublicKeyV1,
             ZkAmsT256PackingLayoutV1,
-            &ZkAmsT256PackedPlaintextV1,
-            &ZkAmsMkheCollectiveCiphertextV1,
-            &ZkAmsMkheCollectiveEncryptionOpeningV1,
-        ) -> Result<VerifiedZkAmsPhase23NativeBgvOpeningV1, ZkAmsMkheErrorV1>;
+            &'a ZkAmsT256PackedPlaintextV1,
+            &'a ZkAmsMkheCollectiveCiphertextV1,
+            ZkAmsMkheCollectiveEncryptionOpeningV1,
+        ) -> Result<VerifiedZkAmsPhase23NativeBgvOpeningV1<'a>, ZkAmsMkheErrorV1>;
     type MaterializeWithoutReceiptV1 =
         fn(
             [u8; 32],

@@ -19,6 +19,8 @@ pub mod qr;
 pub mod route_catalog;
 /// Canonical wire types for the authenticated SoraFS hedging and billing API.
 pub mod sorafs_hedging_billing_api;
+/// Canonical wire types for externally signed SoraFS moderation recovery.
+pub mod sorafs_moderation_api;
 /// Public Torii DTOs for Parliament-governed validation-fee policy state.
 pub mod validation_fee_api;
 

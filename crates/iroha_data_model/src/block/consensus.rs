@@ -4320,7 +4320,7 @@ pub const SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX: usize = 128;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[norito(rename_all = "snake_case")]
 pub enum SumeragiAutonomousLaneExecutionStage {
-    /// Exact queue-reservation bytes are retained by the durable executable payload.
+    /// Exact Queue-owned reservation keys are fsynced before executable-payload durability.
     ReservationsDurable,
     /// The producer-authenticated executable payload is durable.
     ExecutablePayloadDurable,
@@ -4395,6 +4395,8 @@ impl norito::json::JsonDeserialize for SumeragiAutonomousLaneExecutionStage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[norito(rename_all = "snake_case")]
 pub enum SumeragiAutonomousLaneExecutionStuckReason {
+    /// Queue ownership is durable, but the producer-authenticated executable payload is not.
+    AwaitingExecutablePayload,
     /// The durable executable payload has no matching availability QC.
     AwaitingPayloadAvailability,
     /// Available payload bytes have no matching prepare/commit certification.
@@ -4418,6 +4420,7 @@ impl SumeragiAutonomousLaneExecutionStuckReason {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::AwaitingExecutablePayload => "awaiting_executable_payload",
             Self::AwaitingPayloadAvailability => "awaiting_payload_availability",
             Self::AwaitingLaneCertification => "awaiting_lane_certification",
             Self::CertifiedBundleUnavailable => "certified_bundle_unavailable",
@@ -4443,6 +4446,7 @@ impl norito::json::JsonDeserialize for SumeragiAutonomousLaneExecutionStuckReaso
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         match parser.parse_string()?.as_str() {
+            "awaiting_executable_payload" => Ok(Self::AwaitingExecutablePayload),
             "awaiting_payload_availability" => Ok(Self::AwaitingPayloadAvailability),
             "awaiting_lane_certification" => Ok(Self::AwaitingLaneCertification),
             "certified_bundle_unavailable" => Ok(Self::CertifiedBundleUnavailable),
@@ -4485,7 +4489,10 @@ impl AutonomousLaneEvidenceGeometry {
 impl SumeragiAutonomousLaneExecutionStage {
     const fn expected_stuck_reason(self) -> Option<SumeragiAutonomousLaneExecutionStuckReason> {
         match self {
-            Self::ReservationsDurable | Self::ExecutablePayloadDurable => {
+            Self::ReservationsDurable => {
+                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingExecutablePayload)
+            }
+            Self::ExecutablePayloadDurable => {
                 Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingPayloadAvailability)
             }
             Self::PayloadAvailabilityCertified => {
@@ -4552,12 +4559,24 @@ pub struct SumeragiAutonomousLaneExecution {
     pub lane_block_view: u64,
     /// Global proposal height that allocated the lane-local slot.
     pub proposal_height: u64,
-    /// Global proposal view that allocated the lane-local slot.
-    pub proposal_view: u64,
-    /// Exact lane proposal identity.
-    pub proposal_hash: Hash,
-    /// Exact descriptor identity.
-    pub descriptor_hash: Hash,
+    /// Authenticated global proposal view, once a canonical payload anchor supplies it.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub proposal_view: Option<u64>,
+    /// Stable identity of the leader/session that durably owns the reservation group.
+    pub reservation_owner_hash: Hash,
+    /// Stable provisional proposal-slot identity persisted by every reservation key.
+    pub proposal_identity_hash: Hash,
+    /// Domain-separated digest of the exact FIFO-ordered reservation keys.
+    pub reservation_group_hash: Hash,
+    /// Exact finalized lane proposal identity, absent before executable-payload durability.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub proposal_hash: Option<Hash>,
+    /// Exact finalized descriptor identity, paired with `proposal_hash`.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub descriptor_hash: Option<Hash>,
     /// Producer-authenticated executable payload digest, when durable.
     #[norito(skip_serializing_if = "Option::is_none")]
     #[norito(default)]
@@ -4593,7 +4612,7 @@ pub struct SumeragiAutonomousLaneExecution {
 impl SumeragiAutonomousLaneExecution {
     /// Return the canonical ordering key for this row.
     #[must_use]
-    pub const fn ordering_key(&self) -> (LaneId, DataSpaceId, Hash, u64, u64, u64, u64, Hash) {
+    pub const fn ordering_key(&self) -> (LaneId, DataSpaceId, Hash, u64, u64, u64, Hash) {
         (
             self.lane_id,
             self.dataspace_id,
@@ -4601,27 +4620,33 @@ impl SumeragiAutonomousLaneExecution {
             self.lane_block_height,
             self.lane_block_view,
             self.proposal_height,
-            self.proposal_view,
-            self.proposal_hash,
+            self.proposal_identity_hash,
         )
     }
 
-    /// Validate bounded counters, paired carrier identity, and stage geometry.
-    ///
-    /// # Errors
-    ///
-    /// Returns a stable reason when identity fields are zero, carrier fields
-    /// are incomplete, counters exceed protocol bounds, or durable stage and
-    /// wait-state evidence disagree.
-    pub fn validate(&self) -> Result<(), &'static str> {
+    fn validate_identity_and_counts(&self) -> Result<(), &'static str> {
         let nonzero = |hash: &[u8]| hash.iter().any(|byte| *byte != 0);
         if self.lane_block_height == 0
             || self.proposal_height == 0
             || !nonzero(self.lane_incarnation.as_ref())
-            || !nonzero(self.proposal_hash.as_ref())
-            || !nonzero(self.descriptor_hash.as_ref())
+            || !nonzero(self.reservation_owner_hash.as_ref())
+            || !nonzero(self.proposal_identity_hash.as_ref())
+            || !nonzero(self.reservation_group_hash.as_ref())
         {
             return Err("autonomous lane execution diagnostics identity is malformed");
+        }
+        if self.proposal_hash.is_some() != self.descriptor_hash.is_some() {
+            return Err(
+                "autonomous lane execution proposal and descriptor hashes must appear together",
+            );
+        }
+        if self
+            .proposal_hash
+            .into_iter()
+            .chain(self.descriptor_hash)
+            .any(|hash| !nonzero(hash.as_ref()))
+        {
+            return Err("autonomous lane execution finalized identity is malformed");
         }
         if self.application_block_height.is_some() != self.application_block_hash.is_some() {
             return Err("autonomous lane execution carrier height and hash must appear together");
@@ -4645,6 +4670,19 @@ impl SumeragiAutonomousLaneExecution {
         {
             return Err("autonomous lane execution counters are malformed");
         }
+        Ok(())
+    }
+
+    /// Validate bounded counters, paired carrier identity, and stage geometry.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable reason when identity fields are zero, carrier fields
+    /// are incomplete, counters exceed protocol bounds, or durable stage and
+    /// wait-state evidence disagree.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        self.validate_identity_and_counts()?;
+        let nonzero = |hash: &[u8]| hash.iter().any(|byte| *byte != 0);
         for hash in [self.executable_payload_hash, self.source_bundle_hash] {
             if hash.is_some_and(|hash| !nonzero(hash.as_ref())) {
                 return Err("autonomous lane execution evidence hash must be non-zero");
@@ -4668,6 +4706,20 @@ impl SumeragiAutonomousLaneExecution {
         }
         if self.highest_durable_stage == SumeragiAutonomousLaneExecutionStage::Conflict {
             return Ok(());
+        }
+        if self.highest_durable_stage == SumeragiAutonomousLaneExecutionStage::ReservationsDurable
+            && self.proposal_view.is_some()
+        {
+            return Err(
+                "autonomous lane reservation diagnostics cannot claim a global proposal view",
+            );
+        }
+        if (self.highest_durable_stage == SumeragiAutonomousLaneExecutionStage::ReservationsDurable)
+            != self.proposal_hash.is_none()
+        {
+            return Err(
+                "autonomous lane execution finalized identity disagrees with its durable stage",
+            );
         }
         let has_payload = self.executable_payload_hash.is_some();
         let has_bundle = self.source_bundle_hash.is_some();
@@ -4782,7 +4834,7 @@ pub struct SumeragiNativeAmxParticipantApplication {
     pub settlement_hash: HashOf<LaneBlockCommitment>,
     /// Number of ordered grouped transaction sources represented by the control.
     pub source_count: u64,
-    /// Canonical global carrier height, when one is durably identified.
+    /// Canonical global carrier height, present for committed or durable evidence only.
     #[norito(skip_serializing_if = "Option::is_none")]
     #[norito(default)]
     pub application_block_height: Option<u64>,
@@ -4845,11 +4897,14 @@ impl SumeragiNativeAmxParticipantApplication {
         {
             return Err("Native AMX participant diagnostics application hash must be non-zero");
         }
-        if self.state == SumeragiNativeAmxParticipantApplicationState::DurablyApplied
-            && self.application_block_height.is_none()
-        {
+        let state_requires_application = matches!(
+            self.state,
+            SumeragiNativeAmxParticipantApplicationState::CommittedEvidencePending
+                | SumeragiNativeAmxParticipantApplicationState::DurablyApplied
+        );
+        if state_requires_application != self.application_block_height.is_some() {
             return Err(
-                "durably applied Native AMX participant diagnostics require an application block",
+                "Native AMX participant diagnostics state disagrees with its application block",
             );
         }
         Ok(())
@@ -5449,41 +5504,7 @@ mod tests {
         Hash::new(roster.to_vec().encode())
     }
 
-    #[test]
-    fn cert_phase_schema_matches_canonical_wire_discriminants() {
-        use iroha_schema::{IntoSchema as _, Metadata};
-        use norito::codec::{DecodeAll as _, Encode as _};
-
-        let cases = [
-            (CertPhase::Prepare, 1_u32),
-            (CertPhase::Commit, 2),
-            (CertPhase::NewView, 3),
-        ];
-        for (phase, expected) in cases {
-            let encoded = phase.encode();
-            assert_eq!(
-                u32::from_le_bytes(encoded[..4].try_into().expect("phase tag")),
-                expected
-            );
-            assert_eq!(
-                CertPhase::decode_all(&mut encoded.as_slice()).expect("phase roundtrip"),
-                phase
-            );
-        }
-
-        let schema = CertPhase::schema();
-        let Metadata::Enum(metadata) = schema.get::<CertPhase>().expect("phase schema") else {
-            panic!("CertPhase schema must be an enum");
-        };
-        assert_eq!(
-            metadata
-                .variants
-                .iter()
-                .map(|variant| variant.discriminant)
-                .collect::<Vec<_>>(),
-            [1, 2, 3]
-        );
-    }
+    include!("consensus/wire_schema_tests.rs");
 
     fn sample_qc_ref() -> QcRef {
         QcRef {
@@ -6549,7 +6570,7 @@ mod tests {
 
     #[test]
     fn native_amx_receipt_negative_corpus_fails_closed() {
-        const EXPECTED_RECEIPT_CONTROLS: usize = 43;
+        const EXPECTED_RECEIPT_CONTROLS: usize = 45;
 
         let canonical = grouped_native_amx_fixture_document();
         let controls = canonical
@@ -6582,6 +6603,32 @@ mod tests {
                 .pointer("/golden/receipt_group")
                 .cloned()
                 .unwrap_or_else(|| panic!("control `{id}` retains the receipt group"));
+            if matches!(
+                id,
+                "coherent_duplicate_validator_set" | "coherent_over_quorum_requirement"
+            ) {
+                assert_eq!(
+                    mutated.pointer("/golden/expected_diagnostics/lane_settlement_commitments/0",),
+                    Some(&receipt_group),
+                    "coherent committee control `{id}` rebuilds the diagnostics projection"
+                );
+                validate_grouped_native_amx_application_evidence(&mutated).unwrap_or_else(
+                    |error| {
+                        panic!(
+                            "coherent committee control `{id}` preserves application evidence: {error}"
+                        )
+                    },
+                );
+                let commitment: LaneBlockCommitment =
+                    norito::json::from_value(receipt_group.clone()).unwrap_or_else(|error| {
+                        panic!("coherent committee control `{id}` remains decodable: {error}")
+                    });
+                assert!(
+                    commitment.validate_native_amx_receipts().is_err(),
+                    "coherent committee control `{id}` must fail only receipt validation"
+                );
+                continue;
+            }
             let rejected = norito::json::from_value::<LaneBlockCommitment>(receipt_group.clone())
                 .map_or(true, |commitment| {
                     commitment.validate_native_amx_receipts().is_err()
@@ -6630,22 +6677,7 @@ mod tests {
                 .and_then(norito::json::Value::as_array)
                 .expect("control has mutations")
             {
-                assert_eq!(
-                    mutation.get("op").and_then(norito::json::Value::as_str),
-                    Some("replace"),
-                    "application evidence control `{id}` uses a bounded replace mutation"
-                );
-                let path = mutation
-                    .get("path")
-                    .and_then(norito::json::Value::as_str)
-                    .expect("mutation has path");
-                let replacement = mutation
-                    .get("value")
-                    .cloned()
-                    .expect("replace mutation has value");
-                *mutated
-                    .pointer_mut(path)
-                    .unwrap_or_else(|| panic!("control `{id}` path resolves")) = replacement;
+                apply_grouped_native_amx_fixture_mutation(&mut mutated, mutation, id);
             }
             assert!(
                 validate_grouped_native_amx_application_evidence(&mutated).is_err(),
@@ -8233,457 +8265,8 @@ mod tests {
         assert_eq!(used, encoded.len());
     }
 
-    #[test]
-    fn quorum_policy_enforces_strict_supermajority_boundaries() {
-        assert_eq!(QuorumPolicy::permissioned_threshold(1), Some(1));
-        assert_eq!(QuorumPolicy::permissioned_threshold(2), Some(2));
-        assert_eq!(QuorumPolicy::permissioned_threshold(3), Some(3));
-        assert_eq!(QuorumPolicy::permissioned_threshold(4), Some(3));
-        assert_eq!(QuorumPolicy::permissioned_threshold(5), Some(4));
-        assert_eq!(QuorumPolicy::permissioned_threshold(6), Some(5));
-        assert_eq!(QuorumPolicy::permissioned_threshold(7), Some(5));
-        assert_eq!(QuorumPolicy::permissioned_threshold(8), Some(6));
-        assert_eq!(QuorumPolicy::permissioned_threshold(9), Some(7));
-        assert_eq!(
-            QuorumPolicy::permissioned_threshold(u32::MAX),
-            Some(2_863_311_531)
-        );
-        assert_eq!(QuorumPolicy::permissioned_threshold(0), None);
-        assert!(!QuorumPolicy::PermissionedCount(0).is_satisfied_by_count(u32::MAX));
-
-        let count = QuorumPolicy::PermissionedCount(5);
-        assert!(!count.is_satisfied_by_count(3));
-        assert!(count.is_satisfied_by_count(4));
-        assert!(!count.is_satisfied_by_count(6));
-        assert!(!count.is_satisfied_by_stake(Some(Quantity::from(4_u64))));
-        for validators in 1..=3 {
-            let policy = QuorumPolicy::PermissionedCount(validators);
-            assert!(!policy.is_satisfied_by_count(validators - 1));
-            assert!(policy.is_satisfied_by_count(validators));
-            assert!(!policy.is_satisfied_by_count(validators + 1));
-        }
-        let max_count = QuorumPolicy::PermissionedCount(u32::MAX);
-        assert!(!max_count.is_satisfied_by_count(2_863_311_530));
-        assert!(max_count.is_satisfied_by_count(2_863_311_531));
-
-        let stake = QuorumPolicy::NposStake(Quantity::from(3_u64));
-        assert!(!stake.is_satisfied_by_count(3));
-        assert!(!stake.is_satisfied_by_stake(None));
-        assert!(!stake.is_satisfied_by_stake(Some(Quantity::from(2_u64))));
-        assert!(!stake.is_satisfied_by_stake(Some(Quantity::from(4_u64))));
-        assert!(stake.is_satisfied_by_stake(Some("2.01".parse().expect("quantity"))));
-
-        let fractional_stake = QuorumPolicy::NposStake("1.5".parse().expect("quantity"));
-        assert!(!fractional_stake.is_satisfied_by_stake(Some("1.0".parse().expect("quantity"))));
-        assert!(fractional_stake.is_satisfied_by_stake(Some("1.01".parse().expect("quantity"))));
-
-        let tiny_fractional_stake = QuorumPolicy::NposStake("0.03".parse().expect("quantity"));
-        assert!(
-            !tiny_fractional_stake.is_satisfied_by_stake(Some("0.02".parse().expect("quantity")))
-        );
-        assert!(tiny_fractional_stake.is_satisfied_by_stake(Some(
-            "0.0200000000000000000000000001".parse().expect("quantity")
-        )));
-
-        let zero_total = QuorumPolicy::NposStake(Quantity::zero());
-        assert!(!zero_total.is_satisfied_by_stake(Some(Quantity::from(1_u64))));
-
-        let max_total = max_positive_quantity();
-        let boundary_stake = QuorumPolicy::NposStake(max_total.clone());
-        assert!(boundary_stake.is_satisfied_by_stake(Some(max_total)));
-    }
-
-    #[test]
-    fn qc_vote_roundtrip_codec_and_decode_from_slice() {
-        let vote = QcVote {
-            phase: CertPhase::Commit,
-            block_hash: dummy_hash(),
-            parent_state_root: Hash::new(b"parent_root"),
-            post_state_root: Hash::new(b"post_root"),
-            height: 7,
-            view: 2,
-            epoch: 0,
-            chain_order_hash: default_chain_order_hash(),
-            rechain_seq: 0,
-            highest_qc: None,
-            signer: 3,
-            bls_sig: vec![0x01, 0x02],
-        };
-        let bytes = vote.encode();
-        let dec = QcVote::decode(&mut &bytes[..]).expect("decode qc vote");
-        assert_eq!(vote, dec);
-        let (slice_dec, used) =
-            QcVote::decode_from_slice(&bytes).expect("decode_from_slice qc vote");
-        assert_eq!(vote, slice_dec);
-        assert_eq!(used, bytes.len());
-    }
-
-    #[test]
-    fn vrf_commit_roundtrip_codec() {
-        let commit = sample_vrf_commit();
-        let bytes = commit.encode();
-        let dec = VrfCommit::decode(&mut &bytes[..]).expect("decode vrf commit");
-        assert_eq!(commit, dec);
-    }
-
-    #[test]
-    fn vrf_reveal_roundtrip_codec() {
-        let reveal = sample_vrf_reveal();
-        let bytes = reveal.encode();
-        let dec = VrfReveal::decode(&mut &bytes[..]).expect("decode vrf reveal");
-        assert_eq!(reveal, dec);
-    }
-
-    #[test]
-    fn reconfig_roundtrip_codec() {
-        let reconfig = sample_reconfig();
-        let bytes = reconfig.encode();
-        let dec = Reconfig::decode(&mut &bytes[..]).expect("decode reconfig");
-        assert_eq!(reconfig, dec);
-    }
-
-    #[test]
-    fn rbc_init_roundtrip_codec() {
-        let init = sample_rbc_init();
-        let bytes = init.encode();
-        let dec = RbcInit::decode(&mut &bytes[..]).expect("decode rbc init");
-        assert_eq!(init, dec);
-    }
-
-    #[test]
-    fn rbc_chunk_roundtrip_codec() {
-        let chunk = sample_rbc_chunk();
-        let bytes = chunk.encode();
-        let dec = RbcChunk::decode(&mut &bytes[..]).expect("decode rbc chunk");
-        assert_eq!(chunk, dec);
-    }
-
-    #[test]
-    fn rbc_ready_roundtrip_codec() {
-        let ready = sample_rbc_ready();
-        let bytes = ready.encode();
-        let dec = RbcReady::decode(&mut &bytes[..]).expect("decode rbc ready");
-        assert_eq!(ready, dec);
-    }
-
-    #[test]
-    fn rbc_deliver_roundtrip_codec() {
-        let deliver = sample_rbc_deliver();
-        let bytes = deliver.encode();
-        let dec = RbcDeliver::decode(&mut &bytes[..]).expect("decode rbc deliver");
-        assert_eq!(deliver, dec);
-    }
-
-    fn npos_diagnostics() -> SumeragiNposDiagnostics {
-        SumeragiNposDiagnostics {
-            epoch_length_blocks: NonZeroU64::new(100).unwrap(),
-            vrf_commit_deadline_offset: NonZeroU64::new(20).unwrap(),
-            vrf_reveal_deadline_offset: NonZeroU64::new(40).unwrap(),
-            epoch_seed: [0xA5; 32],
-            prf_height: 7,
-            prf_view: 2,
-            vrf_penalty_epoch: 3,
-            vrf_committed_no_reveal_total: 1,
-            vrf_no_participation_total: 2,
-            vrf_late_reveals_total: 3,
-        }
-    }
-
-    fn diagnostics(npos: Option<SumeragiNposDiagnostics>) -> SumeragiDiagnosticsStatus {
-        SumeragiDiagnosticsStatus {
-            pipeline_execution: SumeragiPipelineExecutionStatus::default(),
-            tx_queue_depth: 0,
-            tx_queue_capacity: 1,
-            tx_queue_retained_bytes: 0,
-            tx_queue_max_retained_bytes: 1,
-            tx_queue_saturated: false,
-            tx_queue_saturated_by_count: false,
-            tx_queue_saturated_by_bytes: false,
-            tx_queue_saturated_by_age: false,
-            tx_queue_oldest_queued_age_ms: 0,
-            npos,
-            lane_commitments: Vec::new(),
-            dataspace_commitments: Vec::new(),
-            lane_settlement_commitments: Vec::new(),
-            lane_relay_envelopes: Vec::new(),
-            lane_payload_ownerships: Vec::new(),
-            committed_lane_blocks: Vec::new(),
-            lane_block_sessions: Vec::new(),
-            lane_governance_sealed_total: 0,
-            lane_governance_sealed_aliases: Vec::new(),
-            lane_governance: Vec::new(),
-            native_amx_participant_applications: Vec::new(),
-            autonomous_lane_executions: Vec::new(),
-        }
-    }
-
-    fn native_amx_participant_application(
-        lane: u32,
-        dataspace: u64,
-    ) -> SumeragiNativeAmxParticipantApplication {
-        SumeragiNativeAmxParticipantApplication {
-            lane_id: LaneId::new(lane),
-            dataspace_id: DataSpaceId::new(dataspace),
-            lane_incarnation: {
-                let mut bytes = b"native-amx-diagnostics-incarnation".to_vec();
-                bytes.extend_from_slice(&lane.to_le_bytes());
-                Hash::new(bytes)
-            },
-            participant_height: 8,
-            participant_view: 1,
-            predecessor_height: 7,
-            predecessor_descriptor_hash: Some(Hash::new(b"native-amx-diagnostics-predecessor")),
-            descriptor_hash: Hash::new(b"native-amx-diagnostics-descriptor"),
-            proposal_hash: Hash::new(b"native-amx-diagnostics-proposal"),
-            settlement_hash: HashOf::from_untyped_unchecked(Hash::new(
-                b"native-amx-diagnostics-settlement",
-            )),
-            source_count: 2,
-            application_block_height: Some(15),
-            application_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
-                b"native-amx-diagnostics-application-block",
-            ))),
-            state: SumeragiNativeAmxParticipantApplicationState::DurablyApplied,
-        }
-    }
-
-    fn autonomous_lane_execution(lane: u32, lane_height: u64) -> SumeragiAutonomousLaneExecution {
-        SumeragiAutonomousLaneExecution {
-            lane_id: LaneId::new(lane),
-            dataspace_id: DataSpaceId::new(u64::from(lane)),
-            lane_incarnation: Hash::new(
-                format!("autonomous-diagnostics-incarnation-{lane}").as_bytes(),
-            ),
-            lane_block_height: lane_height,
-            lane_block_view: 0,
-            proposal_height: lane_height,
-            proposal_view: 0,
-            proposal_hash: Hash::new(
-                format!("autonomous-diagnostics-proposal-{lane}-{lane_height}").as_bytes(),
-            ),
-            descriptor_hash: Hash::new(
-                format!("autonomous-diagnostics-descriptor-{lane}-{lane_height}").as_bytes(),
-            ),
-            executable_payload_hash: Some(Hash::new(b"autonomous-diagnostics-payload")),
-            source_bundle_hash: Some(Hash::new(b"autonomous-diagnostics-bundle")),
-            merge_entry_hash: None,
-            application_block_height: None,
-            application_block_hash: None,
-            reservation_count: 2,
-            transaction_count: 2,
-            highest_durable_stage: SumeragiAutonomousLaneExecutionStage::CertifiedBundleDurable,
-            stuck_reason: Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingMergeSelection),
-        }
-    }
-
-    #[test]
-    fn permissioned_diagnostics_omit_npos_shape() {
-        let value = norito::json::to_value(&diagnostics(None)).expect("serialize diagnostics");
-        assert!(
-            value
-                .as_object()
-                .expect("diagnostics object")
-                .get("npos")
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn diagnostics_json_rejects_unknown_outer_and_npos_fields() {
-        let mut outer = norito::json::to_value(&diagnostics(Some(npos_diagnostics())))
-            .expect("serialize diagnostics");
-        outer
-            .as_object_mut()
-            .expect("diagnostics object")
-            .insert("unknown".to_owned(), norito::json::Value::from(1_u64));
-        assert!(norito::json::from_value::<SumeragiDiagnosticsStatus>(outer).is_err());
-
-        let mut nested = norito::json::to_value(&diagnostics(Some(npos_diagnostics())))
-            .expect("serialize diagnostics");
-        nested
-            .as_object_mut()
-            .and_then(|root| root.get_mut("npos"))
-            .and_then(norito::json::Value::as_object_mut)
-            .expect("NPoS diagnostics object")
-            .insert("unknown".to_owned(), norito::json::Value::from(true));
-        assert!(norito::json::from_value::<SumeragiDiagnosticsStatus>(nested).is_err());
-
-        let mut missing_autonomous =
-            norito::json::to_value(&diagnostics(None)).expect("serialize diagnostics");
-        missing_autonomous
-            .as_object_mut()
-            .expect("diagnostics object")
-            .remove("autonomous_lane_executions");
-        assert!(
-            norito::json::from_value::<SumeragiDiagnosticsStatus>(missing_autonomous).is_err(),
-            "the first-release autonomous diagnostics vector is required"
-        );
-    }
-
-    #[test]
-    fn native_amx_participant_diagnostics_roundtrip_and_validate() {
-        let mut value = diagnostics(None);
-        value.native_amx_participant_applications = vec![
-            native_amx_participant_application(3, 8),
-            native_amx_participant_application(4, 2),
-        ];
-        value
-            .validate_native_amx_participant_applications()
-            .expect("valid ordered diagnostics");
-
-        let encoded = value.encode();
-        let mut encoded_input = encoded.as_slice();
-        let decoded = SumeragiDiagnosticsStatus::decode_all(&mut encoded_input)
-            .expect("decode diagnostics binary roundtrip");
-        assert_eq!(decoded, value);
-
-        let json = norito::json::to_value(&value).expect("serialize diagnostics JSON");
-        let row = json
-            .get("native_amx_participant_applications")
-            .and_then(norito::json::Value::as_array)
-            .and_then(|rows| rows.first())
-            .and_then(norito::json::Value::as_object)
-            .expect("Native AMX participant diagnostics row");
-        assert_eq!(
-            row.get("state").and_then(norito::json::Value::as_str),
-            Some("durably_applied")
-        );
-        let json_roundtrip: SumeragiDiagnosticsStatus =
-            norito::json::from_value(json).expect("decode diagnostics JSON roundtrip");
-        assert_eq!(json_roundtrip, value);
-    }
-
-    #[test]
-    fn native_amx_participant_diagnostics_reject_bounds_order_and_geometry() {
-        let mut value = diagnostics(None);
-        value.native_amx_participant_applications = vec![
-            native_amx_participant_application(3, 8);
-            SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX
-                + 1
-        ];
-        assert_eq!(
-            value.validate_native_amx_participant_applications(),
-            Err("Native AMX participant diagnostics vector exceeds its hard limit")
-        );
-
-        value.native_amx_participant_applications = vec![
-            native_amx_participant_application(4, 2),
-            native_amx_participant_application(3, 8),
-        ];
-        assert_eq!(
-            value.validate_native_amx_participant_applications(),
-            Err(
-                "Native AMX participant diagnostics must be strictly ordered by route and incarnation"
-            )
-        );
-
-        let mut malformed = native_amx_participant_application(3, 8);
-        malformed.predecessor_height = 6;
-        assert_eq!(
-            malformed.validate(),
-            Err("Native AMX participant diagnostics predecessor must be contiguous")
-        );
-        malformed = native_amx_participant_application(3, 8);
-        malformed.source_count = 4_097;
-        assert_eq!(
-            malformed.validate(),
-            Err("Native AMX participant diagnostics source count is out of bounds")
-        );
-        malformed = native_amx_participant_application(3, 8);
-        malformed.application_block_hash = None;
-        assert_eq!(
-            malformed.validate(),
-            Err(
-                "Native AMX participant diagnostics application height and hash must appear together"
-            )
-        );
-    }
-
-    #[test]
-    fn autonomous_lane_execution_diagnostics_roundtrip_order_and_bound() {
-        let mut value = diagnostics(None);
-        value.autonomous_lane_executions = vec![
-            autonomous_lane_execution(1, 2),
-            autonomous_lane_execution(2, 1),
-        ];
-        value
-            .validate_autonomous_lane_executions()
-            .expect("ordered autonomous execution diagnostics");
-        let encoded = norito::to_bytes(&value).expect("encode diagnostics");
-        let decoded: SumeragiDiagnosticsStatus =
-            norito::decode_from_bytes(&encoded).expect("decode diagnostics");
-        assert_eq!(decoded, value);
-
-        value.autonomous_lane_executions.reverse();
-        assert_eq!(
-            value.validate_autonomous_lane_executions(),
-            Err("autonomous lane execution diagnostics must be strictly ordered by exact identity")
-        );
-
-        value.autonomous_lane_executions = (0..=SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX)
-            .map(|index| {
-                autonomous_lane_execution(u32::try_from(index).expect("fixture lane fits u32"), 1)
-            })
-            .collect();
-        assert_eq!(
-            value.validate_autonomous_lane_executions(),
-            Err("autonomous lane execution diagnostics vector exceeds its hard limit")
-        );
-    }
-
-    #[test]
-    fn autonomous_lane_execution_conflict_is_explicit_and_fail_closed() {
-        let mut row = autonomous_lane_execution(1, 1);
-        row.transaction_count = 4_097;
-        row.reservation_count = 4_097;
-        assert_eq!(
-            row.validate(),
-            Err("autonomous lane execution counters are malformed")
-        );
-        row.transaction_count = 2;
-        row.reservation_count = 2;
-
-        row.highest_durable_stage = SumeragiAutonomousLaneExecutionStage::MergeCandidateDurable;
-        row.stuck_reason = Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingGlobalCarrier);
-        assert_eq!(
-            row.validate(),
-            Err("autonomous lane execution evidence does not match its durable stage")
-        );
-
-        row.highest_durable_stage = SumeragiAutonomousLaneExecutionStage::Conflict;
-        row.stuck_reason = None;
-        assert_eq!(
-            row.validate(),
-            Err("autonomous lane execution conflict requires an evidence-conflict reason")
-        );
-        row.stuck_reason = Some(SumeragiAutonomousLaneExecutionStuckReason::EvidenceConflict);
-        row.reservation_count = 1;
-        row.validate().expect("explicit conflict row");
-        row.reservation_count = 2;
-
-        row.highest_durable_stage =
-            SumeragiAutonomousLaneExecutionStage::KuraWsvApplicationReceiptDurable;
-        row.stuck_reason =
-            Some(SumeragiAutonomousLaneExecutionStuckReason::QueueFinalizationUnverifiable);
-        assert_eq!(
-            row.validate(),
-            Err("durable autonomous application stage requires a carrier identity")
-        );
-
-        row.merge_entry_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
-            b"autonomous-diagnostics-merge-entry",
-        )));
-        row.application_block_height = Some(5);
-        row.application_block_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
-            b"autonomous-diagnostics-carrier",
-        )));
-        row.validate().expect("complete durable application row");
-
-        row.highest_durable_stage = SumeragiAutonomousLaneExecutionStage::QueueFinalized;
-        row.stuck_reason = None;
-        row.validate()
-            .expect("independently proven queue-finalized row");
-    }
-
+    include!("consensus/quorum_policy_tests.rs");
+    include!("consensus/rbc_roundtrip_tail_tests.rs");
+    include!("consensus/runtime_diagnostics_tests.rs");
     include!("consensus/npos_diagnostics_tests.rs");
 }

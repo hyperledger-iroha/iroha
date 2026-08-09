@@ -1,10 +1,10 @@
-error: attributes conflict: `nested` cannot be set with other attributes
+error: attributes conflict: `nested` cannot be set with `default` or `env`
  --> tests/config_base_ui_fail/invalid_attrs_conflicts.rs:5:14
   |
 5 |     #[config(nested, default)]
   |              ^^^^^^
 
-error: attributes conflict: `nested` cannot be set with other attributes
+error: attributes conflict: `nested` cannot be set with `default` or `env`
   --> tests/config_base_ui_fail/invalid_attrs_conflicts.rs:11:23
    |
 11 |     #[config(default, nested)]

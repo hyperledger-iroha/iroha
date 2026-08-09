@@ -1020,8 +1020,7 @@ fn block_payload_available_by_hash_requires_local_body_after_eviction() {
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         },
         &RuntimeLaneConfig::default(),
     )
@@ -1080,8 +1079,7 @@ fn evicted_blocks_survive_restart() {
         fsync_interval: FSYNC_INTERVAL,
         block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-        eviction_required_replicas:
-            iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     };
 
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
@@ -1144,8 +1142,7 @@ fn deep_history_get_block_uses_cached_bytes() {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         },
         &RuntimeLaneConfig::default(),
     )
@@ -1203,13 +1200,14 @@ fn debug_output_new_blocks_writes_jsonl() {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         },
         &RuntimeLaneConfig::default(),
     )
     .unwrap();
 
+    kura.bind_local_peer_id(checked_peer_id())
+        .expect("bind local peer before Kura start");
     let _handle = {
         let _rt_guard = rt.enter();
         Kura::start(kura.clone(), ShutdownSignal::new())
@@ -1278,8 +1276,7 @@ fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Commit
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         },
         &RuntimeLaneConfig::default(),
     )
@@ -1350,9 +1347,8 @@ fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Commit
         let params = view.world.parameters.get();
         (params.sumeragi().max_clock_drift(), params.transaction())
     };
-    let network_id = *state.network_id_ref();
     let tx1 = TransactionBuilder::new(
-        network_id,
+        *state.network_id_ref(),
         account_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1360,7 +1356,7 @@ fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Commit
     .sign(account_keypair.private_key());
 
     let tx2 = TransactionBuilder::new(
-        network_id,
+        *state.network_id_ref(),
         account_id,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1369,7 +1365,7 @@ fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Commit
     let crypto_cfg = state.crypto();
     let tx1 = AcceptedTransaction::accept(
         tx1,
-        &network_id,
+        &chain_id,
         max_clock_drift,
         tx_limits,
         crypto_cfg.as_ref(),
@@ -1377,7 +1373,7 @@ fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Commit
     .unwrap();
     let tx2 = AcceptedTransaction::accept(
         tx2,
-        &network_id,
+        &chain_id,
         max_clock_drift,
         tx_limits,
         crypto_cfg.as_ref(),
@@ -1479,7 +1475,7 @@ impl DummyBlocks {
     fn next(&mut self) -> Arc<SignedBlock> {
         let tx = {
             let builder = TransactionBuilder::new(
-                test_network_id(b"kura-autonomous-lane-test"),
+                test_network_id(b"test"),
                 SAMPLE_GENESIS_ACCOUNT_ID.to_owned(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             );
@@ -2685,13 +2681,8 @@ fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() 
     .expect("persist availability before retirement");
     let (session, signer_pops) =
         committed_lane_block_session_for_kura_proposal(&payload.origin_proposal, &signer);
-    let certified = CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
     let retirement = AutonomousLaneSlotRetirementV1::from_payload(&payload);
 
-    assert_eq!(
-        retirement.reservation_keys(),
-        payload.reservation_keys.as_slice(),
-    );
     assert_eq!(
         kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch,)
             .expect("persist terminal slot retirement"),
@@ -2722,17 +2713,22 @@ fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() 
         kura.recover_autonomous_lane_block_payload(&payload.origin_proposal, chain_id_hash, epoch,),
         Err(LaneBlockPayloadAvailability::MissingLaneArtifact)
     ));
-    assert!(
-        !kura.autonomous_lane_payload_matches_reservation(
-            &payload.reservation_keys[0],
-            chain_id_hash,
-            epoch,
-        ),
-        "restart reconciliation must release a tombstoned reservation",
-    );
+    let reservation_group =
+        autonomous_reservation_reconciliation_group(payload.reservation_keys.clone());
+    let classified = kura
+        .classify_autonomous_lane_reservation_groups(&[reservation_group], chain_id_hash, &[epoch])
+        .expect("classify tombstoned reservation through the strict grouped predicate");
+    assert!(matches!(
+        classified.as_slice(),
+        [AutonomousLaneReservationEvidenceV1::ExactRetired {
+            payload: exact_payload,
+            retirement: exact_retirement,
+            ..
+        }] if exact_payload == &payload && exact_retirement == &retirement
+    ));
     assert_eq!(
-        kura.autonomous_lane_merge_bundle(certified, chain_id_hash, epoch),
-        Err("autonomous lane merge payload is unavailable"),
+        kura.durable_autonomous_lane_merge_source(lane_id, 1, chain_id_hash, epoch),
+        Err("retired autonomous lane slot is not merge eligible"),
         "a locally supplied delayed QC cannot make a retired slot merge eligible",
     );
     assert!(

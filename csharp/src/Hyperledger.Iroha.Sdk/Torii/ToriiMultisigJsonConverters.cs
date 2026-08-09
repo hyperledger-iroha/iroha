@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Hyperledger.Iroha.Address;
+using Hyperledger.Iroha.Norito;
 
 namespace Hyperledger.Iroha.Torii;
 
@@ -13,11 +14,13 @@ internal static class ToriiMultisigJson
         ValidateCommonResponse(
             response.Ok,
             response.ResolvedMultisigAccountId,
+            response.Submitted,
             response.ProposalId,
             response.InstructionsHash,
             response.TransactionHashHex,
             response.ExecutedTransactionHashHex,
             response.CreationTimeMilliseconds,
+            response.TransactionPayloadBase64,
             response.SigningMessageBase64,
             context);
     }
@@ -31,11 +34,13 @@ internal static class ToriiMultisigJson
         ValidateCommonResponse(
             response.Ok,
             response.ResolvedMultisigAccountId,
+            response.Submitted,
             response.ProposalId,
             response.InstructionsHash,
             response.TransactionHashHex,
             response.ExecutedTransactionHashHex,
             response.CreationTimeMilliseconds,
+            response.TransactionPayloadBase64,
             response.SigningMessageBase64,
             context);
     }
@@ -66,11 +71,13 @@ internal static class ToriiMultisigJson
                 ValidateCommonResponse(
                     fields.Ok,
                     resolvedMultisigAccountId,
+                    fields.Submitted,
                     fields.ProposalId,
                     fields.InstructionsHash,
                     fields.TransactionHashHex,
                     fields.ExecutedTransactionHashHex,
                     fields.CreationTimeMilliseconds,
+                    fields.TransactionPayloadBase64,
                     fields.SigningMessageBase64,
                     context);
                 fields.ResolvedMultisigAccountId = resolvedMultisigAccountId;
@@ -100,7 +107,7 @@ internal static class ToriiMultisigJson
                         $"{context}.resolved_multisig_account_id");
                     break;
                 case "submitted":
-                    fields.Submitted = ReadOptionalBool(ref reader, $"{context}.submitted");
+                    fields.Submitted = ReadBool(ref reader, $"{context}.submitted");
                     break;
                 case "proposal_id":
                     fields.ProposalId = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.proposal_id");
@@ -121,12 +128,21 @@ internal static class ToriiMultisigJson
                 case "creation_time_ms":
                     fields.CreationTimeMilliseconds = ReadOptionalUInt64(ref reader, $"{context}.creation_time_ms");
                     break;
+                case "transaction_payload_b64":
+                    fields.TransactionPayloadBase64 = ToriiAccountFaucetJson.ReadOptionalString(
+                        ref reader,
+                        $"{context}.transaction_payload_b64");
+                    break;
                 case "signing_message_b64":
                     fields.SigningMessageBase64 = ToriiAccountFaucetJson.ReadOptionalString(
                         ref reader,
                         $"{context}.signing_message_b64");
                     break;
                 default:
+                    if (propertyName is "transaction_scaffold_b64" or "signed_transaction_b64")
+                    {
+                        throw new JsonException($"{context}.{propertyName} is a retired field.");
+                    }
                     ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"{context}.{propertyName}");
                     break;
             }
@@ -147,18 +163,23 @@ internal static class ToriiMultisigJson
         ValidateCommonResponse(
             fields.Ok,
             resolvedMultisigAccountId,
+            fields.Submitted,
             fields.ProposalId,
             fields.InstructionsHash,
             fields.TransactionHashHex,
             fields.ExecutedTransactionHashHex,
             fields.CreationTimeMilliseconds,
+            fields.TransactionPayloadBase64,
             fields.SigningMessageBase64,
             context);
 
         writer.WriteStartObject();
         writer.WriteBoolean("ok", fields.Ok);
         writer.WriteString("resolved_multisig_account_id", resolvedMultisigAccountId);
-        WriteNullableBoolean(writer, "submitted", fields.Submitted);
+        writer.WriteBoolean(
+            "submitted",
+            fields.Submitted
+                ?? throw new JsonException($"{context}.submitted must not be null."));
         ToriiVpnJson.WriteNullableString(writer, "proposal_id", fields.ProposalId);
         ToriiVpnJson.WriteNullableString(writer, "instructions_hash", fields.InstructionsHash);
         ToriiVpnJson.WriteNullableString(writer, "tx_hash_hex", fields.TransactionHashHex);
@@ -172,6 +193,10 @@ internal static class ToriiMultisigJson
             writer.WriteNull("creation_time_ms");
         }
 
+        ToriiVpnJson.WriteNullableString(
+            writer,
+            "transaction_payload_b64",
+            fields.TransactionPayloadBase64);
         ToriiVpnJson.WriteNullableString(writer, "signing_message_b64", fields.SigningMessageBase64);
         writer.WriteEndObject();
     }
@@ -179,11 +204,13 @@ internal static class ToriiMultisigJson
     private static void ValidateCommonResponse(
         bool ok,
         string resolvedMultisigAccountId,
+        bool? submitted,
         string? proposalId,
         string? instructionsHash,
         string? transactionHashHex,
         string? executedTransactionHashHex,
         ulong? creationTimeMilliseconds,
+        string? transactionPayloadBase64,
         string? signingMessageBase64,
         string context)
     {
@@ -204,7 +231,42 @@ internal static class ToriiMultisigJson
             throw new JsonException($"{context}.creation_time_ms must be positive when provided.");
         }
 
+        ValidateOptionalBase64(transactionPayloadBase64, $"{context}.transaction_payload_b64");
         ValidateOptionalBase64(signingMessageBase64, $"{context}.signing_message_b64");
+        if (submitted is null)
+        {
+            throw new JsonException($"{context}.submitted must not be null.");
+        }
+
+        if (submitted.Value)
+        {
+            if (transactionHashHex is null
+                || transactionPayloadBase64 is not null
+                || signingMessageBase64 is not null)
+            {
+                throw new JsonException(
+                    $"{context} submitted response must contain only the final transaction hash.");
+            }
+        }
+        else
+        {
+            if (transactionHashHex is not null
+                || transactionPayloadBase64 is null
+                || signingMessageBase64 is null)
+            {
+                throw new JsonException(
+                    $"{context} unsigned response must contain exactly one payload and signing-message pair.");
+            }
+
+            var transactionPayload = Convert.FromBase64String(transactionPayloadBase64);
+            var signingMessage = Convert.FromBase64String(signingMessageBase64);
+            if (signingMessage.Length != IrohaHash.Length
+                || !signingMessage.AsSpan().SequenceEqual(IrohaHash.Hash(transactionPayload)))
+            {
+                throw new JsonException(
+                    $"{context}.signing_message_b64 must be the exact TransactionPayload hash.");
+            }
+        }
     }
 
     private static bool ReadBool(ref Utf8JsonReader reader, string field)
@@ -217,27 +279,11 @@ internal static class ToriiMultisigJson
         };
     }
 
-    private static bool? ReadOptionalBool(ref Utf8JsonReader reader, string field)
-    {
-        return reader.TokenType == JsonTokenType.Null ? null : ReadBool(ref reader, field);
-    }
-
     private static ulong? ReadOptionalUInt64(ref Utf8JsonReader reader, string field)
     {
         return reader.TokenType == JsonTokenType.Null
             ? null
             : ToriiAccountFaucetJson.ReadUInt64(ref reader, field);
-    }
-
-    private static void WriteNullableBoolean(Utf8JsonWriter writer, string propertyName, bool? value)
-    {
-        if (value.HasValue)
-        {
-            writer.WriteBoolean(propertyName, value.Value);
-            return;
-        }
-
-        writer.WriteNull(propertyName);
     }
 
     private static void ValidateOptionalTransactionHashHex(string? value, string field)
@@ -331,6 +377,7 @@ internal static class ToriiMultisigJson
             nameof(ToriiMultisigResponse.TransactionHashHex) => "tx_hash_hex",
             nameof(ToriiMultisigResponse.ExecutedTransactionHashHex) => "executed_tx_hash_hex",
             nameof(ToriiMultisigResponse.CreationTimeMilliseconds) => "creation_time_ms",
+            nameof(ToriiMultisigResponse.TransactionPayloadBase64) => "transaction_payload_b64",
             nameof(ToriiMultisigResponse.SigningMessageBase64) => "signing_message_b64",
             _ => error.ParamName,
         };
@@ -357,6 +404,8 @@ internal struct MultisigResponseFields
 
     internal ulong? CreationTimeMilliseconds { get; set; }
 
+    internal string? TransactionPayloadBase64 { get; set; }
+
     internal string? SigningMessageBase64 { get; set; }
 }
 
@@ -377,12 +426,14 @@ internal sealed class ToriiMultisigResponseJsonConverter : JsonConverter<ToriiMu
                 Ok = fields.Ok,
                 ResolvedMultisigAccountId = fields.ResolvedMultisigAccountId
                     ?? throw new JsonException("multisig response.resolved_multisig_account_id must not be null."),
-                Submitted = fields.Submitted,
+                Submitted = fields.Submitted
+                    ?? throw new JsonException("multisig response.submitted must not be null."),
                 ProposalId = fields.ProposalId,
                 InstructionsHash = fields.InstructionsHash,
                 TransactionHashHex = fields.TransactionHashHex,
                 ExecutedTransactionHashHex = fields.ExecutedTransactionHashHex,
                 CreationTimeMilliseconds = fields.CreationTimeMilliseconds,
+                TransactionPayloadBase64 = fields.TransactionPayloadBase64,
                 SigningMessageBase64 = fields.SigningMessageBase64,
             };
         }
@@ -411,6 +462,7 @@ internal sealed class ToriiMultisigResponseJsonConverter : JsonConverter<ToriiMu
                 TransactionHashHex = value.TransactionHashHex,
                 ExecutedTransactionHashHex = value.ExecutedTransactionHashHex,
                 CreationTimeMilliseconds = value.CreationTimeMilliseconds,
+                TransactionPayloadBase64 = value.TransactionPayloadBase64,
                 SigningMessageBase64 = value.SigningMessageBase64,
             },
             "multisig response");
@@ -435,12 +487,15 @@ internal sealed class ToriiMultisigContractCallResponseJsonConverter
                 Ok = fields.Ok,
                 ResolvedMultisigAccountId = fields.ResolvedMultisigAccountId
                     ?? throw new JsonException("multisig contract-call response.resolved_multisig_account_id must not be null."),
-                Submitted = fields.Submitted,
+                Submitted = fields.Submitted
+                    ?? throw new JsonException(
+                        "multisig contract-call response.submitted must not be null."),
                 ProposalId = fields.ProposalId,
                 InstructionsHash = fields.InstructionsHash,
                 TransactionHashHex = fields.TransactionHashHex,
                 ExecutedTransactionHashHex = fields.ExecutedTransactionHashHex,
                 CreationTimeMilliseconds = fields.CreationTimeMilliseconds,
+                TransactionPayloadBase64 = fields.TransactionPayloadBase64,
                 SigningMessageBase64 = fields.SigningMessageBase64,
             };
         }
@@ -469,6 +524,7 @@ internal sealed class ToriiMultisigContractCallResponseJsonConverter
                 TransactionHashHex = value.TransactionHashHex,
                 ExecutedTransactionHashHex = value.ExecutedTransactionHashHex,
                 CreationTimeMilliseconds = value.CreationTimeMilliseconds,
+                TransactionPayloadBase64 = value.TransactionPayloadBase64,
                 SigningMessageBase64 = value.SigningMessageBase64,
             },
             "multisig contract-call response");

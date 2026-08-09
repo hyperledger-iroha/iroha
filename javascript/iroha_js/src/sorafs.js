@@ -156,6 +156,16 @@ function readPayloadField(object, ...names) {
   return undefined;
 }
 
+function rejectUnexpectedFields(object, allowedFields, context) {
+  const allowed = new Set(allowedFields);
+  const unexpected = Object.keys(object).filter((field) => !allowed.has(field));
+  if (unexpected.length > 0) {
+    throw new TypeError(
+      `${context} contains unsupported fields: ${unexpected.join(", ")}`,
+    );
+  }
+}
+
 function formatAssignment(raw) {
   if (!raw || typeof raw !== "object") {
     return {
@@ -164,11 +174,11 @@ function formatAssignment(raw) {
       lane: null,
     };
   }
-  const providerValue = readPayloadField(raw, "provider_id_hex", "providerIdHex");
+  const providerValue = raw.providerIdHex;
   const providerIdHex =
     typeof providerValue === "string" ? providerValue : "";
-  const sliceValue = readPayloadField(raw, "slice_gib", "sliceGib");
-  const laneValue = readPayloadField(raw, "lane");
+  const sliceValue = raw.sliceGib;
+  const laneValue = raw.lane;
   return {
     providerIdHex,
     sliceGiB: typeof sliceValue === "number" ? sliceValue : Number(sliceValue ?? 0),
@@ -199,21 +209,9 @@ function formatSla(raw) {
       minPorSuccessPercentMilli: 0,
     };
   }
-  const ingest = readPayloadField(
-    raw,
-    "ingest_deadline_secs",
-    "ingestDeadlineSecs",
-  );
-  const availability = readPayloadField(
-    raw,
-    "min_availability_percent_milli",
-    "minAvailabilityPercentMilli",
-  );
-  const por = readPayloadField(
-    raw,
-    "min_por_success_percent_milli",
-    "minPorSuccessPercentMilli",
-  );
+  const ingest = raw.ingestDeadlineSecs;
+  const availability = raw.minAvailabilityPercentMilli;
+  const por = raw.minPorSuccessPercentMilli;
   return {
     ingestDeadlineSecs: Number(ingest ?? 0),
     minAvailabilityPercentMilli: Number(availability ?? 0),
@@ -285,16 +283,10 @@ export function decodeReplicationOrder(bytes) {
   const metadata = Array.isArray(payload.metadata)
     ? payload.metadata.map((entry) => formatMetadata(entry))
     : [];
-  const schemaVersion = Number(
-    readPayloadField(payload, "schema_version", "schemaVersion") ?? 0,
-  );
-  const orderIdValue = readPayloadField(payload, "order_id_hex", "orderIdHex");
+  const schemaVersion = Number(payload.schemaVersion ?? 0);
+  const orderIdValue = payload.orderIdHex;
   const orderIdHex = typeof orderIdValue === "string" ? orderIdValue : "";
-  const manifestCidHexValue = readPayloadField(
-    payload,
-    "manifest_cid_hex",
-    "manifestCidHex",
-  );
+  const manifestCidHexValue = payload.manifestCidHex;
   if (
     typeof manifestCidHexValue !== "string" ||
     !/^[0-9a-f]{72}$/.test(manifestCidHexValue)
@@ -304,43 +296,19 @@ export function decodeReplicationOrder(bytes) {
     );
   }
   const manifestCidHex = manifestCidHexValue;
-  const manifestCidBase64Value = readPayloadField(
-    payload,
-    "manifest_cid_base64",
-    "manifestCidBase64",
-  );
+  const manifestCidBase64Value = payload.manifestCidBase64;
   const manifestCidBase64 =
     typeof manifestCidBase64Value === "string" ? manifestCidBase64Value : "";
-  const manifestDigestValue = readPayloadField(
-    payload,
-    "manifest_digest_hex",
-    "manifestDigestHex",
-  );
+  const manifestDigestValue = payload.manifestDigestHex;
   const manifestDigestHex =
     typeof manifestDigestValue === "string" ? manifestDigestValue : "";
-  const chunkingProfileValue = readPayloadField(
-    payload,
-    "chunking_profile",
-    "chunkingProfile",
-  );
+  const chunkingProfileValue = payload.chunkingProfile;
   const chunkingProfile =
     typeof chunkingProfileValue === "string" ? chunkingProfileValue : "";
-  const targetReplicas = readPayloadField(
-    payload,
-    "target_replicas",
-    "targetReplicas",
-  ) ?? 0;
-  const issuedAtUnix = readPayloadField(
-    payload,
-    "issued_at_unix",
-    "issuedAtUnix",
-  ) ?? 0;
-  const deadlineAtUnix = readPayloadField(
-    payload,
-    "deadline_at_unix",
-    "deadlineAtUnix",
-  ) ?? 0;
-  const sla = formatSla(readPayloadField(payload, "sla"));
+  const targetReplicas = payload.targetReplicas ?? 0;
+  const issuedAtUnix = payload.issuedAtUnix ?? 0;
+  const deadlineAtUnix = payload.deadlineAtUnix ?? 0;
+  const sla = formatSla(payload.sla);
   return {
     schemaVersion,
     orderIdHex,
@@ -361,22 +329,21 @@ export function decodeReplicationOrder(bytes) {
  * Validate a Norito-encoded orderbook payload with the Rust reference validator.
  * @param {string} kind
  * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
- * @param {{ label?: string, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} [options]
+ * @param {{ label?: string, generatedAtUnix?: number | bigint }} [options]
  * @returns {Record<string, any>}
  */
 export function validateOrderbookPayload(kind, bytes, options = {}) {
   if (!isPlainObject(options)) {
     throw new TypeError("options must be an object");
   }
+  rejectUnexpectedFields(options, ["label", "generatedAtUnix"], "options");
   const canonicalKind = normalizeOrderbookPayloadKind(kind);
   const buffer = toBuffer(bytes);
   const label =
     typeof options.label === "string" && options.label.trim() !== ""
       ? options.label.trim()
       : `sdk:sorafs.orderbook.${canonicalKind}`;
-  const generatedAtUnix = normalizeGeneratedAtUnix(
-    readPayloadField(options, "generatedAtUnix", "generated_at"),
-  );
+  const generatedAtUnix = normalizeGeneratedAtUnix(options.generatedAtUnix);
   const binding = requireSorafsNativeFunction(
     "sorafsValidateOrderbookPayloadJson",
     "orderbook validation",
@@ -404,21 +371,20 @@ export function validateOrderbookPayload(kind, bytes, options = {}) {
  * A successful diagnostic outcome does not itself authorize settlement.
  *
  * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
- * @param {{ label?: string, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} [options]
+ * @param {{ label?: string, generatedAtUnix?: number | bigint }} [options]
  * @returns {Record<string, any>}
  */
 export function validateAppealFinanceCancelAssetLock(bytes, options = {}) {
   if (!isPlainObject(options)) {
     throw new TypeError("options must be an object");
   }
+  rejectUnexpectedFields(options, ["label", "generatedAtUnix"], "options");
   const buffer = toBuffer(bytes);
   const label =
     typeof options.label === "string" && options.label.trim() !== ""
       ? options.label.trim()
       : "sdk:sorafs.appeal_finance.cancel_asset_lock";
-  const generatedAtUnix = normalizeGeneratedAtUnix(
-    readPayloadField(options, "generatedAtUnix", "generated_at"),
-  );
+  const generatedAtUnix = normalizeGeneratedAtUnix(options.generatedAtUnix);
   const binding = requireSorafsNativeFunction(
     "sorafsValidateAppealFinanceCancelAssetLockJson",
     "appeal-finance CancelAssetLock validation",
@@ -764,12 +730,10 @@ function parseReferenceOutcomePayload(payload, capability) {
   return outcome;
 }
 
-function referenceLabel(options, names, fallback) {
-  for (const name of names) {
-    const value = readPayloadField(options, name);
-    if (typeof value === "string" && value.trim() !== "") {
-      return value.trim();
-    }
+function referenceLabel(options, name, fallback) {
+  const value = options[name];
+  if (typeof value === "string" && value.trim() !== "") {
+    return value.trim();
   }
   return fallback;
 }
@@ -828,20 +792,14 @@ function normalizeGovernanceDagBlockInput(value, index) {
   if (!isPlainObject(value)) {
     throw new TypeError(`blocks[${index}] must be an object`);
   }
-  const payload = readPayloadField(
-    value,
-    "payload",
-    "bytes",
-    "noritoBytes",
-    "norito_bytes",
-  );
-  if (payload === undefined) {
-    throw new TypeError(`blocks[${index}].payload is required`);
+  rejectUnexpectedFields(value, ["bytes", "label"], `blocks[${index}]`);
+  if (value.bytes === undefined) {
+    throw new TypeError(`blocks[${index}].bytes is required`);
   }
   return {
-    bytes: toBuffer(payload),
+    bytes: toBuffer(value.bytes),
     label: governanceReferenceLabel(
-      readPayloadField(value, "label"),
+      value.label,
       `governance-dag-block-${index}.to`,
       `blocks[${index}].label`,
     ),
@@ -853,23 +811,22 @@ function normalizeGovernanceDagBlockInput(value, index) {
  * A successful result is structural-only and never authorizes production acceptance.
  * @param {string} kind
  * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
- * @param {{ label?: string, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} [options]
+ * @param {{ label?: string, generatedAtUnix?: number | bigint }} [options]
  * @returns {Record<string, any>}
  */
 export function validatePdpPayload(kind, bytes, options = {}) {
   if (!isPlainObject(options)) {
     throw new TypeError("options must be an object");
   }
+  rejectUnexpectedFields(options, ["label", "generatedAtUnix"], "options");
   const canonicalKind = normalizePdpPayloadKind(kind);
   const buffer = toBuffer(bytes);
   const label = referenceLabel(
     options,
-    ["label"],
+    "label",
     `sdk:sorafs.pdp.${canonicalKind}`,
   );
-  const generatedAtUnix = normalizeGeneratedAtUnix(
-    readPayloadField(options, "generatedAtUnix", "generated_at"),
-  );
+  const generatedAtUnix = normalizeGeneratedAtUnix(options.generatedAtUnix);
   const binding = requireSorafsNativeFunction(
     "sorafsValidatePdpPayloadJson",
     "PDP validation",
@@ -890,7 +847,7 @@ export function validatePdpPayload(kind, bytes, options = {}) {
  * A successful result does not evaluate provider admission or Merkle witnesses.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} commitmentBytes
  * @param {ArrayBufferView | ArrayBuffer | Buffer} challengeBytes
- * @param {{ commitmentLabel?: string, commitment_label?: string, challengeLabel?: string, challenge_label?: string, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} [options]
+ * @param {{ commitmentLabel?: string, challengeLabel?: string, generatedAtUnix?: number | bigint }} [options]
  * @returns {Record<string, any>}
  */
 export function validatePdpCommitmentChallenge(
@@ -901,9 +858,12 @@ export function validatePdpCommitmentChallenge(
   if (!isPlainObject(options)) {
     throw new TypeError("options must be an object");
   }
-  const generatedAtUnix = normalizeGeneratedAtUnix(
-    readPayloadField(options, "generatedAtUnix", "generated_at"),
+  rejectUnexpectedFields(
+    options,
+    ["commitmentLabel", "challengeLabel", "generatedAtUnix"],
+    "options",
   );
+  const generatedAtUnix = normalizeGeneratedAtUnix(options.generatedAtUnix);
   const binding = requireSorafsNativeFunction(
     "sorafsValidatePdpCommitmentChallengeJson",
     "PDP commitment/challenge validation",
@@ -913,13 +873,13 @@ export function validatePdpCommitmentChallenge(
       toBuffer(commitmentBytes),
       referenceLabel(
         options,
-        ["commitmentLabel", "commitment_label"],
+        "commitmentLabel",
         "sdk:sorafs.pdp.commitment",
       ),
       toBuffer(challengeBytes),
       referenceLabel(
         options,
-        ["challengeLabel", "challenge_label"],
+        "challengeLabel",
         "sdk:sorafs.pdp.challenge",
       ),
       generatedAtUnix,
@@ -933,7 +893,7 @@ export function validatePdpCommitmentChallenge(
  * A successful result does not evaluate provider admission or commitment roots.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} challengeBytes
  * @param {ArrayBufferView | ArrayBuffer | Buffer} proofBytes
- * @param {{ challengeLabel?: string, challenge_label?: string, proofLabel?: string, proof_label?: string, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} [options]
+ * @param {{ challengeLabel?: string, proofLabel?: string, generatedAtUnix?: number | bigint }} [options]
  * @returns {Record<string, any>}
  */
 export function validatePdpChallengeProof(
@@ -944,9 +904,12 @@ export function validatePdpChallengeProof(
   if (!isPlainObject(options)) {
     throw new TypeError("options must be an object");
   }
-  const generatedAtUnix = normalizeGeneratedAtUnix(
-    readPayloadField(options, "generatedAtUnix", "generated_at"),
+  rejectUnexpectedFields(
+    options,
+    ["challengeLabel", "proofLabel", "generatedAtUnix"],
+    "options",
   );
+  const generatedAtUnix = normalizeGeneratedAtUnix(options.generatedAtUnix);
   const binding = requireSorafsNativeFunction(
     "sorafsValidatePdpChallengeProofJson",
     "PDP challenge/proof validation",
@@ -956,13 +919,13 @@ export function validatePdpChallengeProof(
       toBuffer(challengeBytes),
       referenceLabel(
         options,
-        ["challengeLabel", "challenge_label"],
+        "challengeLabel",
         "sdk:sorafs.pdp.challenge",
       ),
       toBuffer(proofBytes),
       referenceLabel(
         options,
-        ["proofLabel", "proof_label"],
+        "proofLabel",
         "sdk:sorafs.pdp.proof",
       ),
       generatedAtUnix,
@@ -978,7 +941,7 @@ export function validatePdpChallengeProof(
  * @param {ArrayBufferView | ArrayBuffer | Buffer} commitmentBytes
  * @param {ArrayBufferView | ArrayBuffer | Buffer} challengeBytes
  * @param {ArrayBufferView | ArrayBuffer | Buffer} proofBytes
- * @param {{ commitmentLabel?: string, commitment_label?: string, challengeLabel?: string, challenge_label?: string, proofLabel?: string, proof_label?: string, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} [options]
+ * @param {{ commitmentLabel?: string, challengeLabel?: string, proofLabel?: string, generatedAtUnix?: number | bigint }} [options]
  * @returns {Record<string, any>}
  */
 export function validatePdpBundle(
@@ -990,9 +953,12 @@ export function validatePdpBundle(
   if (!isPlainObject(options)) {
     throw new TypeError("options must be an object");
   }
-  const generatedAtUnix = normalizeGeneratedAtUnix(
-    readPayloadField(options, "generatedAtUnix", "generated_at"),
+  rejectUnexpectedFields(
+    options,
+    ["commitmentLabel", "challengeLabel", "proofLabel", "generatedAtUnix"],
+    "options",
   );
+  const generatedAtUnix = normalizeGeneratedAtUnix(options.generatedAtUnix);
   const binding = requireSorafsNativeFunction(
     "sorafsValidatePdpBundleJson",
     "PDP bundle validation",
@@ -1002,19 +968,19 @@ export function validatePdpBundle(
       toBuffer(commitmentBytes),
       referenceLabel(
         options,
-        ["commitmentLabel", "commitment_label"],
+        "commitmentLabel",
         "sdk:sorafs.pdp.commitment",
       ),
       toBuffer(challengeBytes),
       referenceLabel(
         options,
-        ["challengeLabel", "challenge_label"],
+        "challengeLabel",
         "sdk:sorafs.pdp.challenge",
       ),
       toBuffer(proofBytes),
       referenceLabel(
         options,
-        ["proofLabel", "proof_label"],
+        "proofLabel",
         "sdk:sorafs.pdp.proof",
       ),
       generatedAtUnix,
@@ -1025,8 +991,8 @@ export function validatePdpBundle(
 
 /**
  * Validate a bounded heterogeneous fixture bundle and its canonical cross-links.
- * @param {Array<{ kind: string, bytes?: ArrayBufferView | ArrayBuffer | Buffer, payload?: ArrayBufferView | ArrayBuffer | Buffer, noritoBytes?: ArrayBufferView | ArrayBuffer | Buffer, norito_bytes?: ArrayBufferView | ArrayBuffer | Buffer, label?: string }>} payloads
- * @param {{ nowUnix?: number | bigint, now_unix?: number | bigint, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} [options]
+ * @param {Array<{ kind: string, bytes: ArrayBufferView | ArrayBuffer | Buffer, label?: string }>} payloads
+ * @param {{ nowUnix?: number | bigint, generatedAtUnix?: number | bigint }} [options]
  * @returns {Record<string, any>}
  */
 export function validateFixtureBundle(payloads, options = {}) {
@@ -1044,23 +1010,22 @@ export function validateFixtureBundle(payloads, options = {}) {
   if (!isPlainObject(options)) {
     throw new TypeError("options must be an object");
   }
+  rejectUnexpectedFields(options, ["nowUnix", "generatedAtUnix"], "options");
   let aggregateBytes = 0;
   const normalizedPayloads = payloads.map((payload, index) => {
     if (!isPlainObject(payload)) {
       throw new TypeError(`payloads[${index}] must be an object`);
     }
-    const kind = normalizeFixtureBundlePayloadKind(payload.kind);
-    const rawBytes = readPayloadField(
+    rejectUnexpectedFields(
       payload,
-      "bytes",
-      "payload",
-      "noritoBytes",
-      "norito_bytes",
+      ["kind", "bytes", "label"],
+      `payloads[${index}]`,
     );
-    if (rawBytes === undefined) {
+    const kind = normalizeFixtureBundlePayloadKind(payload.kind);
+    if (payload.bytes === undefined) {
       throw new TypeError(`payloads[${index}].bytes is required`);
     }
-    const bytes = Buffer.from(toBuffer(rawBytes));
+    const bytes = Buffer.from(toBuffer(payload.bytes));
     const label = governanceReferenceLabel(
       payload.label,
       `${kind}.to`,
@@ -1074,12 +1039,9 @@ export function validateFixtureBundle(payloads, options = {}) {
     }
     return { kind, bytes, label };
   });
-  const generatedAtUnix = normalizeGeneratedAtUnix(
-    readPayloadField(options, "generatedAtUnix", "generated_at"),
-  );
+  const generatedAtUnix = normalizeGeneratedAtUnix(options.generatedAtUnix);
   const nowUnix = normalizeReferenceUnix(
-    readPayloadField(options, "nowUnix", "now_unix") ??
-      generatedAtUnix,
+    options.nowUnix ?? generatedAtUnix,
     "options.nowUnix",
   );
   const binding = requireSorafsNativeFunction(
@@ -1099,32 +1061,25 @@ export function validateFixtureBundle(payloads, options = {}) {
 /**
  * Validate one canonical GovernanceLogNodeV1 and bind it to its expected CID.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
- * @param {{ label?: string, expectedNodeCid?: ArrayBufferView | ArrayBuffer | Buffer, expected_node_cid?: ArrayBufferView | ArrayBuffer | Buffer, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} options
+ * @param {{ label?: string, expectedNodeCid: ArrayBufferView | ArrayBuffer | Buffer, generatedAtUnix?: number | bigint }} options
  * @returns {Record<string, any>}
  */
 export function validateGovernanceLogNode(bytes, options) {
   if (!isPlainObject(options)) {
     throw new TypeError("options must be an object");
   }
+  rejectUnexpectedFields(
+    options,
+    ["label", "expectedNodeCid", "generatedAtUnix"],
+    "options",
+  );
   const payload = Buffer.from(toBuffer(bytes));
   const label = governanceReferenceLabel(
-    readPayloadField(options, "label"),
+    options.label,
     "governance.to",
     "options.label",
   );
-  if (
-    Object.prototype.hasOwnProperty.call(options, "expectedNodeCid") &&
-    Object.prototype.hasOwnProperty.call(options, "expected_node_cid")
-  ) {
-    throw new TypeError(
-      "options must provide exactly one of expectedNodeCid or expected_node_cid",
-    );
-  }
-  const expectedValue = readPayloadField(
-    options,
-    "expectedNodeCid",
-    "expected_node_cid",
-  );
+  const expectedValue = options.expectedNodeCid;
   if (expectedValue === undefined || expectedValue === null) {
     throw new TypeError("options.expectedNodeCid is required");
   }
@@ -1144,9 +1099,7 @@ export function validateGovernanceLogNode(bytes, options) {
       `governance log-node validation inputs exceed ${SORAFS_REFERENCE_MAX_INPUT_BYTES_V1} aggregate bytes`,
     );
   }
-  const generatedAtUnix = normalizeGeneratedAtUnix(
-    readPayloadField(options, "generatedAtUnix", "generated_at"),
-  );
+  const generatedAtUnix = normalizeGeneratedAtUnix(options.generatedAtUnix);
   const binding = requireSorafsNativeFunction(
     "sorafsValidateGovernanceLogNodeJson",
     "governance log-node validation",
@@ -1165,24 +1118,25 @@ export function validateGovernanceLogNode(bytes, options) {
 /**
  * Validate one canonical GovernanceDagBlockV1 with the Rust reference validator.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
- * @param {{ label?: string, expectedBlockCid?: ArrayBufferView | ArrayBuffer | Buffer, expected_block_cid?: ArrayBufferView | ArrayBuffer | Buffer, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} [options]
+ * @param {{ label?: string, expectedBlockCid?: ArrayBufferView | ArrayBuffer | Buffer, generatedAtUnix?: number | bigint }} [options]
  * @returns {Record<string, any>}
  */
 export function validateGovernanceDagBlock(bytes, options = {}) {
   if (!isPlainObject(options)) {
     throw new TypeError("options must be an object");
   }
+  rejectUnexpectedFields(
+    options,
+    ["label", "expectedBlockCid", "generatedAtUnix"],
+    "options",
+  );
   const payload = toBuffer(bytes);
   const label = governanceReferenceLabel(
-    readPayloadField(options, "label"),
+    options.label,
     "governance-dag-block.to",
     "options.label",
   );
-  const expectedValue = readPayloadField(
-    options,
-    "expectedBlockCid",
-    "expected_block_cid",
-  );
+  const expectedValue = options.expectedBlockCid;
   const expectedBlockCid =
     expectedValue === undefined || expectedValue === null
       ? undefined
@@ -1201,9 +1155,7 @@ export function validateGovernanceDagBlock(bytes, options = {}) {
     Buffer.byteLength(label, "utf8"),
     expectedBlockCid?.length ?? 0,
   );
-  const generatedAtUnix = normalizeGeneratedAtUnix(
-    readPayloadField(options, "generatedAtUnix", "generated_at"),
-  );
+  const generatedAtUnix = normalizeGeneratedAtUnix(options.generatedAtUnix);
   const binding = requireSorafsNativeFunction(
     "sorafsValidateGovernanceDagBlockJson",
     "governance DAG block validation",
@@ -1224,8 +1176,8 @@ export function validateGovernanceDagBlock(bytes, options = {}) {
  * Histories up to 64 blocks use the full root-to-head sequence; longer histories
  * use the newest checkpoint-anchored tail.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} headBytes
- * @param {Array<{ payload?: ArrayBufferView | ArrayBuffer | Buffer, bytes?: ArrayBufferView | ArrayBuffer | Buffer, noritoBytes?: ArrayBufferView | ArrayBuffer | Buffer, norito_bytes?: ArrayBufferView | ArrayBuffer | Buffer, label?: string }>} blocks
- * @param {{ headLabel?: string, head_label?: string, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} [options]
+ * @param {Array<{ bytes: ArrayBufferView | ArrayBuffer | Buffer, label?: string }>} blocks
+ * @param {{ headLabel?: string, generatedAtUnix?: number | bigint }} [options]
  * @returns {Record<string, any>}
  */
 export function validateGovernanceDagHeadChain(
@@ -1247,9 +1199,10 @@ export function validateGovernanceDagHeadChain(
   if (!isPlainObject(options)) {
     throw new TypeError("options must be an object");
   }
+  rejectUnexpectedFields(options, ["headLabel", "generatedAtUnix"], "options");
   const head = toBuffer(headBytes);
   const headLabel = governanceReferenceLabel(
-    readPayloadField(options, "headLabel", "head_label"),
+    options.headLabel,
     "governance-dag-head.to",
     "options.headLabel",
   );
@@ -1263,9 +1216,7 @@ export function validateGovernanceDagHeadChain(
       Buffer.byteLength(block.label, "utf8"),
     ]),
   );
-  const generatedAtUnix = normalizeGeneratedAtUnix(
-    readPayloadField(options, "generatedAtUnix", "generated_at"),
-  );
+  const generatedAtUnix = normalizeGeneratedAtUnix(options.generatedAtUnix);
   const binding = requireSorafsNativeFunction(
     "sorafsValidateGovernanceDagHeadChainJson",
     "governance DAG head-chain validation",

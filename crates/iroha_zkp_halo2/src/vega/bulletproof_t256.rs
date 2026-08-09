@@ -1733,25 +1733,31 @@ mod tests {
             )
             .expect("all bound-one members prove")
         };
+        #[cfg(feature = "parallel")]
         let single_worker = rayon::ThreadPoolBuilder::new()
             .num_threads(1)
             .build()
             .expect("single-worker Rayon pool")
             .install(&prove_bound_one);
-        let four_workers = rayon::ThreadPoolBuilder::new()
-            .num_threads(4)
-            .build()
-            .expect("four-worker Rayon pool")
-            .install(&prove_bound_one);
-        assert_eq!(
-            single_worker.0.proof_bytes(),
-            four_workers.0.proof_bytes(),
-            "membership proof bytes must be worker-count independent"
-        );
-        assert_eq!(
-            single_worker.1, four_workers.1,
-            "membership transcript digest must be worker-count independent"
-        );
+        #[cfg(not(feature = "parallel"))]
+        let single_worker = prove_bound_one();
+        #[cfg(feature = "parallel")]
+        {
+            let four_workers = rayon::ThreadPoolBuilder::new()
+                .num_threads(4)
+                .build()
+                .expect("four-worker Rayon pool")
+                .install(&prove_bound_one);
+            assert_eq!(
+                single_worker.0.proof_bytes(),
+                four_workers.0.proof_bytes(),
+                "membership proof bytes must be worker-count independent"
+            );
+            assert_eq!(
+                single_worker.1, four_workers.1,
+                "membership transcript digest must be worker-count independent"
+            );
+        }
         let (bound_one, bound_one_digest) = single_worker;
         assert_eq!(bound_one.proof_bytes().len(), 655);
         assert_eq!(bound_one.to_wire_bytes().len(), 702);

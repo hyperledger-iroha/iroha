@@ -19,6 +19,8 @@ on:
       - "scripts/check_mobile_sdk_artifact_pin_commit.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
+      - "ci/check_swift_pod_bridge.sh"
+      - "scripts/check_swift_pod_bridge.sh"
       - "scripts/tests/mobile_sdk_python312_contract.sh"
       - "scripts/check_android_app_native_archive.py"
       - "scripts/tests/check_android_app_native_archive_test.py"
@@ -30,6 +32,9 @@ on:
       - "ci/check_kagemusha_candidate_android_lab.sh"
       - "ci/check_kagemusha_candidate_android_lab_compile.sh"
       - "ci/check_kagemusha_jvm_native_bridge.sh"
+      - "ci/check_android_transport_guard.sh"
+      - "scripts/deploy_localnet.sh"
+      - "scripts/tests/deploy_localnet_test.py"
       - "scripts/package_mobile_sdk_artifacts.sh"
       - "scripts/check_sorafs_release_automation.py"
       - "scripts/tests/check_sorafs_release_automation_test.py"
@@ -37,6 +42,13 @@ on:
       - "kotlin/**"
       - "java/iroha_android/**"
       - "crates/connect_norito_bridge/**"
+      - "crates/iroha_cli/**"
+      - "crates/iroha_config/**"
+      - "crates/iroha_core/**"
+      - "crates/iroha_data_model/**"
+      - "crates/iroha_kagami/**"
+      - "crates/iroha_torii/**"
+      - "crates/irohad/**"
       - "crates/iroha_core/src/smartcontracts/isi/mod.rs"
       - "crates/iroha_core/src/smartcontracts/isi/escrow.rs"
       - "crates/iroha_data_model/src/bin/cancel_asset_lock_fixtures.rs"
@@ -109,7 +121,7 @@ jobs:
           [[ "$("$mobile_python" -I -S -B -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
           echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
       - name: Shell syntax
-        run: bash -n ci/check_kagemusha_candidate_android_lab.sh ci/check_kagemusha_jvm_native_bridge.sh scripts/build_kagemusha_candidate_android_native.sh scripts/build_norito_xcframework.sh scripts/check_kotlin_no_reflection.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/package_mobile_sdk_artifacts.sh scripts/run_kagemusha_candidate_android_lab.sh scripts/tests/mobile_sdk_python312_contract.sh
+        run: bash -n ci/check_kagemusha_candidate_android_lab.sh ci/check_kagemusha_jvm_native_bridge.sh ci/check_swift_pod_bridge.sh scripts/build_kagemusha_candidate_android_native.sh scripts/build_norito_xcframework.sh scripts/check_kotlin_no_reflection.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/check_swift_pod_bridge.sh scripts/deploy_localnet.sh scripts/package_mobile_sdk_artifacts.sh scripts/run_kagemusha_candidate_android_lab.sh scripts/tests/mobile_sdk_python312_contract.sh
       - name: Python syntax
         run: PYTHONPYCACHEPREFIX="$RUNNER_TEMP/mobile-sdk-pycache" python3 -I -S -B -m py_compile scripts/archive_norito_xcframework.py scripts/tests/archive_norito_xcframework_test.py scripts/tests/package_mobile_sdk_artifacts_test.py scripts/update_norito_bridge_swift_pins.py scripts/tests/update_norito_bridge_swift_pins_test.py scripts/validate_norito_bridge_xcframework.py scripts/tests/validate_norito_bridge_xcframework_test.py scripts/check_android_app_native_archive.py scripts/tests/check_android_app_native_archive_test.py scripts/check_native_sdk_abi22_artifact.py scripts/tests/check_native_sdk_abi22_artifact_test.py scripts/exec_with_file_lock.py scripts/tests/exec_with_file_lock_test.py scripts/norito_bridge_source_seal.py scripts/run_mobile_hermetic_command.py
       - name: Deterministic NoritoBridge archive owner fixtures
@@ -190,7 +202,7 @@ jobs:
           echo "MOBILE_SDK_SWIFT_SCRATCH_DIR=$swift_scratch_dir" >> "$GITHUB_ENV"
       - name: Install Apple Rust targets
         run: |
-          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
           cargo fetch --locked
       - name: Bind the first-release Apple Cargo envelope
         run: |
@@ -222,6 +234,10 @@ jobs:
           fi
       - name: Validate Apple mobile SDK artifact
         run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only
+      - name: CocoaPods structural lint (no capability skip)
+        env:
+          SWIFT_POD_REPORT_DIR: ${{ runner.temp }}/iroha-swift-pod-report
+        run: ci/check_swift_pod_bridge.sh
       - name: Test Swift SDK
         working-directory: IrohaSwift
         run: >-
@@ -279,7 +295,7 @@ jobs:
   android-mobile-sdk:
     needs: checker-self-test
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       IROHA_NATIVE_LIBRARY_PATH: ${{ github.workspace }}/target/debug
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
@@ -377,10 +393,20 @@ jobs:
       - name: Build host SoraFS reference native bridge
         run: cargo build --locked -p connect_norito_bridge
       - name: Require fresh ABI-22 JNI bridge in complete Kotlin and Java suites
+        env:
+          KAGEMUSHA_JVM_NATIVE_EVIDENCE_DIR: ${{ runner.temp }}/iroha-kotlin-zk-asset-localnet-evidence
         run: >-
           NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"
           NORITO_MOBILE_ANDROID_HOME="$ANDROID_HOME"
           bash ci/check_kagemusha_jvm_native_bridge.sh
+      - name: Upload Kotlin four-peer localnet evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: kotlin-zk-asset-localnet-${{ env.MOBILE_SDK_VERSION }}
+          path: ${{ runner.temp }}/iroha-kotlin-zk-asset-localnet-evidence/*
+          if-no-files-found: error
+          retention-days: 14
       - name: Make reviewed Iroha source read-only
         run: chmod -R a-w "$GITHUB_WORKSPACE"
       - name: Build Android native bridge libraries
@@ -419,16 +445,22 @@ jobs:
         working-directory: java/iroha_android
         env:
           ANDROID_HARNESS_MAINS: org.hyperledger.iroha.android.sorafs.SorafsReferenceValidatorsTests
-        run: >-
-          ./gradlew
-          --no-daemon
-          --no-configuration-cache
-          --project-cache-dir "$MOBILE_SDK_ANDROID_PROJECT_CACHE_DIR/java-sorafs"
-          -Djava.io.tmpdir="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/java-sorafs"
-          -Dkotlin.daemon.runFilesPath="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/kotlin-daemon-java-sorafs"
-          :core:test
-          --tests org.hyperledger.iroha.android.GradleHarnessTests
-          --console=plain
+        run: |
+          ./gradlew \
+            --no-daemon \
+            --no-configuration-cache \
+            --project-cache-dir "$MOBILE_SDK_ANDROID_PROJECT_CACHE_DIR/java-sorafs" \
+            -Djava.io.tmpdir="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/java-sorafs" \
+            -Dkotlin.daemon.runFilesPath="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/kotlin-daemon-java-sorafs" \
+            -PenableCycloneDx=false \
+            :core:test \
+            --tests org.hyperledger.iroha.android.GradleHarnessTests \
+            :android:assembleRelease \
+            --console=plain
+      - name: Reject JVM transports in the Java Android release AAR
+        env:
+          ANDROID_TRANSPORT_GUARD_AAR: ${{ runner.temp }}/iroha-mobile-android-artifacts/gradle-build/iroha-android/android/outputs/aar/android-release.aar
+        run: bash ci/check_android_transport_guard.sh
       - name: Validate Android mobile SDK artifact
         run: bash scripts/check_mobile_sdk_artifacts.sh --android-only --require-built-android
       - name: Package Android mobile SDK artifact

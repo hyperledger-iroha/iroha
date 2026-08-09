@@ -169,10 +169,11 @@ MERGE_RUNTIME_CONFIG_FIELDS = (
 )
 
 ASYNC_LIVENESS_FACADE = "SumeragiV2AsyncLivenessProofs"
-# The retained-lock vocabulary moved below the shard chain to remove the
-# debt-to-proof-leaf cycle.  Its exact provider and bodies are independently
-# pinned by ``_acyclic_liveness_debt_topology_errors`` before this reviewed
-# mechanical shard seal is accepted.
+# This digest binds the current logical pre-split body reconstructed by removing
+# every exact shard header/footer in order.  The retained-lock vocabulary lives
+# below the shard chain to avoid the debt-to-proof-leaf cycle; its provider and
+# bodies are independently pinned by ``_acyclic_liveness_debt_topology_errors``
+# before this reviewed global mechanical-body seal is accepted.
 ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = (
     "9c0edd76ed2f516a7ac657927ef32ff6c637d088ca3183c00b01e3e1b97001da"
 )
@@ -600,6 +601,51 @@ ASYNC_LIVENESS_EXTENDS_OVERRIDES = {
         "SumeragiV2AsyncCandidateProducerContinuationProofs",
     ),
 }
+
+
+def _async_liveness_shard_source_prefix(module: str, index: int) -> str:
+    """Return the exact reviewed header/import prefix for one proof shard."""
+
+    header = f"---- MODULE {module} ----\n"
+    if index == 0:
+        return header
+    dependencies = ASYNC_LIVENESS_EXTENDS_OVERRIDES.get(
+        module, (ASYNC_LIVENESS_SHARDS[index - 1][0],)
+    )
+    if module == "SumeragiV2AsyncDeadlockProofs":
+        return header + "EXTENDS " + ",\n        ".join(dependencies) + "\n\n"
+    return header + f"EXTENDS {', '.join(dependencies)}\n\n"
+
+
+def _async_liveness_shard_bodies(
+    sources: dict[str, str],
+) -> tuple[list[str], list[str]]:
+    """Strip exact reviewed shard framing, failing closed on any drift."""
+
+    bodies: list[str] = []
+    errors: list[str] = []
+    footer = "=============================================================================\n"
+    for index, (module, _) in enumerate(ASYNC_LIVENESS_SHARDS):
+        source = sources.get(module)
+        if source is None:
+            errors.append(f"missing required async liveness shard {module}.tla")
+            continue
+        prefix = _async_liveness_shard_source_prefix(module, index)
+        prefix_matches = source.startswith(prefix)
+        footer_matches = source.endswith(footer)
+        if not prefix_matches:
+            errors.append(
+                f"{module}.tla must start with its exact reviewed async liveness shard prefix"
+            )
+        if not footer_matches:
+            errors.append(
+                f"{module}.tla must end with its exact reviewed async liveness shard footer"
+            )
+        if prefix_matches and footer_matches:
+            bodies.append(source[len(prefix) : -len(footer)])
+    return bodies, errors
+
+
 ASYNC_LIVENESS_DEBT_SHARD = "SumeragiV2AsyncOutstandingLivenessDebt"
 ASYNC_LIVENESS_PROOF_SHARDS = tuple(
     module for module, _ in ASYNC_LIVENESS_SHARDS if module != ASYNC_LIVENESS_DEBT_SHARD
@@ -653,7 +699,7 @@ ADEQUATE_LEADER_CONTINUATION_PROOF_MODULES = (
 )
 ADEQUATE_LEADER_RETAINED_PRODUCER_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AdequateLeaderRetainedProducerClosureProofs.tla": (
-        "74b800bb99f1c5acb2d625c18c1787db0101186249a559caea14a07cb2079399"
+        "00d100b5d15a29984794367d88c0de070207276168cd980c22faa92b91029a8e"
     ),
 }
 
@@ -1045,6 +1091,12 @@ SERVE_SCHEDULER_ORDINAL_MUTATION_SHA256 = {
 }
 SERVE_SCHEDULER_ORDINAL_RUNNER_SECTION_SHA256 = (
     (
+        "configuration and shared result-contract binding",
+        'readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"',
+        "if (($#)); then",
+        "babab96e058fa452cd5e03cd38be6318e8af3d20e1aad2486b2093d1a853ca54",
+    ),
+    (
         "preflight and SANY execution",
         "if (($#)); then",
         "run_tlc() {",
@@ -1069,7 +1121,7 @@ SERVE_SCHEDULER_ORDINAL_MUTATION_FORMAL_GLOBS = (
 )
 SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "6108fc4b0979db1c89a7741c8b4a29bd1024614cbcdc401de310c0b6dc27aaa5"
+        "48e5be5235b5d745391e4b89b034976f79c830185c84e32d57327f2e73107c5e"
     ),
 }
 PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_FORMAL_ARTIFACTS = (
@@ -1164,10 +1216,10 @@ COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_GLOBS = (
 )
 COMMIT_IMPORT_PROVENANCE_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "6108fc4b0979db1c89a7741c8b4a29bd1024614cbcdc401de310c0b6dc27aaa5"
+        "48e5be5235b5d745391e4b89b034976f79c830185c84e32d57327f2e73107c5e"
     ),
     "SumeragiV2HistoricalRecoveryTemporalClosureProofs.tla": (
-        "7bbc3620ad8bb0dc7bc3e3288e01c254563d54fce7b271bd05e393d938b924c0"
+        "8c657bd5ded3504285b50e7b726ab343f7f27643ba609daf1483a90b32b06c0e"
     ),
 }
 _FORMAL_CI_NEW_MUTATION_RUNNER_INVOCATIONS = (
@@ -1229,10 +1281,10 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "ccdae44c2fc9d12dfe7a1239988de036a3181aea7f76c522a83ce4809f300118"
     ),
     "scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh": (
-        "b81171eb4105b8aa8a66c840b3123b8a0cddc8c7515fec23c1a5c0c6ff7541d4"
+        "186029d410db73878ae7af83c39db20cb0bce0fbafbca701a5dcfe767271f9bc"
     ),
     "scripts/formal/run_sumeragi_v2_applied_phase_admission_mutations.sh": (
-        "77368edad02e9ff8a03d1da3c6bb019f0a5d466db6801b30d106fc1b89c5c953"
+        "dd49c24d04c5a35444a7ff59e47419ada1eb7d61387cf46e761b17a38a96d1b3"
     ),
     "scripts/formal/run_sumeragi_v2_apply_authority_mutation.sh": (
         "a9bad39fa0caa6761cf7fa5aee259cba9e932234a79e4401ccecc380ca072200"
@@ -1262,7 +1314,7 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "c12af944bccd6587374576ecc0abf6779a468ac0162d59b3c6762ab09aab9017"
     ),
     "scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh": (
-        "cb393225ef5b6b793367f05fd66f807b55ab06f31db94784be238c4261a7c161"
+        "52cb68a489a0309fabd6e52d16077a4cc05276088072636c4420cb55fc0b016a"
     ),
     "scripts/formal/run_sumeragi_v2_indexed_height_mutation.sh": (
         "2ab6aa430893197888a69b4ec56a120556e44e7465893dc5155a3941d236519e"
@@ -1271,7 +1323,7 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "88c03a575317b85ec59660d4a8e7164798d0ce11b59c8e8da5809f4d5b8132af"
     ),
     "scripts/formal/run_sumeragi_v2_inflight_first_release.sh": (
-        "25b658d7dd2866f04caf679fca9b3274091ce202f96c9f269d5e5d136ba1c466"
+        "d08247dcd3ce4b55f510723df478de6aca657eb67fa6c8fa3c8d5b9719dc907d"
     ),
     "scripts/formal/run_sumeragi_v2_ingress_causal_freshness_mutation.sh": (
         "7aaac40fa9cb9fd603f8809baba4152d8266ae19adad6a967aa04290e2a2af6b"
@@ -1280,10 +1332,10 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "4bf965e65183469fc3434cdf96c486c921aa5f270a192580761ab6a0e7f6d7f8"
     ),
     "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh": (
-        "3f3738a6351e7f7fe78ac3f6a4a4e738f8b6fd2b098d7466674197c783783d25"
+        "ff397f9c7360900ea85c35a1889309ca082b04ec3fc1c0aeca2c327789157e56"
     ),
     "scripts/formal/run_sumeragi_v2_multilane_mutations.sh": (
-        "267220790e6ac52ef6872319185e2de987e3757af9d1b7323ec2179e4eace49b"
+        "c4a3939977809ecb955e22e1a92aa40db4c260eb224fe17b6aa2715ac67b25f2"
     ),
     "scripts/formal/run_sumeragi_v2_persist_install_generation_mutation.sh": (
         "fc841bb679feaf1ded305f1ab0e39ba388e49876bcbc1e3cb39436b09be74a78"
@@ -1319,10 +1371,10 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "e20a740c92cc9edb951699f8e3247b61d0c92701fcde39fca60baad493bb4796"
     ),
     "scripts/formal/run_sumeragi_v2_tlc.sh": (
-        "bceb90990f6ca635bf9d48ad23d140f1a9088954f5bf81952646ec756d517424"
+        "f24023b1d68c85057315fedc7a9347d05777c4cbb989e09c9a3bb253ff85385a"
     ),
     "scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh": (
-        "e1ac1e03c10f2667eb4254b99fa9cd60955417fc39540b7697f8721364313340"
+        "9421b6db11cf3df8b6d5fb38790fd4eab2d5e8398335fbb603afe0837a37ff1e"
     ),
 }
 SHARED_TLC_RESULT_BRANCH_PROFILES = {
@@ -1448,9 +1500,9 @@ SHARED_TLC_RESULT_BRANCH_PROFILES = {
     ),
     "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh": (
         31,
-        90,
+        89,
         0,
-        2,
+        4,
         0,
     ),
     "scripts/formal/run_sumeragi_v2_multilane_mutations.sh": (
@@ -1546,6 +1598,13 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES = {
 }
 SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.update(
     {
+        "scripts/formal/run_sumeragi_v2_applied_phase_admission_mutations.sh": (
+            1,
+            1,
+            1,
+            1,
+            1,
+        ),
         "scripts/formal/check_sumeragi_v2_replay_trace.sh": (0, 0, 0, 0, 0),
         "scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh": (
             1,
@@ -1621,10 +1680,10 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.update(
     }
 )
 SHARED_TLC_RESULT_BRANCH_PROFILES_SHA256 = (
-    "90b7e94020ba1522babe116165e2904401a53f1eda5f267abae59c64e841db31"
+    "46293c847caed684dce380f362780cc0ea8ff9ed0145dd00399dbd2b8470e527"
 )
 SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES_SHA256 = (
-    "79df8c9846f4e5059d81fdadc5e8898a2063993a8c12aa6418c85e5e44b7df1d"
+    "483e384582b49f4c514036a744865b24d97f2973ce3dd10b14fdf66982a53c68"
 )
 LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
     "SumeragiV2Revision4CertifiedFenceReservation.tla": (
@@ -1640,49 +1699,49 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "0f1408e6ecee28eae2765394cef118755a0a4e3ba94017fb250b28477a573657"
     ),
     "SumeragiV2LocalIngressSchedulerReservationMutation.tla": (
-        "d5083b4dcd0e1fbd3b55a22b98a7ea41b6b20b646a717fc36beb41fae7788ab5"
+        "678d739d45ebb6b6d5dee70a56f8396e7d75ed954f03faf49252d112f5f4a194"
     ),
     "SumeragiV2RestartTerminalDurabilityMutation.tla": (
-        "7eae8edd73c78803cf5829c056ee29ee1e1f39cd1622d775df5c7ab90845d30b"
+        "fee6d70c01d87567b150fd8aee76d2e764cb4b58ab400390a3b7e6a0e5ea765a"
     ),
     "SumeragiV2ExactIngressTicketPriorityMutation.tla": (
-        "5a318e82bc083a462840278c90ea78d7db755f3d78502f2df992e99dc98af969"
+        "8a68a5945ac65ea7d57bcbca90cac552bfb9a073eb26b6cd7b3bc328d566c376"
     ),
     "SumeragiV2ExactServeRestartTombstoneMutation.tla": (
-        "d5d145bf3b8080484a0309ac60de67bcb7b015e61e50ff891906329969182cac"
+        "d42e74fd85d0c64193b1afb474cc55f826ad01182fe59763d2edae43db7cd4a0"
     ),
     "SumeragiV2ExactResponseClaimLifecycleMutation.tla": (
-        "7404185ead32a48757956da2c852c40f641e90ff1707a1ada87d8b33f145492f"
+        "6ad54d19000f76931935cc103b509c7073b9a82c2dc6ebe8f31b664c269240b2"
     ),
     "SumeragiV2ExactServeFrozenPredecessorMutation.tla": (
-        "9d20b3f129e9bf3ad2b9cd39eabbf2f4200f411aca64d548c042081e4570cc1a"
+        "794ae1da2fa36db865c756180bad6e1e1c06ccdaa778ff067ece7e9a4ee38ada"
     ),
     "SumeragiV2ExactInstalledTcRetentionMutation.tla": (
         "6a67f962a092c40159e0be2e8a07f47661aecbfe05c9ba2827e55a7e93394389"
     ),
     "SumeragiV2ControlLivePredecessorMutation.tla": (
-        "a41b96b82eb8998a988745a0a6c103a6e7f97d0d012c4765796304ee1f25f328"
+        "b0f119d1649abeb44e0f8ae0448438fedaac800a8a335230d1130964cca271bc"
     ),
     "SumeragiV2ImportedCertificateTailMutation.tla": (
-        "1d570d5e21fa0ea61c03eeab0087b98dd4d2c358e8cc72ac414f2be54cf928f0"
+        "752b4cd4165e56f02637bfe1afdda95d308089532221825c909ae82ee71e2d41"
     ),
     "SumeragiV2ImportedTcTailMutation.tla": (
-        "a02de16f8f1538fb965b176ce6f8d8b9f56d08d90215c140b3daea379f5223d5"
+        "04ca7d6f4f1ffec5cac9f15acb610ba69d98675efc062eab5d026ba6c3b49a1a"
     ),
     "SumeragiV2TimeoutLifecycleStageClassifierMutation.tla": (
-        "ea064f1e0075da903140c740bbc1ffb803a67b9c0c41b32997f5293125517be4"
+        "7df40c886944928cdee86778a297f47ef8499748b8469087e383631f7a1eeac8"
     ),
     "SumeragiV2PersistInstallTimeoutTagMutation.tla": (
-        "3fdc3d63a9ab6afd2a284bdbfa776e07664cd39b442479aeba4d748c6a1b3bef"
+        "13fc590b72d0b97bac3dbabb1ba1b66ca105d1ed8fa4d01e66186d0aca19aa8a"
     ),
     "SumeragiV2PersistInstallTimeoutRootRetirementMutation.tla": (
-        "82f16d90647b5061be3d40444aabe68d91cdb4cb9a76adaec713bf4cfbd9efa3"
+        "df108ce5b3de705cb7ded1b27fd8fa778cc8987895f3be7cf4349ada0df549de"
     ),
     "SumeragiV2AdequateLeaderWireTombstoneMutation.tla": (
-        "f009b5bfe9ac7a98c3fbdfea1348b699e0be08419388949aa53a0d06819aff60"
+        "d8e07f8473672e7600ca8081abe94376bb9f52acdbd42ef484f893bd23bab4be"
     ),
     "SumeragiV2AdequateLeaderCandidateTombstoneMutation.tla": (
-        "ee8c810d32b03e1469fb15a4a7f421ff0ade25abbb2863c7f38a9993391fc42a"
+        "75213093f15e29e35ccada58bc543e90ff1240c7ca172e54884516bac6750f17"
     ),
     "exact_ingress_ticket_priority_fixed.cfg": (
         "2529761511261f8028f0843232f7bd342025718fefc553634b38fcfb53faeed6"
@@ -1730,37 +1789,37 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "8d6fe07f6f5089376222bae54b8b334c91c45cd16a1d7ea5239eb56f4aed14a0"
     ),
     "imported_certificate_tail_fixed.cfg": (
-        "9a580cb30bbe382fc1395082adf91c039de922efddb34d676cbf542852a860e0"
+        "6d0fce697a044d8acf984ae395f64c4bfb78f532e5258589803fdf7d310fa8f3"
     ),
     "imported_certificate_tail_bug.cfg": (
-        "4fc37a5d837e7a866cf93c8209ee8865f73833e5b6a1fe5ccd899c3182f75e89"
+        "cb2f1d16487b030556dc197c72bed912e28b1a8a13462f14e3db54be163ea87b"
     ),
     "imported_tc_tail_fixed.cfg": (
-        "921f83621de53f5afb271e899e58da4808038159e49eddf06c716a80360cac96"
+        "d464df4ba82163bce917ebb5ca9c1d84fa61c529be73115570ea3c9ba7ba16ea"
     ),
     "imported_tc_tail_bug.cfg": (
-        "350667c819a07f1914a297d78d46c8006774b44efeaa22a824b8850920a266a6"
+        "305c09791e706de8f7068822e30f527b43789e15971df234068cecc99ad46b46"
     ),
     "timeout_lifecycle_stage_classifier_fixed.cfg": (
-        "b323c813ce084bc6c85c64f594bf7bd55ae6ebdcbe1be3c408b830e5014f9035"
+        "5a1008c92a2015bdf39cedb566064cc4b28bd0e6da01059d8c3e2d8540f45aaa"
     ),
     "timeout_lifecycle_stage_classifier_bug.cfg": (
         "9e34e285ced97f50410472ad286c45204da06d7d8799c13253e2283a6f786f27"
     ),
     "persist_install_timeout_tag_fixed.cfg": (
-        "c1e7de9502836c9788734813e23349fd1797090bda2b01eb5cc4983a4d11ae2e"
+        "18c0be476f6f037732ce8f7836651babb30d93f3e6e41401fede8828589b4f9e"
     ),
     "persist_install_timeout_tag_bug.cfg": (
         "2fba91cff8430b97696d74363185f7a998638be3600ba9f02b991df01b2b65c1"
     ),
     "persist_install_timeout_root_retirement_fixed.cfg": (
-        "6043662a4f107115e9c9924b4bda1580a1641e4169473309aaabaf8bf4dcd243"
+        "6e7f1531fba78d78b3c9b8ead4f5c4686ff355e87d18be3303310282a4d16222"
     ),
     "persist_install_timeout_root_retirement_bug.cfg": (
         "5b6cecf701049e6e23ee2c92f13395625fe12ae5de1316b620581d81448eb2f7"
     ),
     "local_ingress_scheduler_reservation_fixed.cfg": (
-        "b8e4fe52c9d7484f429962e638f104af23015f9b6ee48d9469021cfe0a0d4ff4"
+        "963b6db59f7731b4d70b316592277d25676944dab4c5acb233f851411692cdb6"
     ),
     "local_ingress_scheduler_reservation_mutable_next_bug.cfg": (
         "385f27f3b9d9f4f74d4110dfba0d8d17c721f99ca44abaaa85f367a5e84de5e6"
@@ -1847,10 +1906,10 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "cb537e05878351e50108268cb8a462f1856e66c931f2dadc4d306da89afcca63"
     ),
     "SumeragiV2ExternalProducerContinuationMutation.tla": (
-        "894cc8016042071da3811025955be63bbf6c3a63c3a89db94399cd80e1519a32"
+        "24ef6f0e080c4e64fd19d4263ce82fe369d42c3e4cd43da9c0aab3517ceaddce"
     ),
     "SumeragiV2EmptyProducerHandoffMutation.tla": (
-        "ab46b7e8a0aa0ad162185e067647264bc252371090dda133a44e4dc7694cb5f6"
+        "b03fa34b133d69b33e4885c479ac8e6f44fd30382f451f15ab3d11ca721cde7b"
     ),
     "SumeragiV2ProducerOriginReservationMutation.tla": (
         "3a0c8fc62c67b4bad96692fcbe4c75c2b2a3f9f7b3b95a2a502e28ecb081fd19"
@@ -1859,7 +1918,7 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "cdf86251806c6fec7583293fe80d2e6da723421ef7fb477f54d5f7ebf7e385ae"
     ),
     "SumeragiV2RepresentativeLiveScopeMutation.tla": (
-        "77f33922981965ab4de19bdf5e5ef7a88fbd820474482c6a95f55f2580d5b0ed"
+        "edead4bb5d0d9801eb7d3e9c4fb96a0cd3fb2daf3c5adec1fccecd36d1aa086a"
     ),
     "SumeragiV2FixedCorridorPhysicalBudgetMutation.tla": (
         "474364c3251ab2b24838d1e7034c3d4f6a28928581ada184c7b2a7479ef69860"
@@ -1868,7 +1927,7 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "c209e7f2ce212d3f7ea8620f7458c79d1a932e32d0b2b4c2ef1b5831979c5f71"
     ),
     "SumeragiV2ProposalPipelineBudgetMutation.tla": (
-        "76c174b34dc721ce5874e2190270372f74e931532783b13f0991c3e2b592b77f"
+        "33f478e137dccb253c2569b7856af27ae3bab54dffda6d10a7c9ddd38d27e8bf"
     ),
     "adequate_leader_wire_terminal_identity_bug.cfg": (
         "ff7cc8d7cf34fc43a858aeb4acd3c0edd142f4aa69bec0f5d4e9c9f88953587f"
@@ -1940,34 +1999,34 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "4459bd5c261edcb289d18e01f662232b34dc95279757ad4f1a836ee81a767a53"
     ),
     "fixed_corridor_physical_budget_fixed.cfg": (
-        "64d5bede198e93095ac4ebd78e95bb67492f2ba56bd510078095201eac7cfbbf"
+        "a1f4aaf0190357a03d1cb1644b07bff17a5004bc8e1d116e99294ff7713a45a4"
     ),
     "fixed_corridor_physical_budget_omitted_lane_cursor_bug.cfg": (
         "c96633d9cb41fa777f6e4e05513b182f4a5018af81756e20851feffc69b9eb10"
     ),
     "fixed_corridor_action_credit_fixed.cfg": (
-        "2818f636e9ee68c67022179e05ec82da942772336d2f3eba312f4e1838507ee2"
+        "fdd5c5fa275f1dcbe34c28241fd2f1ebc4d301d1b57a7b64deb3d91ebc4007da"
     ),
     "fixed_corridor_action_credit_per_child_recharge_bug.cfg": (
         "cc0dbf42553c4a08b7db2965aebed4fd18c4fc99ca2488c1f4a306c133340f60"
     ),
     "proposal_pipeline_budget_fixed.cfg": (
-        "a51fa680a285fe56fcd81ede0b4eaf42390b9dcc75dead6101a34cf8910aa4c4"
+        "662cd733ed2b92b14d8a24c8a773eff16cc02462ebe038261ac6289a3b7ded75"
     ),
     "proposal_pipeline_budget_additive_bug.cfg": (
         "49b0376d1a46952ce3b4564a4020189808ce3cc4af89761b0b180f877a7ca17b"
     ),
     "SumeragiV2AuthorityDeadlineCarryMutation.tla": (
-        "f574dc972bd94a8d780c908b0f6e2e4d6db633f5dc871304556f42bedfa9c674"
+        "52d39ae42f519e145fc099021d362472bbed903c5d971eac58707189e5a5c507"
     ),
     "SumeragiV2AdequateLeaderDeadlineAuthorityMutation.tla": (
-        "c2a17bc53f7cfa52cfb40bc4d4c97b59b8615fcf363c01ec1a4b0788785e0e6f"
+        "2299cc4fdde3e1aa9567e7d3636c31afdec3d92815d61df5905040325febf7a1"
     ),
     "SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation.tla": (
-        "b812e0d3a0cbdb3300979e12c1e2a63198bf092f9d20c817e83587a268853ae7"
+        "625e00ff55020a907d82754b5a92224de23bb83caa66a581359cde331d908392"
     ),
     "authority_deadline_carry_fixed.cfg": (
-        "2b01485673bfed56d68a82fab2d4856051a68ef44eb754cae71e003b753a8973"
+        "2bb0f19785f4c0466417a70fc225d4b1e17ee53d065959d4f96adbbc931e23ff"
     ),
     "authority_deadline_carry_expired_receipt_bug.cfg": (
         "5b5306c35f7691270ea2e8340d55787770caaeb868c814f8344031014c0d1a09"
@@ -1988,10 +2047,10 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "f1829446aa850f90a5958f2df2c311cd10b512ec2267b1984e8d08844febc7d8"
     ),
     "SumeragiV2FixedCorridorReceiptAcquisitionMutation.tla": (
-        "20808fe38c7b518cf50f3fdc70544be91debc1c27b631ac9aa94567eb5890115"
+        "4c49378074b10908a8dca290ebbb4565e8e87443741450c4556c150512940878"
     ),
     "fixed_corridor_receipt_acquisition_fixed.cfg": (
-        "9e1279aff050d6f4fdd8403b71cb471f50030e1041e939cd2b3ef5871ea750c3"
+        "d3aff24a1305203debfc0ab9f70525efb42662063581b5989d9fe36c88a38e13"
     ),
     "fixed_corridor_receipt_acquisition_prestate_only_bug.cfg": (
         "adb35799b58cd2bb8ec621f44595ccd4d8bdba097508c48a3b78cce47ac0691d"
@@ -2012,7 +2071,7 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "14f5911140e645af8371cc282006fea6b879968845839389b550c057e8df0cda"
     ),
     "SumeragiV2ServeRestartTerminalDischargeMutation.tla": (
-        "15502349b0214b15c96dbc0eb6c8b62f8e43d2059b0ca11974ffa7ceabb24a4e"
+        "c0172b14b0f8e4061bf416d41920af477aea5c0432de13e897ba70697ff03191"
     ),
     "serve_restart_terminal_discharge_body_fail_open_bug.cfg": (
         "c4ed94aa1890354d4f262da0ec9b6ea51cbb606d8527f9419c266e7ee2c21691"
@@ -2093,7 +2152,7 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "d842c8552094eff841e3c9c159399d680a50edbd63ff2c1b96ad6a3330a8f644"
     ),
     LIVENESS_OWNERSHIP_MUTATION_RUNNER: (
-        "d7447324a25d8a877bb3e1caf4e6d72d1af074af776fdfb278d1fe1d05d1e88b"
+        "ff397f9c7360900ea85c35a1889309ca082b04ec3fc1c0aeca2c327789157e56"
     ),
 }
 LIVENESS_OWNERSHIP_MUTATION_FORMAL_GLOBS = (
@@ -2223,7 +2282,7 @@ HISTORICAL_DISCOVERY_OCCURRENCE_RANK_MUTATION_SHA256 = {
         "bdd9613583893b49e8f5762ea3342a50f5cc289689b225ef8b55c2aac0e8c49d"
     ),
     HISTORICAL_DISCOVERY_OCCURRENCE_RANK_MUTATION_RUNNER: (
-        "cb393225ef5b6b793367f05fd66f807b55ab06f31db94784be238c4261a7c161"
+        "52cb68a489a0309fabd6e52d16077a4cc05276088072636c4420cb55fc0b016a"
     ),
 }
 HISTORICAL_DISCOVERY_OCCURRENCE_RANK_MUTATION_FORMAL_GLOBS = (
@@ -2332,13 +2391,13 @@ REPLENISHMENT_REGRESSION_MUTATION_SHA256 = {
         "7e8fb414bea25a44bb89319b4609b62746f315240293d7ba47c90d338c93f837"
     ),
     "scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh": (
-        "b81171eb4105b8aa8a66c840b3123b8a0cddc8c7515fec23c1a5c0c6ff7541d4"
+        "186029d410db73878ae7af83c39db20cb0bce0fbafbca701a5dcfe767271f9bc"
     ),
     "scripts/formal/run_sumeragi_v2_service_rank_mutation.sh": (
         "e20a740c92cc9edb951699f8e3247b61d0c92701fcde39fca60baad493bb4796"
     ),
     "scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh": (
-        "cb393225ef5b6b793367f05fd66f807b55ab06f31db94784be238c4261a7c161"
+        "52cb68a489a0309fabd6e52d16077a4cc05276088072636c4420cb55fc0b016a"
     ),
 }
 REPLENISHMENT_REGRESSION_MUTATION_FORMAL_GLOBS = (

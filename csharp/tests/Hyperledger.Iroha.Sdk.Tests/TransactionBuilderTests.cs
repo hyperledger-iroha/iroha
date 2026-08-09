@@ -983,6 +983,7 @@ public sealed class TransactionBuilderTests
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
         var statusPollCount = 0;
+        var transactionHashHex = transaction.TransactionHashHex;
         using var handler = new RecordingHandler(request =>
         {
             if (request.RequestUri!.AbsolutePath == "/v1/node/capabilities")
@@ -1007,26 +1008,20 @@ public sealed class TransactionBuilderTests
             statusPollCount++;
             var body = statusPollCount switch
             {
-                1 => """
+                1 => $$"""
                     {
-                      "kind": "Transaction",
-                      "content": {
-                        "hash": "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b",
-                        "status": { "kind": "Queued", "content": null },
-                        "scope": "auto",
-                        "resolved_from": "queue"
-                      }
+                      "hash": "{{transactionHashHex}}",
+                      "status": { "kind": "Queued" },
+                      "scope": "auto",
+                      "resolved_from": "queue"
                     }
                     """,
-                _ => """
+                _ => $$"""
                     {
-                      "kind": "Transaction",
-                      "content": {
-                        "hash": "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b",
-                        "status": { "kind": "Applied", "block_height": 11, "content": null },
-                        "scope": "auto",
-                        "resolved_from": "state"
-                      }
+                      "hash": "{{transactionHashHex}}",
+                      "status": { "kind": "Applied", "block_height": 11 },
+                      "scope": "auto",
+                      "resolved_from": "state"
                     }
                     """,
             };

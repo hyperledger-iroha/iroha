@@ -22,6 +22,14 @@ import {
   buildPacs009Message,
   inspectAccountId,
 } from "../src/index.js";
+import {
+  assertNonNegativeInteger,
+  assertProverReportResult,
+  countFailedProverReports,
+  hasProverReportEntries,
+  isNonEmptyString,
+  isPlainObject,
+} from "./integrationToriiProverReportAssertions.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BASE_URL = process.env.IROHA_TORII_INTEGRATION_URL ?? "";
@@ -141,9 +149,11 @@ const STREAM_ENABLED = parseBooleanEnv(
 );
 const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
 
-const SKIP_REASON = BASE_URL
-  ? null
-  : "set IROHA_TORII_INTEGRATION_URL to enable Torii integration smoke tests";
+if (!BASE_URL) {
+  throw new Error(
+    "IROHA_TORII_INTEGRATION_URL is required when the live Torii integration suite is selected",
+  );
+}
 
 function parseBooleanEnv(value) {
   if (!value) {
@@ -157,22 +167,16 @@ const SUCCESS_STATUSES = new Set(["applied"]);
 const KAIGI_HEALTH_STATUSES = new Set(["healthy", "degraded", "unavailable"]);
 
 /**
- * Integration smoke test that exercises a real Torii instance when the relevant
- * environment variables are provided. The test suite remains skipped by default
- * so CI can run without a live node.
+ * Integration smoke test that exercises a real Torii instance. The hermetic
+ * unit-test profile excludes this file; selecting it without a live URL fails.
  */
 test(
   "torii integration smoke test",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
     todo: false,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
 
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
@@ -284,14 +288,9 @@ test(
 test(
   "status snapshot exposes governance and queue metrics",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -404,14 +403,9 @@ test(
 test(
   "peer metadata endpoints return typed payloads",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -468,14 +462,9 @@ test(
 test(
   "block list endpoint returns pagination metadata",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -514,14 +503,9 @@ test(
 test(
   "account permission endpoints expose authority tokens",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -576,14 +560,9 @@ test(
 test(
   "configuration snapshot returns JSON payload (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 30_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -604,14 +583,9 @@ test(
 test(
   "confidential gas schedule helper reports numeric fields (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 30_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -634,14 +608,9 @@ test(
 test(
   "node capabilities and runtime ABI endpoints respond",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -720,14 +689,9 @@ test(
 test(
   "sumeragi evidence list/count endpoints respond",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -755,14 +719,9 @@ test(
 test(
   "zk prover report endpoints respond",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -832,14 +791,9 @@ test(
 test(
   "nft list and query endpoints respond (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -918,7 +872,6 @@ test(
 test(
   "register domain via pipeline and fetch via listDomains",
   {
-    skip: !!SKIP_REASON,
     timeout: 90_000,
   },
   async (t) => {
@@ -971,7 +924,6 @@ test(
 test(
   "pipeline status endpoints surface typed payloads",
   {
-    skip: !!SKIP_REASON,
     timeout: 90_000,
   },
   async (t) => {
@@ -1040,7 +992,6 @@ test(
 test(
   "register account, mint asset, and inspect balances",
   {
-    skip: !!SKIP_REASON,
     timeout: 120_000,
   },
   async (t) => {
@@ -1229,7 +1180,6 @@ test(
 test(
   "transfer asset between accounts and verify balances",
   {
-    skip: !!SKIP_REASON,
     timeout: 120_000,
   },
   async (t) => {
@@ -1574,14 +1524,9 @@ test(
 test(
   "repo agreement list and query endpoints return typed payloads (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -1656,7 +1601,6 @@ test(
 test(
   "attachment upload/list/fetch/delete lifecycle (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
@@ -1767,14 +1711,9 @@ test(
 test(
   "trigger list, lookup, and query endpoints return typed payloads (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -1872,16 +1811,11 @@ test(
 test(
   "register trigger lifecycle via Torii (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 90_000,
   },
   async (t) => {
     if (!MUTATION_ENABLED) {
       t.diagnostic("set IROHA_TORII_INTEGRATION_MUTATE=1 to enable mutation coverage");
-      return;
-    }
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
       return;
     }
     const client = new ToriiClient(BASE_URL, {
@@ -1969,7 +1903,6 @@ test(
 test(
   "pipeline block streaming emits events (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 90_000,
   },
   async (t) => {
@@ -2034,7 +1967,6 @@ test(
 test(
   "sumeragi status streaming emits consensus snapshots (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 90_000,
   },
   async (t) => {
@@ -2096,7 +2028,6 @@ test(
 test(
   "account transaction listings surface recent submissions",
   {
-    skip: !!SKIP_REASON,
     timeout: 120_000,
   },
   async (t) => {
@@ -2209,14 +2140,9 @@ test(
 test(
   "verifying key registry endpoints respond (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -2263,7 +2189,6 @@ test(
 test(
   "kaigi relay endpoints respond (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
@@ -2316,7 +2241,6 @@ test(
  test(
   "call contract entrypoint via Torii (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 120_000,
   },
   async (t) => {
@@ -2419,11 +2343,7 @@ test(
     }
     assert.equal(response.submitted, false);
     assert.equal(response.tx_hash_hex, null);
-    assert.equal(
-      response.transaction_scaffold_b64,
-      response.signed_transaction_b64,
-      "contract call preparation must return one exact scaffold",
-    );
+    assert.ok(response.transaction_payload_b64);
     assert.ok(response.signing_message_b64);
     assertHexString(response.code_hash_hex, "contract call response.code_hash_hex");
     assertHexString(response.abi_hash_hex, "contract call response.abi_hash_hex");
@@ -2433,14 +2353,9 @@ test(
 test(
   "pipeline recovery sidecar exposes DAG + tx metadata (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -2510,7 +2425,6 @@ test(
 test(
   "SoraFS registry endpoints respond (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 90_000,
   },
   async (t) => {
@@ -2524,16 +2438,7 @@ test(
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
     });
-    let pinList;
-    try {
-      pinList = await client.listSorafsPinManifests({ limit: 5 });
-    } catch (error) {
-      if (isSorafsUnavailableError(error)) {
-        t.diagnostic(`SoraFS pin registry unavailable on target node: ${error.message}`);
-        return;
-      }
-      throw error;
-    }
+    const pinList = await client.listSorafsPinManifests({ limit: 5 });
     assert.ok(Array.isArray(pinList.manifests), "pin manifest list must include manifests array");
     assert.ok(
       Number.isInteger(pinList.finalized_cursor.height) && pinList.finalized_cursor.height > 0,
@@ -2617,7 +2522,6 @@ test(
 test(
   "SoraFS payload fetch returns requested range (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 90_000,
   },
   async (t) => {
@@ -2628,10 +2532,9 @@ test(
       return;
     }
     if (!SORAFS_FETCH_MANIFEST || SORAFS_FETCH_LENGTH === null) {
-      t.diagnostic(
+      throw new Error(
         "set IROHA_TORII_INTEGRATION_SORAFS_FETCH_MANIFEST=<digest> and IROHA_TORII_INTEGRATION_SORAFS_FETCH_LENGTH=<bytes> to enable payload fetch coverage",
       );
-      return;
     }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
@@ -2639,28 +2542,15 @@ test(
     });
     const offset = SORAFS_FETCH_OFFSET ?? 0;
     const length = SORAFS_FETCH_LENGTH;
-    let fetchResponse;
-    try {
-      const requestInput = {
-        manifestIdHex: SORAFS_FETCH_MANIFEST,
-        offset,
-        length,
-      };
-      if (SORAFS_FETCH_PROVIDER) {
-        requestInput.providerIdHex = SORAFS_FETCH_PROVIDER;
-      }
-      fetchResponse = await client.fetchSorafsPayloadRange(requestInput);
-    } catch (error) {
-      if (isSorafsUnavailableError(error) || isUnexpectedNotFoundError(error)) {
-        t.diagnostic(
-          `SoraFS payload fetch endpoint unavailable on target node: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-        return;
-      }
-      throw error;
+    const requestInput = {
+      manifestIdHex: SORAFS_FETCH_MANIFEST,
+      offset,
+      length,
+    };
+    if (SORAFS_FETCH_PROVIDER) {
+      requestInput.providerIdHex = SORAFS_FETCH_PROVIDER;
     }
+    const fetchResponse = await client.fetchSorafsPayloadRange(requestInput);
     assertHexString(fetchResponse.manifest_id_hex, "sorafs fetch manifest_id_hex");
     assert.equal(
       fetchResponse.manifest_id_hex.toLowerCase(),
@@ -2690,7 +2580,6 @@ test(
 test(
   "SoraFS PoR status/export endpoints respond (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 90_000,
   },
   async (t) => {
@@ -2702,32 +2591,10 @@ test(
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
     });
-    let statusBuffer;
-    try {
-      statusBuffer = await client.getSorafsPorStatus();
-    } catch (error) {
-      if (shouldSkipSorafsPorEndpoints(error)) {
-        t.diagnostic(
-          `SoraFS PoR status endpoint unavailable on target node: ${error.message}`,
-        );
-        return;
-      }
-      throw error;
-    }
+    const statusBuffer = await client.getSorafsPorStatus();
     assert.ok(Buffer.isBuffer(statusBuffer), "PoR status endpoint must return a Buffer");
 
-    let exportBuffer;
-    try {
-      exportBuffer = await client.exportSorafsPorStatus();
-    } catch (error) {
-      if (shouldSkipSorafsPorEndpoints(error)) {
-        t.diagnostic(
-          `SoraFS PoR export endpoint unavailable on target node: ${error.message}`,
-        );
-        return;
-      }
-      throw error;
-    }
+    const exportBuffer = await client.exportSorafsPorStatus();
     assert.ok(Buffer.isBuffer(exportBuffer), "PoR export endpoint must return a Buffer");
   },
 );
@@ -2735,7 +2602,6 @@ test(
 test(
   "SoraFS PoR weekly report fetch (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 90_000,
   },
   async (t) => {
@@ -2744,25 +2610,15 @@ test(
       return;
     }
     if (!SORAFS_POR_WEEK) {
-      t.diagnostic(
+      throw new Error(
         "set IROHA_TORII_INTEGRATION_SORAFS_POR_WEEK (e.g. 2026-W05) to enable PoR weekly report coverage",
       );
-      return;
     }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
     });
-    let reportBuffer;
-    try {
-      reportBuffer = await client.getSorafsPorWeeklyReport(SORAFS_POR_WEEK);
-    } catch (error) {
-      if (isSorafsUnavailableError(error)) {
-        t.diagnostic(`SoraFS PoR weekly report unavailable on target node: ${error.message}`);
-        return;
-      }
-      throw error;
-    }
+    const reportBuffer = await client.getSorafsPorWeeklyReport(SORAFS_POR_WEEK);
     assert.ok(Buffer.isBuffer(reportBuffer), "PoR weekly report must return a Buffer");
   },
 );
@@ -2770,7 +2626,6 @@ test(
 test(
   "UAID portfolio endpoint responds (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
@@ -2784,17 +2639,7 @@ test(
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
     });
-    let portfolio;
-    try {
-      portfolio = await client.getUaidPortfolio(UAID_LITERAL);
-    } catch (error) {
-      t.diagnostic(
-        `UAID portfolio endpoint unavailable: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return;
-    }
+    const portfolio = await client.getUaidPortfolio(UAID_LITERAL);
     assertUaidPortfolioSnapshot(portfolio, UAID_LITERAL);
   },
 );
@@ -2802,7 +2647,6 @@ test(
 test(
   "UAID bindings endpoint responds (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
@@ -2816,17 +2660,7 @@ test(
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
     });
-    let bindings;
-    try {
-      bindings = await client.getUaidBindings(UAID_LITERAL);
-    } catch (error) {
-      t.diagnostic(
-        `UAID bindings endpoint unavailable: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return;
-    }
+    const bindings = await client.getUaidBindings(UAID_LITERAL);
     assertUaidBindingsSnapshot(bindings, UAID_LITERAL);
   },
 );
@@ -2834,7 +2668,6 @@ test(
 test(
   "UAID manifests endpoint responds (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
@@ -2850,28 +2683,19 @@ test(
     });
     const manifestOptions =
       UAID_DATASPACE_ID === null ? undefined : { dataspaceId: UAID_DATASPACE_ID };
-    let manifests;
-    try {
-      manifests = await client.getUaidManifests(UAID_LITERAL, manifestOptions);
-    } catch (error) {
-      t.diagnostic(
-        `UAID manifests endpoint unavailable: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return;
-    }
+    const manifests = await client.getUaidManifests(UAID_LITERAL, manifestOptions);
     assertUaidManifestsSnapshot(manifests, UAID_LITERAL);
-    if (manifests.manifests.length === 0) {
-      t.diagnostic("UAID manifests endpoint returned zero manifests for supplied UAID");
-    }
+    assert.notEqual(
+      manifests.manifests.length,
+      0,
+      "UAID manifests endpoint must return the qualification manifest for the supplied UAID",
+    );
   },
 );
 
 test(
   "Sora Name Service policy endpoint responds (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
@@ -2903,7 +2727,6 @@ test(
 test(
   "Sora Name Service registration endpoint responds (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
@@ -2936,7 +2759,6 @@ test(
 test(
   "Space Directory manifest publish (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 120_000,
   },
   async (t) => {
@@ -2947,33 +2769,26 @@ test(
       return;
     }
     if (!MUTATION_ENABLED) {
-      t.diagnostic("set IROHA_TORII_INTEGRATION_MUTATE=1 to enable Space Directory coverage");
-      return;
+      throw new Error("IROHA_TORII_INTEGRATION_MUTATE=1 is required when Space Directory coverage is enabled");
     }
     if (!PRIVATE_KEY_HEX) {
-      t.diagnostic(
+      throw new Error(
         "set IROHA_TORII_INTEGRATION_PRIVATE_KEY_HEX=<hex> to sign Space Directory manifests",
       );
-      return;
     }
-    const manifestFixture = loadSpaceDirectoryManifestFixture(t);
-    if (!manifestFixture) {
-      return;
-    }
+    const manifestFixture = loadSpaceDirectoryManifestFixture();
     const manifestPayload = canonicalizeSpaceDirectoryManifest(manifestFixture.manifest);
     const uaidLiteral = typeof manifestPayload.uaid === "string" ? manifestPayload.uaid.trim() : "";
     if (!uaidLiteral) {
-      t.diagnostic(
+      throw new Error(
         `Space Directory manifest fixture ${manifestFixture.path} is missing a uaid literal`,
       );
-      return;
     }
     const dataspaceId = coerceNonNegativeInteger(manifestPayload.dataspace);
     if (dataspaceId === null) {
-      t.diagnostic(
+      throw new Error(
         `Space Directory manifest fixture ${manifestFixture.path} is missing a dataspace id`,
       );
-      return;
     }
     const publishReason = `js-integration publish ${new Date().toISOString()}`;
     const client = new ToriiClient(BASE_URL, {
@@ -3058,7 +2873,6 @@ test(
 test(
   "Space Directory manifest revoke (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 120_000,
   },
   async (t) => {
@@ -3069,43 +2883,35 @@ test(
       return;
     }
     if (!MUTATION_ENABLED) {
-      t.diagnostic("set IROHA_TORII_INTEGRATION_MUTATE=1 to enable Space Directory coverage");
-      return;
+      throw new Error("IROHA_TORII_INTEGRATION_MUTATE=1 is required when Space Directory coverage is enabled");
     }
     if (!PRIVATE_KEY_HEX) {
-      t.diagnostic(
+      throw new Error(
         "set IROHA_TORII_INTEGRATION_PRIVATE_KEY_HEX=<hex> to sign Space Directory requests",
       );
-      return;
     }
-    const manifestFixture = loadSpaceDirectoryManifestFixture(t);
-    if (!manifestFixture) {
-      return;
-    }
+    const manifestFixture = loadSpaceDirectoryManifestFixture();
     const manifestPayload = canonicalizeSpaceDirectoryManifest(manifestFixture.manifest);
     const uaidLiteral = typeof manifestPayload.uaid === "string" ? manifestPayload.uaid.trim() : "";
     if (!uaidLiteral) {
-      t.diagnostic(
+      throw new Error(
         `Space Directory manifest fixture ${manifestFixture.path} is missing a uaid literal`,
       );
-      return;
     }
     const dataspaceId = coerceNonNegativeInteger(manifestPayload.dataspace);
     if (dataspaceId === null) {
-      t.diagnostic(
+      throw new Error(
         `Space Directory manifest fixture ${manifestFixture.path} must include a numeric dataspace id`,
       );
-      return;
     }
     const fixtureEpoch =
       coerceNonNegativeInteger(manifestPayload.expiry_epoch ?? manifestPayload.expiryEpoch) ??
       coerceNonNegativeInteger(manifestPayload.activation_epoch ?? manifestPayload.activationEpoch);
     const revokedEpoch = SPACE_DIRECTORY_REVOKE_EPOCH ?? fixtureEpoch;
     if (revokedEpoch === null) {
-      t.diagnostic(
+      throw new Error(
         "set IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_REVOKE_EPOCH=<epoch> or include activation/expiry epochs in the manifest fixture",
       );
-      return;
     }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
@@ -3175,7 +2981,6 @@ test(
 test(
   "DA ingest submits payload (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 150_000,
   },
   async (t) => {
@@ -3262,7 +3067,6 @@ test(
 test(
   "DA manifest and gateway fetch (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 120_000,
   },
   async (t) => {
@@ -3325,7 +3129,6 @@ test(
 test(
   "connect app registry lifecycle (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 120_000,
   },
   async (t) => {
@@ -3440,7 +3243,6 @@ test(
 test(
   "connect preview bootstrapper registers Torii sessions (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 120_000,
   },
   async (t) => {
@@ -3553,14 +3355,9 @@ test(
 test(
   "telemetry peer inventory and explorer metrics respond",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -3639,14 +3436,9 @@ test(
 test(
   "explorer account QR endpoint provides share-ready payloads",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -3686,14 +3478,9 @@ test(
 test(
   "sumeragi telemetry snapshot exposes availability, backlog, and VRF stats",
   {
-    skip: !!SKIP_REASON,
     timeout: 90_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -3778,14 +3565,9 @@ test(
 test(
   "sumeragi BLS key registry exposes peer map",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -3810,14 +3592,9 @@ test(
 test(
   "sumeragi leader snapshot exposes PRF context",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -3838,14 +3615,9 @@ test(
 test(
   "sumeragi params snapshot exposes runtime configuration",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -3874,14 +3646,9 @@ test(
 test(
   "governance unlock stats endpoint responds",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -3917,14 +3684,9 @@ test(
 test(
   "governance council endpoints respond",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -3969,14 +3731,9 @@ test(
 test(
   "governance protected namespaces endpoint responds",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
@@ -4008,16 +3765,11 @@ test(
 test(
   "governance protected namespaces apply round-trips snapshot (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
     if (!MUTATION_ENABLED) {
       t.diagnostic("set IROHA_TORII_INTEGRATION_MUTATE=1 to enable governance mutation coverage");
-      return;
-    }
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
       return;
     }
     const client = new ToriiClient(BASE_URL, {
@@ -4078,14 +3830,9 @@ test(
 test(
   "governance plain ballot submission (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 120_000,
   },
   async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
     if (!MUTATION_ENABLED) {
       t.diagnostic(
         "set IROHA_TORII_INTEGRATION_MUTATE=1 to enable governance ballot submission coverage",
@@ -4178,7 +3925,6 @@ test(
 test(
   "ISO bridge pacs.008 submission (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 120_000,
   },
   async (t) => {
@@ -4221,7 +3967,6 @@ test(
 test(
   "ISO bridge pacs.009 submission (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 120_000,
   },
   async (t) => {
@@ -4264,7 +4009,6 @@ test(
 test(
   "ISO bridge waitForIsoMessageStatus polls message ids (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 180_000,
   },
   async (t) => {
@@ -4333,7 +4077,6 @@ test(
 test(
   "ISO bridge wait helper surfaces timeout for unknown message ids (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 120_000,
   },
   async (t) => {
@@ -4369,7 +4112,6 @@ test(
 test(
   "ISO bridge pacs.008 wait helper (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 180_000,
   },
   async (t) => {
@@ -4418,7 +4160,6 @@ test(
 test(
   "ISO bridge submitIsoMessage pacs.008 wait flow (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 120_000,
   },
   async (t) => {
@@ -4467,7 +4208,6 @@ test(
 test(
   "ISO bridge submitIsoMessage pacs.009 wait flow (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 120_000,
   },
   async (t) => {
@@ -4517,7 +4257,6 @@ test(
 test(
   "ISO bridge submitIsoMessage pacs.009 default headers wait flow (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 120_000,
   },
   async (t) => {
@@ -4585,7 +4324,6 @@ test(
 test(
   "ISO bridge pacs.009 wait helper (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 180_000,
   },
   async (t) => {
@@ -4634,7 +4372,6 @@ test(
 test(
   "ISO bridge alias resolution by label (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
@@ -4690,7 +4427,6 @@ test(
 test(
   "ISO bridge alias resolution by index (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
@@ -4746,7 +4482,6 @@ test(
 test(
   "ISO bridge alias resolution returns null for missing entries (optional)",
   {
-    skip: !!SKIP_REASON,
     timeout: 60_000,
   },
   async (t) => {
@@ -5239,10 +4974,6 @@ function delay(ms) {
   });
 }
 
-function isNonEmptyString(value) {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
 function normalizeIntegrationString(value) {
   if (typeof value !== "string") {
     return null;
@@ -5258,36 +4989,31 @@ function resolveProjectPath(rawPath) {
   return path.resolve(PROJECT_ROOT, rawPath);
 }
 
-function loadSpaceDirectoryManifestFixture(t) {
+function loadSpaceDirectoryManifestFixture() {
   const trimmed = normalizeIntegrationString(SPACE_DIRECTORY_MANIFEST_PATH);
   if (!trimmed) {
-    t.diagnostic(
+    throw new Error(
       "set IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_MANIFEST=/path/to/manifest.json to exercise Space Directory coverage",
     );
-    return null;
   }
   const resolvedPath = resolveProjectPath(trimmed);
   let manifestText;
   try {
     manifestText = fs.readFileSync(resolvedPath, "utf8");
   } catch (error) {
-    t.diagnostic(
-      `failed to read Space Directory manifest fixture ${resolvedPath}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+    throw new Error(
+      `failed to read Space Directory manifest fixture ${resolvedPath}`,
+      { cause: error },
     );
-    return null;
   }
   let manifest;
   try {
     manifest = JSON.parse(manifestText);
   } catch (error) {
-    t.diagnostic(
-      `failed to parse Space Directory manifest fixture ${resolvedPath}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+    throw new Error(
+      `failed to parse Space Directory manifest fixture ${resolvedPath}`,
+      { cause: error },
     );
-    return null;
   }
   return { manifest, path: resolvedPath };
 }
@@ -5497,17 +5223,6 @@ function isIsoBridgeDisabledError(error) {
   );
 }
 
-function isSorafsUnavailableError(error) {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const message = error.message ?? "";
-  return (
-    /sorafs/i.test(message) &&
-    (message.includes("disabled") || message.includes("404") || message.includes("503"))
-  );
-}
-
 function isAttachmentEndpointUnavailable(error) {
   return (
     error instanceof ToriiHttpError &&
@@ -5520,10 +5235,6 @@ function isAttachmentEndpointUnavailable(error) {
 
 function isAttachmentNotFoundError(error) {
   return error instanceof ToriiHttpError && (error.status === 404 || error.status === 410);
-}
-
-function shouldSkipSorafsPorEndpoints(error) {
-  return isSorafsUnavailableError(error) || isUnexpectedNotFoundError(error);
 }
 
 function shouldSkipTriggerEndpoints(error) {
@@ -5586,10 +5297,6 @@ function shouldSkipZkProverEndpoints(error) {
 
 function isUnexpectedNotFoundError(error) {
   return error instanceof Error && /unexpected status 404/i.test(error.message ?? "");
-}
-
-function isPlainObject(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function assertExplorerAccountQrSnapshot(snapshot, label) {
@@ -5921,10 +5628,6 @@ function assertNumberLike(value, label) {
   throw new Error(`${label} must be numeric`);
 }
 
-function assertNonNegativeInteger(value, label) {
-  assert.ok(Number.isInteger(value) && value >= 0, `${label} must be a non-negative integer`);
-}
-
 function assertNonNegativeNumber(value, label) {
   assert.equal(typeof value, "number", `${label} must be a number`);
   assert.ok(Number.isFinite(value), `${label} must be finite`);
@@ -6022,93 +5725,4 @@ function assertEvidenceRecord(entry) {
     default:
       assert.fail(`unexpected evidence kind: ${entry.kind}`);
   }
-}
-
-function assertProverReportResult(result, label = "prover report response") {
-  assert.ok(result && typeof result === "object", `${label} must be an object`);
-  switch (result.kind) {
-    case "reports":
-      assert.ok(
-        Array.isArray(result.reports),
-        `${label}.reports must be an array when kind is reports`,
-      );
-      result.reports.forEach((entry, index) =>
-        assertProverReportRecord(entry, `${label}.reports[${index}]`),
-      );
-      break;
-    case "ids":
-      assert.ok(Array.isArray(result.ids), `${label}.ids must be an array when kind is ids`);
-      result.ids.forEach((value, index) => {
-        assert.ok(
-          isNonEmptyString(value),
-          `${label}.ids[${index}] must be a non-empty string`,
-        );
-      });
-      break;
-    case "messages":
-      assert.ok(
-        Array.isArray(result.messages),
-        `${label}.messages must be an array when kind is messages`,
-      );
-      result.messages.forEach((entry, index) => {
-        assert.ok(isPlainObject(entry), `${label}.messages[${index}] must be an object`);
-        assert.ok(
-          isNonEmptyString(entry.id),
-          `${label}.messages[${index}].id must be a non-empty string`,
-        );
-        if (entry.error !== null) {
-          assert.equal(
-            typeof entry.error,
-            "string",
-            `${label}.messages[${index}].error must be null or a string`,
-          );
-        }
-      });
-      break;
-    default:
-      throw new Error(`${label} has unknown kind: ${String(result.kind)}`);
-  }
-}
-
-function assertProverReportRecord(entry, label) {
-  assert.ok(entry && typeof entry === "object", `${label} must be an object`);
-  assert.ok(isNonEmptyString(entry.id), `${label}.id must be a non-empty string`);
-  assert.equal(typeof entry.ok, "boolean", `${label}.ok must be a boolean`);
-  if (entry.error !== null) {
-    assert.equal(typeof entry.error, "string", `${label}.error must be null or a string`);
-  }
-  assert.ok(isNonEmptyString(entry.content_type), `${label}.content_type must be a string`);
-  assertNonNegativeInteger(entry.size, `${label}.size`);
-  assertNonNegativeInteger(entry.created_ms, `${label}.created_ms`);
-  assertNonNegativeInteger(entry.processed_ms, `${label}.processed_ms`);
-  assertNonNegativeInteger(entry.latency_ms, `${label}.latency_ms`);
-  if (entry.zk1_tags !== null) {
-    assert.ok(Array.isArray(entry.zk1_tags), `${label}.zk1_tags must be an array when present`);
-    entry.zk1_tags.forEach((tag, index) => {
-      assert.ok(
-        isNonEmptyString(tag),
-        `${label}.zk1_tags[${index}] must be a non-empty string`,
-      );
-    });
-  }
-}
-
-function hasProverReportEntries(result) {
-  switch (result.kind) {
-    case "reports":
-      return Array.isArray(result.reports) && result.reports.length > 0;
-    case "ids":
-      return Array.isArray(result.ids) && result.ids.length > 0;
-    case "messages":
-      return Array.isArray(result.messages) && result.messages.length > 0;
-    default:
-      return false;
-  }
-}
-
-function countFailedProverReports(result) {
-  if (result.kind !== "reports" || !Array.isArray(result.reports)) {
-    return 0;
-  }
-  return result.reports.filter((entry) => entry && entry.ok === false).length;
 }

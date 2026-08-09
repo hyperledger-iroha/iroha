@@ -22,6 +22,7 @@ use futures_util::{
 };
 use integration_tests::sandbox;
 use iroha::{
+    client::Client,
     crypto::{Algorithm, HashOf, KeyPair},
     data_model::{
         Level,
@@ -1080,7 +1081,7 @@ async fn submit_ram_lfe_emails_paced(
             .into();
             let transaction = submit_account.clients[0]
                 .build_transaction_from_items([instruction], iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), realistic_load_metadata(index));
-            let payload = submit_account.clients[0].prepare_transaction_payload(&transaction);
+            let payload = Client::prepare_transaction_payload(&transaction);
             submit_prepared_to_accept_quorum(
                 &submit_account.clients,
                 &payload,
@@ -1163,7 +1164,7 @@ async fn submit_transfers_paced(
             .into();
             let transaction = source_account.clients[0]
                 .build_transaction_from_items([instruction], iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), realistic_load_metadata(index));
-            let payload = source_account.clients[0].prepare_transaction_payload(&transaction);
+            let payload = Client::prepare_transaction_payload(&transaction);
             submit_prepared_to_accept_quorum(
                 &source_account.clients,
                 &payload,
@@ -10095,45 +10096,4 @@ fn realistic_artifact_summary(
     }
 }
 
-fn config_fingerprint(root: &Path) -> Result<Option<String>> {
-    if !root.exists() {
-        return Ok(None);
-    }
-    let mut paths = Vec::new();
-    collect_config_paths(root, &mut paths);
-    if paths.is_empty() {
-        return Ok(None);
-    }
-    paths.sort();
-    let mut hasher = Blake3Hasher::new();
-    for path in paths {
-        hasher.update(path.to_string_lossy().as_bytes());
-        let contents = fs::read(&path).wrap_err_with(|| format!("read {}", path.display()))?;
-        hasher.update(&contents);
-    }
-    Ok(Some(hasher.finalize().to_hex().to_string()))
-}
-
-fn collect_config_paths(root: &Path, output: &mut Vec<PathBuf>) {
-    let entries = match fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_config_paths(&path, output);
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        if name.contains("config")
-            && path
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"))
-        {
-            output.push(path);
-        }
-    }
-}
+include!("sumeragi_localnet_smoke/config_paths.rs");

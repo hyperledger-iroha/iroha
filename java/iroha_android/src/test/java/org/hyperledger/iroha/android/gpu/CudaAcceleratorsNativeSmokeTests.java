@@ -2,20 +2,10 @@ package org.hyperledger.iroha.android.gpu;
 
 import java.util.Optional;
 
-/**
- * Manual CUDA smoke test for operators running on devices with a native backend available.
- *
- * <p>Execution is gated behind the {@code IROHA_CUDA_SELFTEST=1} environment variable so CI
- * environments without a GPU skip the invocations by default.</p>
- */
+/** Hardware-qualified CUDA smoke test for the native JNI backend. */
 public final class CudaAcceleratorsNativeSmokeTests {
 
-  public static void main(String[] args) {
-    boolean runNative = "1".equals(System.getenv().getOrDefault("IROHA_CUDA_SELFTEST", "0"));
-    if (!runNative) {
-      System.out.println("[CudaAcceleratorsNativeSmokeTests] skipping (IROHA_CUDA_SELFTEST not set)");
-      return;
-    }
+  public static void main(final String[] args) {
     if (!Boolean.getBoolean("iroha.cuda.enableNative")) {
       throw new AssertionError(
           "Enable the native backend with -Diroha.cuda.enableNative=true before running the CUDA self-test.");
@@ -48,7 +38,7 @@ public final class CudaAcceleratorsNativeSmokeTests {
   }
 
   private static <T> void assertPresent(final Optional<T> maybe, final String label) {
-    if (maybe.isEmpty()) {
+    if (!maybe.isPresent()) {
       throw new AssertionError(label + " returned empty optional");
     }
   }

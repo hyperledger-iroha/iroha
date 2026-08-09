@@ -41,7 +41,7 @@ use iroha_core::{
             OrchardActionPublicV1, OrchardChangeProverInputV1, OrchardSpendProverInputV1,
             authorize_orchard_bundle_v1, prepare_orchard_bundle_v1,
         },
-        p256::{SecretScalarV1, TranscriptBindingV1},
+        p256::{DeviceSigningKeyV1, SecretScalarV1, TranscriptBindingV1},
         pq_masp::{
             PqMaspInputWitnessV1, PqMaspOutputWitnessV1, PqMaspWitnessV1,
             derive_pq_masp_authorization_key_digest_from_secret_v1,
@@ -399,7 +399,7 @@ pub struct VegaCredentialPresentationActionRequestV1 {
     /// Exact private ISO 18013-5 document material.
     pub witness_material: VegaPrivacyActionWitnessMaterialV1,
     /// Holder device ES256 signing key; `H_dev` is derived inside the builder.
-    pub device_signing_key: p256::ecdsa::SigningKey,
+    pub device_signing_key: DeviceSigningKeyV1,
     /// Trusted block time used by the closed presentation-validity policy.
     pub trusted_block_timestamp_ms: u64,
 }

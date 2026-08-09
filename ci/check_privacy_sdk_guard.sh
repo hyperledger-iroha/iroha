@@ -906,7 +906,7 @@ def _check_cargo_workflow(
     native_lane_job_digests = {
         "privacy_swift_sdk_parse": "f0b7091421939892d9557698717c18f26c7b3be8c456c56852d320a48c0c8420",
         "privacy_jvm_sdk_tests": "1f430f2e88d3c455e8ed0a5182308627d6657099093d6c6021c308bbf12aedcb",
-        "privacy_csharp_sdk_tests": "2591bfe9331c4a905e9be3f5dd7687d1dfe6537858081cecf6940b2254e689bc",
+        "privacy_csharp_sdk_tests": "527591fa158d75bd9349106e6382dbbf09a87e77b4f60bb640fc2b871aa51b27",
         "privacy_javascript_sdk_tests": "17b52dcc4caff1134d2b9e1731d76f39b71d33cc360038bcf81e8120cf93fbfc",
     }
 
@@ -1216,7 +1216,7 @@ def _check_cargo_workflow(
     expected_python_output_counts = {
         "privacy-swift-python": 1,
         "privacy-jvm-python": 4,
-        "privacy-csharp-python": 2,
+        "privacy-csharp-python": 3,
         "privacy-js-python": 2,
         "privacy-python": 8,
     }

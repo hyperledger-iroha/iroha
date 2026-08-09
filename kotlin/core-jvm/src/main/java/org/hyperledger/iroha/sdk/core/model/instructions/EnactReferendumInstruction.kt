@@ -40,7 +40,7 @@ class EnactReferendumInstruction private constructor(
     override fun hashCode(): Int {
         var result = referendumIdHex.hashCode()
         result = 31 * result + preimageHashHex.hashCode()
-        result = 31 * result + (window?.hashCode() ?: 0)
+        result = 31 * result + window.hashCode()
         return result
     }
 
