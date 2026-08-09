@@ -292,4 +292,3 @@ const _: () = assert!(P256_X5S1_SIGNATURES_V1 == 5);
 const _: () = assert!(P256_X5S1_PERMUTATION_ARGUMENTS_V1 == 25);
 const _: () = assert!(P256_PERMUTATION_LOCAL_COLLISION_BITS_V1 == 176);
 const _: () = assert!(P256_X5S1_PERMUTATION_UNION_COLLISION_BITS_V1 == 171);
-

@@ -2396,4 +2396,3 @@ def test_exact_output_production_source_mutations_fail_closed(
 
     errors = module._exact_output_production_source_fidelity_errors(tmp_path)
     assert any(error_fragment in error for error in errors), errors
-

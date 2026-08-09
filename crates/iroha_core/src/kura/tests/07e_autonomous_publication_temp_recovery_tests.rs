@@ -252,7 +252,21 @@ fn assert_bootstrap_atomic_temp_recovery_controls(
         fs::remove_file(&target).expect("remove bootstrap temporary symlink target");
     }
 
-    let wrong_lane = lane_config.entry(LaneId::new(0)).expect("lane zero");
+    let bootstrap_lane_id = Kura::decode_autonomous_lifecycle_bootstrap(
+        bootstrap_path,
+        bootstrap_bytes,
+    )
+    .expect("decode bootstrap route for swapped-path control")
+    .body
+    .executable_payload
+    .origin_proposal
+    .descriptor
+    .lane_id;
+    let wrong_lane = lane_config
+        .entries()
+        .iter()
+        .find(|entry| entry.lane_id != bootstrap_lane_id)
+        .expect("bootstrap route-swap control requires another configured lane");
     let wrong_parent = Kura::lane_artifact_dir(&wrong_lane.blocks_dir(store_root));
     fs::create_dir_all(&wrong_parent).expect("create swapped bootstrap parent");
     let wrong_path = wrong_parent.join(format!(

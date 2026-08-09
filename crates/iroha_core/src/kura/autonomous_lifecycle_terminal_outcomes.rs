@@ -1011,6 +1011,30 @@ impl Kura {
         source: AutonomousLifecycleTerminalOutcomeSourceV1,
     ) -> Result<AutonomousLifecycleTerminalPendingPublicationPlan> {
         let descriptor = &payload.origin_proposal.descriptor;
+        let bootstrap_path = Self::autonomous_lifecycle_bootstrap_path_for_entry(
+            entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        let bootstrap_parent = bootstrap_path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                bootstrap_path.clone(),
+                "autonomous lifecycle bootstrap path has no parent directory",
+            )
+        })?;
+        if self
+            .regular_sidecar_metadata(&bootstrap_path, bootstrap_parent)?
+            .is_some()
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::WouldBlock,
+                    "terminal outcome waits for signed lifecycle bootstrap completion",
+                ),
+                bootstrap_path,
+            ));
+        }
         let attempt = self
             .read_autonomous_lane_block_attempt_record_locked(
                 entry,

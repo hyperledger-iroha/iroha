@@ -691,7 +691,7 @@ impl Kura {
             )
             .map_err(std::io::Error::from)
             .map_err(|error| Error::IO(error, quarantine_path.clone()))?;
-            if !Self::sidecar_file_metadata_unchanged(&metadata.file, &held)
+            if !Self::sidecar_file_metadata_unchanged_across_rename(&metadata.file, &held)
                 || rustix::fs::FileType::from_raw_mode(quarantined.st_mode)
                     != rustix::fs::FileType::RegularFile
                 || held.nlink() != 1
@@ -715,7 +715,7 @@ impl Kura {
             let held_after = file
                 .metadata()
                 .map_err(|error| Error::IO(error, quarantine_path.clone()))?;
-            if !Self::sidecar_file_metadata_unchanged(&metadata.file, &held_after)
+            if !Self::sidecar_file_metadata_unchanged_across_rename(&metadata.file, &held_after)
                 || retained.st_dev as u64 != held_after.dev()
                 || retained.st_ino as u64 != held_after.ino()
                 || retained.st_nlink as u64 != 1

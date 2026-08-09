@@ -2,8 +2,7 @@ const HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1: &str = "historical_autonomous
 const HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_VERSION_V1: u16 = 1;
 const HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES: usize = 16 * 1024 * 1024;
 pub(crate) const HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS: usize = 4_096;
-const HISTORICAL_AUTONOMOUS_RECOVERY_ATOMIC_TEMP_PREFIX: &str =
-    ".historical-autonomous-recovery-";
+const HISTORICAL_AUTONOMOUS_RECOVERY_ATOMIC_TEMP_PREFIX: &str = ".historical-autonomous-recovery-";
 const HISTORICAL_AUTONOMOUS_RECOVERY_HARD_MAX_AGGREGATE_BYTES: u64 =
     V2_PENDING_CONTROL_SIDECAR_BYTES_MAX as u64;
 
@@ -1341,6 +1340,17 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                     &self.store_root,
                     record.recovery_id,
                 );
+                if !existing_recovery_ids.contains(&record.recovery_id)
+                    && self
+                        .lane_block_application_receipt_available_under_prune_and_canonical_guards(
+                            &record.payload.origin_proposal,
+                        )
+                {
+                    return Err(Self::invalid_historical_autonomous_recovery(
+                        path,
+                        "historical autonomous recovery cannot publish dependent state for an already terminal lane block",
+                    ));
+                }
                 self.validate_historical_autonomous_recovery_record_shape(record, &path)?;
                 let encoded = historical_autonomous_recovery_record_bytes(record);
                 if let Some(parent) = directory.parent() {
@@ -1522,10 +1532,18 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                         ),
                     )
                 })?;
-            self.persist_lane_block_execution_input_under_prune_and_canonical_guards(
+            match self.persist_lane_block_execution_input_under_prune_and_canonical_guards(
                 &recovered,
                 pending_canonical_bytes,
-            )?;
+            )? {
+                LaneBlockAuxiliaryPersistenceOutcome::Persisted => {}
+                LaneBlockAuxiliaryPersistenceOutcome::AlreadyTerminal => {
+                    return Err(Self::invalid_historical_autonomous_recovery(
+                        self.store_root.clone(),
+                        "historical autonomous recovery became terminal after batch preflight",
+                    ));
+                }
+            }
 
             let descriptor = &record.payload.origin_proposal.descriptor;
             let provisional_entry = self.lane_storage_entry(descriptor.lane_id)?;
@@ -1702,11 +1720,19 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             &self,
             record: &HistoricalAutonomousLaneRecoveryRecordV1,
         ) -> Result<HistoricalAutonomousLaneRecoveryPersistOutcome> {
-            self.persist_lane_executable_payload(
+            match self.persist_lane_executable_payload(
                 &record.payload,
                 record.payload.chain_id_hash,
                 record.payload.epoch,
-            )?;
+            )? {
+                LaneBlockAuxiliaryPersistenceOutcome::Persisted => {}
+                LaneBlockAuxiliaryPersistenceOutcome::AlreadyTerminal => {
+                    return Err(Self::invalid_historical_autonomous_recovery(
+                        self.store_root.clone(),
+                        "historical autonomous recovery cannot recreate terminal auxiliary state",
+                    ));
+                }
+            }
             self.persist_historical_autonomous_lane_recovery_records(std::slice::from_ref(record))?
                 .pop()
                 .ok_or_else(|| {

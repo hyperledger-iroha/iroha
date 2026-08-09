@@ -1336,4 +1336,3 @@
         let path = CommitRosterJournal::journal_path(Path::new(""));
         assert!(path.as_os_str().is_empty());
     }
-

@@ -41,7 +41,8 @@ use super::{
     AUTONOMOUS_LANE_MERGE_BUNDLES_INDEX_FILE, AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE,
     AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX, AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
     AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES, AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES,
-    AutonomousLaneBlockArtifact, AutonomousLaneBlockLatestAttemptV1, AutonomousLaneMergeBundleV1,
+    AutonomousLaneBlockArtifact, AutonomousLaneBlockLatestAttemptV1,
+    AutonomousLaneBlockViewStateReadMode, AutonomousLaneMergeBundleV1,
     AutonomousLifecycleBootstrapRecoveryStage, AutonomousLifecycleBootstrapV1,
     AutonomousLifecycleCursorPhaseKindV2, AutonomousLifecycleCursorPhaseV2,
     AutonomousLifecycleCursorV2, AutonomousLifecycleTerminalOutcomeSourceV1,
@@ -10168,7 +10169,7 @@ impl Kura {
                 let view_state = self.read_autonomous_lane_block_view_state_locked(
                     &artifact.executable_payload,
                     &view_path,
-                    None,
+                    AutonomousLaneBlockViewStateReadMode::MainOnly,
                 )?;
                 let retired = view_state
                     .as_ref()
@@ -10621,7 +10622,7 @@ impl Kura {
                                 .read_autonomous_lane_block_view_state_locked(
                                     &artifact.executable_payload,
                                     &view_path,
-                                    None,
+                                    AutonomousLaneBlockViewStateReadMode::MainOnly,
                                 )?
                                 .ok_or_else(|| {
                                     self.geometry_error(

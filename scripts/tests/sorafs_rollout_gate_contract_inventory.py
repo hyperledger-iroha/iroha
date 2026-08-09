@@ -786,5 +786,3 @@ def runner_inventory_constant_fields(
         failures.append(f"{constant_name}:field")
         return None
     return set(value)
-
-

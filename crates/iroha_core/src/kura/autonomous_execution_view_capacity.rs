@@ -57,9 +57,12 @@ impl Kura {
     pub fn persist_lane_block_execution_input(
         &self,
         recovered: &RecoveredLaneBlockPayload,
-    ) -> Result<()> {
+    ) -> Result<LaneBlockAuxiliaryPersistenceOutcome> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
+        if self.lane_block_application_receipt_available_under_prune_guard(&recovered.proposal) {
+            return Ok(LaneBlockAuxiliaryPersistenceOutcome::AlreadyTerminal);
+        }
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let pending_canonical_bytes =
             self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
@@ -76,8 +79,13 @@ impl Kura {
         &self,
         recovered: &RecoveredLaneBlockPayload,
         pending_canonical_bytes: u64,
-    ) -> Result<()> {
+    ) -> Result<LaneBlockAuxiliaryPersistenceOutcome> {
         self.ensure_prune_recovery_not_required()?;
+        if self.lane_block_application_receipt_available_under_prune_and_canonical_guards(
+            &recovered.proposal,
+        ) {
+            return Ok(LaneBlockAuxiliaryPersistenceOutcome::AlreadyTerminal);
+        }
         let verified = self
             .recover_lane_block_execution_input_source(
                 &recovered.proposal,
@@ -148,7 +156,8 @@ impl Kura {
             &artifact,
             execution_input_authorization,
             pending_canonical_bytes,
-        )
+        )?;
+        Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted)
     }
 
     fn write_lane_block_execution_input_artifact(
@@ -440,11 +449,11 @@ impl Kura {
                 .map_err(|error| Error::IO(error, index_path.to_path_buf()))?;
                 let layout = SidecarIndexLayout::read_from(&mut index, index_metadata.file.len())
                     .map_err(|reason| {
-                        Self::invalid_lane_artifact_error(
-                            index_path.to_path_buf(),
-                            format!("lane block execution input index is malformed: {reason}"),
-                        )
-                    })?;
+                    Self::invalid_lane_artifact_error(
+                        index_path.to_path_buf(),
+                        format!("lane block execution input index is malformed: {reason}"),
+                    )
+                })?;
                 if layout.aligned_len != index_metadata.file.len() {
                     return Err(Self::invalid_lane_artifact_error(
                         index_path.to_path_buf(),
@@ -652,8 +661,8 @@ impl Kura {
         Self::validate_autonomous_view_state_namespace_peak(&inventory, 1, replacement_len)
             .map_err(|message| Self::invalid_lane_artifact_error(path.to_path_buf(), message))?;
         let additional_physical_peak = replacement_len.saturating_sub(temp_len);
-        let creates_lifecycle_identity = !replacing_existing
-            && inventory.needs_terminal_reservation_for_new_identity(identity);
+        let creates_lifecycle_identity =
+            !replacing_existing && inventory.needs_terminal_reservation_for_new_identity(identity);
         self.validate_configured_autonomous_mutation_disk_peak_with_allowed_view_temp_locked(
             pending_canonical_bytes,
             additional_physical_peak,

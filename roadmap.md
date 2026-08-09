@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-07
+Last updated: 2026-08-09
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -23,6 +23,18 @@ regressions, generated-artifact determinism, exact profile-config admission,
 and public consensus wire roundtrips are complete. The outstanding revision-4
 work is limited to:
 
+- Close the autonomous carrier terminal-gating, signed-bootstrap roll-forward,
+  and lifecycle-retention release gate from one final source seal. Run the
+  focused Kura and Sumeragi regressions, build the optimized `irohad` and
+  Kagami artifacts from the signed revision, and run a pristine four-validator
+  canary through the complete multi-stage autonomous contract workload. Require
+  all stages to apply, four-peer health, an empty
+  queue, no unexpected rejection, equality of total and non-empty block
+  heights, and stable height throughout the idle observation window. Then roll
+  the identical attested artifacts to the live four-validator Taira cohort in
+  one coordinated operation and repeat chain-health, manifest, and signed-write
+  canaries before reopening public traffic; source tests or a partial cohort
+  replacement do not satisfy this gate.
 - Finish source-seal, proof, and release validation for the selected-Serve
   Taira `missing_proposal` repair. The focused composed regression now drives a
   completed predecessor claim, local absolute timeout, two responsive remote
