@@ -8,12 +8,14 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 
 import pytest
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT_DIR / "scripts" / "run_sumeragi_v2_formal_release.sh"
 JAVA_RESOLVER = ROOT_DIR / "scripts" / "formal" / "resolve_java.sh"
+PROCESS_POLICY = ROOT_DIR / "scripts" / "sumeragi_v2_release_process_policy.sh"
 MANIFEST = "a" * 64
 HEAD = "1" * 40
 TREE = "2" * 40
@@ -24,6 +26,16 @@ FINAL_MARKER = (
     "recovery/ownership mutations, bounded TLC, trace replay, and production "
     "Verus"
 )
+
+
+_EXTERNAL_ROOTS: list[Path] = []
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_external_roots() -> None:
+    yield
+    while _EXTERNAL_ROOTS:
+        shutil.rmtree(_EXTERNAL_ROOTS.pop(), ignore_errors=True)
 
 
 def _write_fake_java(path: Path, *, working: bool) -> None:
@@ -58,6 +70,7 @@ def _fixture(
     bin_dir.mkdir()
     launcher = scripts / SCRIPT.name
     shutil.copy2(SCRIPT, launcher)
+    shutil.copy2(PROCESS_POLICY, scripts / PROCESS_POLICY.name)
     shutil.copy2(JAVA_RESOLVER, formal / JAVA_RESOLVER.name)
     shutil.copy2(
         ROOT_DIR / "scripts" / "formal" / "sumeragi_v2_harness.lock",
@@ -72,40 +85,41 @@ def _fixture(
     gate.write_text(
         f"""#!/usr/bin/env bash
 set -euo pipefail
-mkdir -p formal/sumeragi_v2 target/formal/sumeragi_v2
+formal_evidence="${{SUMERAGI_V2_FORMAL_EVIDENCE_DIR:?}}"
+mkdir -p formal/sumeragi_v2 "$formal_evidence"
 case "${{FORMAL_FAKE_GATE_MODE:-pass}}" in
   fail) exit 73 ;;
   pass|no-marker|duplicate-marker)
     printf '%s\n' '{{"machine_checked_completion":true}}' \
       >formal/sumeragi_v2/proof_coverage.json
     printf '%s\n' '{{"backend_verification":true}}' \
-      >target/formal/sumeragi_v2/proof_evidence.json
+      >"$formal_evidence/proof_evidence.json"
     printf '%s\n' '{{"backend_verification":true}}' \
-      >target/formal/sumeragi_v2/verus_evidence.json
+      >"$formal_evidence/verus_evidence.json"
     printf '%s\n' 'fixture production Verus verification passed' \
-      >target/formal/sumeragi_v2/verus.log
+      >"$formal_evidence/verus.log"
     if [[ "${{FORMAL_SKIP_ARTIFACT:-}}" != multilane_apalache_evidence.tsv ]]; then
       printf '%s\n' \
         $'schema_version\t1' \
         $'backend\tapalache' \
         $'result_count\t3' \
-        >target/formal/sumeragi_v2/multilane_apalache_evidence.tsv
+        >"$formal_evidence/multilane_apalache_evidence.tsv"
     fi
     if [[ "${{FORMAL_SKIP_ARTIFACT:-}}" != tlaps_resource.jsonl ]]; then
       printf '%s\n' \
         '{{"event":"start","memory_limit_bytes":2147483648,"sample_interval_seconds":0.25,"schema_version":1}}' \
         '{{"accounting_method":"rss","event":"sample","memory_bytes":4096,"memory_limit_bytes":2147483648,"physical_footprint_bytes":0,"process_count":1,"rss_bytes":4096,"schema_version":1}}' \
         '{{"event":"summary","exit_reason":"completed","exit_status":0,"memory_limit_bytes":2147483648,"peak_memory_bytes":4096,"sample_interval_seconds":0.25,"schema_version":1}}' \
-        >target/formal/sumeragi_v2/tlaps_resource.jsonl
+        >"$formal_evidence/tlaps_resource.jsonl"
     fi
     if [[ "${{FORMAL_SKIP_ARTIFACT:-}}" != tlaps_resource_summary.json ]]; then
       printf '%s\n' \
         '{{"event":"summary","exit_reason":"completed","exit_status":0,"memory_limit_bytes":2147483648,"peak_memory_bytes":4096,"sample_interval_seconds":0.25,"schema_version":1}}' \
-        >target/formal/sumeragi_v2/tlaps_resource_summary.json
+        >"$formal_evidence/tlaps_resource_summary.json"
     fi
     if [[ "${{FORMAL_EMIT_CROSS_TOOL:-0}}" == 1 ]]; then
       printf '%s\n' '{{"backend_verification":true,"canonical":true}}' \
-        >target/formal/sumeragi_v2/cross_tool_evidence.json
+        >"$formal_evidence/cross_tool_evidence.json"
     fi
     ;;
 esac
@@ -217,10 +231,31 @@ esac
     env["JAVA_BIN"] = str(tools["java"])
     env["TLAPM_BIN"] = str(tools["tlapm"])
     env["TLA2TOOLS_JAR"] = str(tools["tla2tools.jar"])
-    evidence = tmp_path / "evidence"
-    env["SUMERAGI_V2_FORMAL_EVIDENCE_DIR"] = str(evidence)
+    external_root = Path(
+        tempfile.mkdtemp(prefix="iroha-formal-release-test-", dir="/private/tmp")
+    )
+    _EXTERNAL_ROOTS.append(external_root)
+    target = external_root / "target"
+    artifacts = external_root / "artifacts"
+    target.mkdir(mode=0o700)
+    artifacts.mkdir(mode=0o700)
+    formal_work = artifacts / "formal" / "sumeragi_v2"
+    formal_work.mkdir(parents=True, mode=0o700)
+    env["CARGO_TARGET_DIR"] = str(target)
+    env["IROHA_RELEASE_ARTIFACT_ROOT"] = str(artifacts)
+    env["IROHA_RELEASE_CANCEL_REQUEST_PATH"] = str(
+        external_root / "cancel-request.json"
+    )
+    env["SUMERAGI_V2_FORMAL_EVIDENCE_DIR"] = str(formal_work)
+    evidence = (
+        artifacts
+        / "sumeragi-v2-release"
+        / MANIFEST
+        / "evidence"
+        / "formal"
+    )
     if skip_artifact is not None:
-        stale_artifact = repo / "target" / "formal" / "sumeragi_v2" / skip_artifact
+        stale_artifact = formal_work / skip_artifact
         stale_artifact.parent.mkdir(parents=True, exist_ok=True)
         stale_artifact.write_text("stale evidence from a prior run\n", encoding="utf-8")
     return launcher, env, evidence
@@ -612,8 +647,10 @@ def test_every_sumeragi_formal_java_entrypoint_uses_the_shared_resolver() -> Non
         ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh"
     ).read_text(encoding="utf-8")
     assert "unset JAVA_BIN" in release
-    assert 'release_java_bin="$("$repo_root/scripts/formal/resolve_java.sh")"' in release
-    assert "canonical_executable java" not in release
+    assert 'release_java_bin="$(canonical_executable java)"' in release
+    assert "/target/tlapm/" not in release
+    assert "/target/verus/" not in release
+    assert "/target/tla2tools/" not in release
 
 
 def test_restart_locked_fetch_order_mutation_is_release_gated_and_pinned() -> None:
@@ -623,7 +660,7 @@ def test_restart_locked_fetch_order_mutation_is_release_gated_and_pinned() -> No
     gate = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text(
         encoding="utf-8"
     )
-    assert gate.count(f"bash {relative_runner}") == 1
+    assert gate.count(f"run_formal_script {relative_runner}") == 1
     assert gate.index(relative_runner) < gate.index("run_sumeragi_v2_tlc.sh")
 
     runner = (ROOT_DIR / relative_runner).read_text(encoding="utf-8")
@@ -706,7 +743,7 @@ def test_persist_install_generation_mutation_is_release_gated_and_pinned() -> No
     gate = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text(
         encoding="utf-8"
     )
-    assert gate.count(f"bash {relative_runner}") == 1
+    assert gate.count(f"run_formal_script {relative_runner}") == 1
     assert gate.index(relative_runner) < gate.index("run_sumeragi_v2_tlc.sh")
 
     runner = (ROOT_DIR / relative_runner).read_text(encoding="utf-8")
@@ -784,7 +821,7 @@ def test_persist_install_validation_mutation_is_release_gated_and_pinned() -> No
     gate = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text(
         encoding="utf-8"
     )
-    assert gate.count(f"bash {relative_runner}") == 1
+    assert gate.count(f"run_formal_script {relative_runner}") == 1
     assert gate.index(relative_runner) < gate.index("run_sumeragi_v2_tlc.sh")
 
     runner = (ROOT_DIR / relative_runner).read_text(encoding="utf-8")
@@ -861,7 +898,7 @@ def test_apply_authority_mutation_is_release_gated_and_pinned() -> None:
     gate = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text(
         encoding="utf-8"
     )
-    assert gate.count(f"bash {relative_runner}") == 1
+    assert gate.count(f"run_formal_script {relative_runner}") == 1
     assert gate.index(relative_runner) < gate.index("run_sumeragi_v2_tlc.sh")
 
     runner = (ROOT_DIR / relative_runner).read_text(encoding="utf-8")
@@ -942,7 +979,7 @@ def test_replay_locked_body_carrier_mutation_is_release_gated_and_pinned() -> No
     gate = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text(
         encoding="utf-8"
     )
-    assert gate.count(f"bash {relative_runner}") == 1
+    assert gate.count(f"run_formal_script {relative_runner}") == 1
     assert gate.index(relative_runner) < gate.index("run_sumeragi_v2_tlc.sh")
 
     runner = (ROOT_DIR / relative_runner).read_text(encoding="utf-8")
@@ -1012,7 +1049,7 @@ def test_certificate_ref_recovery_mutation_is_release_gated_and_pinned() -> None
     gate = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text(
         encoding="utf-8"
     )
-    assert gate.count(f"bash {relative_runner}") == 1
+    assert gate.count(f"run_formal_script {relative_runner}") == 1
     assert gate.index(relative_runner) < gate.index("run_sumeragi_v2_tlc.sh")
 
     runner = (ROOT_DIR / relative_runner).read_text(encoding="utf-8")
@@ -1084,7 +1121,7 @@ def test_certified_response_source_lineage_mutation_is_release_gated_and_pinned(
     gate = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text(
         encoding="utf-8"
     )
-    assert gate.count(f"bash {relative_runner}") == 1
+    assert gate.count(f"run_formal_script {relative_runner}") == 1
     assert gate.index(relative_runner) < gate.index("run_sumeragi_v2_tlc.sh")
 
     runner = (ROOT_DIR / relative_runner).read_text(encoding="utf-8")
@@ -1157,7 +1194,7 @@ def test_certified_response_identity_separation_mutation_is_release_gated_and_pi
     gate = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text(
         encoding="utf-8"
     )
-    assert gate.count(f"bash {relative_runner}") == 1
+    assert gate.count(f"run_formal_script {relative_runner}") == 1
     assert gate.index(relative_runner) < gate.index("run_sumeragi_v2_tlc.sh")
 
     runner = (ROOT_DIR / relative_runner).read_text(encoding="utf-8")
@@ -1319,7 +1356,7 @@ def test_ingress_causal_freshness_mutation_is_release_gated_and_pinned() -> None
     gate = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text(
         encoding="utf-8"
     )
-    assert gate.count(f"bash {relative_runner}") == 1
+    assert gate.count(f"run_formal_script {relative_runner}") == 1
     assert gate.index(relative_runner) < gate.index("run_sumeragi_v2_tlc.sh")
 
     runner = (ROOT_DIR / relative_runner).read_text(encoding="utf-8")
@@ -1406,7 +1443,7 @@ def test_historical_discovery_occurrence_rank_is_release_gated_and_pinned() -> N
     gate = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text(
         encoding="utf-8"
     )
-    assert gate.count(f"bash {relative_runner}") == 1
+    assert gate.count(f"run_formal_script {relative_runner}") == 1
     assert gate.index(
         "run_sumeragi_v2_liveness_ownership_mutations.sh"
     ) < gate.index(relative_runner)

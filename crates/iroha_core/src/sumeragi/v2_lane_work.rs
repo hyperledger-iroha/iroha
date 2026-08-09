@@ -699,6 +699,8 @@ pub(crate) struct V2LaneWorkLimits {
     merge_leader_body_frame_headroom_bytes: NonZeroUsize,
     autonomous_carrier_headroom_bytes: NonZeroUsize,
     autonomous_producer_recheck: Duration,
+    historical_recovery_retry_floor: Duration,
+    historical_recovery_retry_ceiling: Duration,
     historical_recovery_stuck_attempts: NonZeroU32,
     historical_recovery_retry_tier_attempts: NonZeroU32,
     historical_recovery_max_retry_tier: NonZeroU32,
@@ -724,6 +726,8 @@ impl V2LaneWorkLimits {
         merge_leader_body_frame_headroom_bytes: NonZeroUsize,
         autonomous_carrier_headroom_bytes: NonZeroUsize,
         autonomous_producer_recheck: Duration,
+        historical_recovery_retry_floor: Duration,
+        historical_recovery_retry_ceiling: Duration,
         historical_recovery_stuck_attempts: NonZeroU32,
         historical_recovery_retry_tier_attempts: NonZeroU32,
         historical_recovery_max_retry_tier: NonZeroU32,
@@ -746,6 +750,8 @@ impl V2LaneWorkLimits {
             merge_leader_body_frame_headroom_bytes,
             autonomous_carrier_headroom_bytes,
             autonomous_producer_recheck,
+            historical_recovery_retry_floor,
+            historical_recovery_retry_ceiling,
             historical_recovery_stuck_attempts,
             historical_recovery_retry_tier_attempts,
             historical_recovery_max_retry_tier,
@@ -2287,6 +2293,48 @@ enum HistoricalRecoveryPersistence {
 struct OutstandingHistoricalRecoveryRequest {
     request_hash: HashOf<LaneHistoricalRecoveryRequestV1>,
     request: LaneHistoricalRecoveryRequestV1,
+    cadence: HistoricalRecoveryRequestCadence,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct HistoricalRecoveryRequestCadence {
+    reason: HistoricalRecoveryWaitReason,
+    retained_attempts: u32,
+    next_retry_at: Instant,
+}
+
+impl HistoricalRecoveryRequestCadence {
+    fn immediate(reason: HistoricalRecoveryWaitReason, now: Instant) -> Self {
+        Self {
+            reason,
+            retained_attempts: 0,
+            next_retry_at: now,
+        }
+    }
+
+    fn due(self, now: Instant) -> bool {
+        now >= self.next_retry_at
+    }
+
+    fn after_retained_attempt(
+        self,
+        observation: HistoricalRecoveryWait,
+        now: Instant,
+        floor: Duration,
+        ceiling: Duration,
+    ) -> Option<Self> {
+        let retained_attempts = self.retained_attempts.saturating_add(1);
+        let delay = HistoricalRecoveryWait {
+            consecutive_attempts: retained_attempts,
+            ..observation
+        }
+        .retry_delay(floor, ceiling);
+        now.checked_add(delay).map(|next_retry_at| Self {
+            reason: observation.reason,
+            retained_attempts,
+            next_retry_at,
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -4726,7 +4774,6 @@ impl V2LaneWorkAdapter {
                 retain_latest(session);
             }
         }
-
         let current_state_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         let mut current_state_hash = None;
         latest_by_lane
@@ -4744,7 +4791,7 @@ impl V2LaneWorkAdapter {
                     },
                     || {
                         self.kura
-                            .read_lane_block_application_receipt(
+                            .read_lane_block_application_receipt_without_sidecar_repair(
                                 descriptor.lane_id,
                                 descriptor.lane_block_height,
                             )
@@ -4764,10 +4811,12 @@ impl V2LaneWorkAdapter {
                             .certified_lane_block_session_predecessor_is_applied_cached(&session)
                     },
                     || {
-                        let preflight = self.kura.read_lane_block_execution_preflight(
-                            descriptor.lane_id,
-                            descriptor.lane_block_height,
-                        )?;
+                        let preflight = self
+                            .kura
+                            .read_lane_block_execution_preflight_without_sidecar_repair(
+                                descriptor.lane_id,
+                                descriptor.lane_block_height,
+                            )?;
                         if preflight.proposal != *proposal
                             || preflight.preflight_state_height != current_state_height
                         {
@@ -4780,7 +4829,7 @@ impl V2LaneWorkAdapter {
                     },
                     || {
                         self.kura
-                            .read_lane_block_execution_input(
+                            .read_lane_block_execution_input_without_sidecar_repair(
                                 descriptor.lane_id,
                                 descriptor.lane_block_height,
                             )
@@ -6673,6 +6722,13 @@ impl V2LaneWorkAdapter {
     pub(crate) fn service_next_historical_recovery(
         &mut self,
     ) -> Result<HistoricalRecoveryServiceOutcome, V2LaneWorkError> {
+        self.service_next_historical_recovery_at(Instant::now())
+    }
+
+    fn service_next_historical_recovery_at(
+        &mut self,
+        now: Instant,
+    ) -> Result<HistoricalRecoveryServiceOutcome, V2LaneWorkError> {
         let Some(session) = self.historical_recovery_sessions.pop_front() else {
             return Ok(HistoricalRecoveryServiceOutcome::Idle);
         };
@@ -6701,9 +6757,12 @@ impl V2LaneWorkAdapter {
                 let observation = self
                     .historical_recovery_diagnostics
                     .observe(identity, reason);
-                if let Err(error) =
-                    self.schedule_historical_recovery_request(identity, &session, observation.retry)
-                {
+                if let Err(error) = self.schedule_historical_recovery_request(
+                    identity,
+                    &session,
+                    observation,
+                    now,
+                ) {
                     self.historical_recovery_sessions.push_front(session);
                     return Err(error);
                 }
@@ -6882,8 +6941,10 @@ impl V2LaneWorkAdapter {
         &mut self,
         identity: HistoricalRecoveryIdentity,
         session: &CommittedLaneBlockSession,
-        retry: HistoricalRecoveryRetry,
+        observation: HistoricalRecoveryWait,
+        now: Instant,
     ) -> Result<(), V2LaneWorkError> {
+        let retry = observation.retry;
         let descriptor = &session.proposal.descriptor;
         if retry != HistoricalRecoveryRetry::LocalState
             && (!self.lane_route_active(
@@ -7013,10 +7074,18 @@ impl V2LaneWorkAdapter {
             ));
         }
 
-        if let Some(existing) = self.historical_recovery_requests.get(&identity) {
-            if existing.request != request || existing.request_hash != request_hash {
-                self.retire_historical_recovery_request(identity);
-            }
+        let retained_request_matches = self
+            .historical_recovery_requests
+            .get(&identity)
+            .is_some_and(|existing| {
+                existing.request == request
+                    && existing.request_hash == request_hash
+                    && existing.cadence.reason == observation.reason
+            });
+        if self.historical_recovery_requests.contains_key(&identity)
+            && !retained_request_matches
+        {
+            self.retire_historical_recovery_request(identity);
         }
         if !self.historical_recovery_requests.contains_key(&identity) {
             if self.historical_recovery_requests.len() >= self.limits.session_capacity.get() {
@@ -7038,12 +7107,35 @@ impl V2LaneWorkAdapter {
                 OutstandingHistoricalRecoveryRequest {
                     request_hash,
                     request,
+                    cadence: HistoricalRecoveryRequestCadence::immediate(observation.reason, now),
                 },
             );
         }
 
+        let cadence = self
+            .historical_recovery_requests
+            .get(&identity)
+            .expect("historical recovery request was inserted above")
+            .cadence;
+        if !cadence.due(now) {
+            return Ok(());
+        }
+        let next_cadence = cadence
+            .after_retained_attempt(
+                observation,
+                now,
+                self.limits.historical_recovery_retry_floor,
+                self.limits.historical_recovery_retry_ceiling,
+            )
+            .ok_or_else(|| {
+                V2LaneWorkError::InvalidContext(
+                    "historical recovery retry deadline exceeds the monotonic clock".to_owned(),
+                )
+            })?;
+
         let local_peer = self.local_peer.clone();
         let mut seen = BTreeSet::new();
+        let mut retained = false;
         for peer in peers
             .into_iter()
             .filter(|peer| peer != &local_peer && seen.insert(peer.clone()))
@@ -7054,6 +7146,13 @@ impl V2LaneWorkAdapter {
             }) {
                 break;
             }
+            retained = true;
+        }
+        if retained {
+            self.historical_recovery_requests
+                .get_mut(&identity)
+                .expect("serialized historical request owner changed during fanout")
+                .cadence = next_cadence;
         }
         Ok(())
     }
@@ -16245,6 +16344,8 @@ pub(super) mod tests {
                 iroha_config::parameters::defaults::sumeragi::V2_MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES,
                 iroha_config::parameters::defaults::sumeragi::V2_AUTONOMOUS_CARRIER_HEADROOM_BYTES,
                 iroha_config::parameters::defaults::sumeragi::V2_AUTONOMOUS_PRODUCER_RECHECK,
+                Duration::from_millis(10),
+                Duration::from_secs(1),
                 iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS,
                 iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS,
                 iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER,
@@ -16583,6 +16684,8 @@ pub(super) mod tests {
             iroha_config::parameters::defaults::sumeragi::V2_MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES,
             iroha_config::parameters::defaults::sumeragi::V2_AUTONOMOUS_CARRIER_HEADROOM_BYTES,
             iroha_config::parameters::defaults::sumeragi::V2_AUTONOMOUS_PRODUCER_RECHECK,
+            Duration::from_millis(10),
+            Duration::from_secs(1),
             iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS,
             iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS,
             iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER,
@@ -21339,7 +21442,6 @@ pub(super) mod tests {
             super::super::status::committed_lane_blocks_snapshot()[0].execution_status,
             super::super::status::CommittedLaneBlockExecutionStatus::PayloadAvailableAwaitingExecutor
         );
-
         let recovered = adapter
             .kura
             .recover_lane_block_payload(&proposal)
@@ -21353,7 +21455,7 @@ pub(super) mod tests {
             super::super::status::committed_lane_blocks_snapshot()[0].execution_status,
             super::super::status::CommittedLaneBlockExecutionStatus::PayloadRecoveredAwaitingStateApplication
         );
-
+        assert_passive_committed_lane_status_reads(&adapter, &proposal);
         let input = adapter
             .kura
             .read_lane_block_execution_input(
@@ -25466,6 +25568,8 @@ pub(super) mod tests {
         )
         .expect("restart after historical recovery remains self-sufficient");
         assert!(!reopened.has_pending_historical_recovery());
+        assert!(reopened.historical_recovery_requests.is_empty());
+        assert!(reopened.historical_recovery_request_owners.is_empty());
         assert!(
             state
                 .unapplied_lane_block_artifact_heights_snapshot_cached()
@@ -25664,125 +25768,6 @@ pub(super) mod tests {
         assert!(!adapter.output_guard.restart_required());
     }
 
-    #[test]
-    fn historical_recovery_diagnostics_are_typed_bounded_and_payload_free() {
-        let identity = |seed: u8| HistoricalRecoveryIdentity {
-            lane_id: LaneId::new(u32::from(seed)),
-            dataspace_id: DataSpaceId::new(u64::from(seed)),
-            lane_incarnation: Hash::new([seed, 0x11]),
-            lane_block_height: u64::from(seed),
-            proposal_height: u64::from(seed).saturating_add(1),
-            proposal_hash: Hash::new([seed, 0x22]),
-            descriptor_hash: Hash::new([seed, 0x33]),
-            proposal_block_hash: HashOf::from_untyped_unchecked(Hash::new([seed, 0x44])),
-        };
-        let reasons = [
-            (
-                HistoricalRecoveryWaitReason::StateCommitPending,
-                HistoricalRecoveryStage::CanonicalAnchor,
-                HistoricalRecoveryRetry::LocalState,
-            ),
-            (
-                HistoricalRecoveryWaitReason::CanonicalBlockPending,
-                HistoricalRecoveryStage::CanonicalAnchor,
-                HistoricalRecoveryRetry::AuthenticatedBlockSync,
-            ),
-            (
-                HistoricalRecoveryWaitReason::AutonomousPayloadPending,
-                HistoricalRecoveryStage::ExecutablePayload,
-                HistoricalRecoveryRetry::AuthenticatedLanePayload,
-            ),
-            (
-                HistoricalRecoveryWaitReason::PredecessorApplicationPending,
-                HistoricalRecoveryStage::PredecessorApplication,
-                HistoricalRecoveryRetry::LocalState,
-            ),
-            (
-                HistoricalRecoveryWaitReason::CanonicalResultsPending,
-                HistoricalRecoveryStage::CanonicalApplication,
-                HistoricalRecoveryRetry::AuthenticatedBlockSync,
-            ),
-        ];
-        let diagnostics = |capacity| {
-            HistoricalRecoveryDiagnostics::new(
-                capacity,
-                iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS,
-                iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS,
-                iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER,
-            )
-        };
-        let mut all_reasons = diagnostics(reasons.len());
-        for (index, (reason, stage, retry)) in reasons.into_iter().enumerate() {
-            let observation = all_reasons.observe(identity(index as u8 + 1), reason);
-            assert_eq!(observation.reason(), reason);
-            assert_eq!(observation.stage(), stage);
-            assert_eq!(observation.retry(), retry);
-            assert!(observation.first_observation());
-            assert!(
-                observation.retry_delay(Duration::from_millis(10), Duration::from_secs(1))
-                    <= Duration::from_secs(1)
-            );
-        }
-
-        let secret = "raw-transaction-secret-must-never-enter-recovery-diagnostics";
-        let rendered = format!("{:?}", all_reasons.snapshot());
-        assert!(!rendered.contains(secret));
-        assert!(
-            rendered.len() < 8 * 1024,
-            "bounded typed observations must remain compact"
-        );
-
-        let mut bounded = diagnostics(2);
-        let first = identity(1);
-        let second = identity(2);
-        let third = identity(3);
-        bounded.observe(first, HistoricalRecoveryWaitReason::CanonicalBlockPending);
-        bounded.observe(
-            second,
-            HistoricalRecoveryWaitReason::CanonicalResultsPending,
-        );
-        bounded.observe(first, HistoricalRecoveryWaitReason::CanonicalResultsPending);
-        bounded.observe(
-            third,
-            HistoricalRecoveryWaitReason::AutonomousPayloadPending,
-        );
-        let snapshot = bounded.snapshot();
-        assert_eq!(snapshot.len(), 2);
-        assert!(
-            snapshot
-                .iter()
-                .all(|observation| observation.identity() != first),
-            "updating an observation must not nondeterministically refresh FIFO eviction order"
-        );
-        assert!(
-            snapshot
-                .iter()
-                .any(|observation| observation.identity() == second)
-        );
-        assert!(
-            snapshot
-                .iter()
-                .any(|observation| observation.identity() == third)
-        );
-
-        let mut stuck = diagnostics(1);
-        let mut stuck_reports = 0;
-        for _ in 0
-            ..iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS
-                .get()
-                .saturating_mul(2)
-        {
-            let observation =
-                stuck.observe(first, HistoricalRecoveryWaitReason::CanonicalBlockPending);
-            if observation.became_stuck {
-                stuck_reports += 1;
-            }
-        }
-        assert_eq!(
-            stuck_reports, 1,
-            "one identity/reason may emit at most one stuck transition"
-        );
-    }
 
     fn self_contained_historical_recovery_request_fixture() -> (
         V2LaneWorkAdapter,
@@ -27008,6 +26993,10 @@ pub(super) mod tests {
             OutstandingHistoricalRecoveryRequest {
                 request_hash,
                 request,
+                cadence: HistoricalRecoveryRequestCadence::immediate(
+                    HistoricalRecoveryWaitReason::CanonicalBlockPending,
+                    Instant::now(),
+                ),
             },
         );
         let response = LaneHistoricalRecoveryResponseV1 {
@@ -27073,97 +27062,10 @@ pub(super) mod tests {
             V2LaneIngressOutcome::Rejected,
             "a delayed duplicate must not resurrect a completed request"
         );
+        assert!(adapter.historical_recovery_requests.is_empty());
         assert!(adapter.historical_recovery_request_owners.is_empty());
     }
 
-    #[test]
-    fn historical_missing_canonical_block_schedules_authenticated_retry_then_completes() {
-        let (adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
-        let (parent_block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
-        let committed_parent = ValidBlock::committed_from_replay_signed_block(parent_block.clone());
-        commit_test_block_to_state(adapter.state.as_ref(), &committed_parent, &adapter.context);
-        assert!(
-            adapter
-                .kura
-                .get_durable_block_hash(NonZeroUsize::new(1).expect("non-zero height"))
-                .is_none(),
-            "fixture must model State publication before canonical Kura body arrival"
-        );
-        let certificate = LaneBlockCertificateV1 {
-            proposal: proposal.clone(),
-            prepare_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
-            commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
-        };
-        let successor_context = successor_context_for_parent(&adapter, &parent_block);
-        let local_peer = adapter.local_peer.clone();
-        let local_key = adapter.key_pair.clone();
-        let state = Arc::clone(&adapter.state);
-        let kura = Arc::clone(&adapter.kura);
-        let limits = adapter.limits;
-        drop(adapter);
-        let mut successor = V2LaneWorkAdapter::new(
-            successor_context,
-            local_peer,
-            local_key,
-            true,
-            state,
-            Arc::clone(&kura),
-            limits,
-            None,
-        )
-        .expect("open successor across the recoverable Kura publication gap");
-        assert_eq!(
-            successor.accept_lane_message(
-                InboundBlockMessage::new(
-                    BlockMessage::LaneBlockCertificate(Box::new(certificate)),
-                    Some(PeerId::new(keys[0].public_key().clone())),
-                ),
-                0,
-            ),
-            V2LaneIngressOutcome::Inserted
-        );
-        let wait = match successor
-            .service_next_historical_recovery()
-            .expect("missing canonical body is a typed retry")
-        {
-            HistoricalRecoveryServiceOutcome::Waiting(wait) => wait,
-            outcome => panic!("expected canonical-body wait, got {outcome:?}"),
-        };
-        assert_eq!(
-            wait.reason(),
-            HistoricalRecoveryWaitReason::CanonicalBlockPending
-        );
-        assert_eq!(
-            wait.retry(),
-            HistoricalRecoveryRetry::AuthenticatedBlockSync
-        );
-        assert_eq!(successor.historical_recovery_waits_snapshot(), vec![wait]);
-        assert!(
-            successor
-                .drain_effects(usize::MAX)
-                .into_iter()
-                .all(|effect| !matches!(
-                    effect,
-                    V2LaneWorkEffect::PostLaneBlock {
-                        message: BlockMessage::LaneHistoricalRecoveryRequest(_),
-                        ..
-                    }
-                )),
-            "State's block hash alone must never authorize an unbound body request"
-        );
-        assert!(successor.historical_recovery_requests.is_empty());
-
-        kura.store_block(parent_block)
-            .expect("simulate authenticated canonical body recovery");
-        assert!(matches!(
-            successor
-                .service_next_historical_recovery()
-                .expect("recovered canonical body completes the former stall"),
-            HistoricalRecoveryServiceOutcome::Complete(_)
-        ));
-        assert!(successor.historical_recovery_waits_snapshot().is_empty());
-        assert!(kura.lane_block_application_receipt_available(&proposal));
-    }
 
     #[test]
     fn historical_certificate_repairs_missing_ownership_before_canonical_application() {

@@ -1008,14 +1008,16 @@ impl Kura {
             }
         }
 
-        let native_manifest =
-            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(block)
-                .map_err(|error| {
-                    Self::invalid_lane_artifact_error(
-                        PathBuf::from(NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX),
-                        format!("cannot account Native AMX application manifest: {error}"),
-                    )
-                })?;
+        let native_manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
+            block,
+            merge_entry,
+        )
+        .map_err(|error| {
+            Self::invalid_lane_artifact_error(
+                PathBuf::from(NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX),
+                format!("cannot account Native AMX application manifest: {error}"),
+            )
+        })?;
         let native_artifacts = native_amx_participant_application_artifacts(
             &native_manifest,
             native_amx_participant_application_finality_placeholder_hash(),
@@ -1053,5 +1055,84 @@ impl Kura {
             }
         }
         Ok(total)
+    }
+
+    fn native_amx_manifest_for_committed_block(
+        &self,
+        block: &SignedBlock,
+        merge_association: NativeAmxMergeAssociation<'_>,
+        finality: &V2FinalityArtifact,
+    ) -> Result<crate::sumeragi::exec::NativeAmxApplicationManifestV1> {
+        let committed_merge_entry = self.associated_merge_entry_for_block(block)?;
+        let planned_merge_entry = match merge_association {
+            NativeAmxMergeAssociation::Live(staged)
+            | NativeAmxMergeAssociation::Startup(staged) => staged,
+            NativeAmxMergeAssociation::CommittedOnly => None,
+        };
+        if let Some(planned) = planned_merge_entry {
+            let record = Self::carrier_record_for_block_entry(block, planned)?;
+            Self::validate_merge_carrier_finality_projection(
+                record,
+                planned,
+                block.header(),
+                finality,
+            )?;
+            if committed_merge_entry
+                .as_ref()
+                .is_some_and(|committed| committed != planned)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "Native AMX planned merge entry differs from its committed association",
+                ));
+            }
+        }
+        let merge_entry = match merge_association {
+            NativeAmxMergeAssociation::Live(staged)
+                if Self::block_merge_reference(block).is_some() =>
+            {
+                let staged = staged.ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        self.store_root.clone(),
+                        "live Native AMX merge publication lacks its staged association witness",
+                    )
+                })?;
+                let committed = committed_merge_entry.as_ref().ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        self.store_root.clone(),
+                        "live Native AMX merge publication lacks its committed association",
+                    )
+                })?;
+                if committed != staged {
+                    return Err(Self::invalid_lane_artifact_error(
+                        self.store_root.clone(),
+                        "live Native AMX staged merge entry differs from its committed association",
+                    ));
+                }
+                Some(committed)
+            }
+            NativeAmxMergeAssociation::Live(_) | NativeAmxMergeAssociation::CommittedOnly => {
+                committed_merge_entry.as_ref()
+            }
+            NativeAmxMergeAssociation::Startup(planned) => {
+                committed_merge_entry.as_ref().or(planned)
+            }
+        };
+        if Self::block_merge_reference(block).is_some() && merge_entry.is_none() {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "Native AMX application block lacks its committed merge association",
+            ));
+        }
+        crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
+            block,
+            merge_entry,
+        )
+        .map_err(|error| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                format!("Native AMX application manifest construction failed: {error}"),
+            )
+        })
     }
 }

@@ -8,11 +8,12 @@ use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree};
 use iroha_data_model::{
     block::{
         SignedBlock,
-        consensus::{LaneBlockCommitment, LaneBlockProposalV1},
+        consensus::{LaneBlockCommitment, LaneBlockProposalV1, NativeAmxReceipt},
         consensus_v2 as wire,
     },
+    merge::MergeLedgerEntry,
     nexus::{DataSpaceId, LaneId},
-    transaction::signed::TransactionResult,
+    transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
 
 use super::{
@@ -45,6 +46,182 @@ struct NativeAmxApplicationGroup {
     settlement_source_ids: Vec<[u8; Hash::LENGTH]>,
     members: Vec<wire::NativeAmxApplicationManifestMemberV1>,
     results: Vec<TransactionResult>,
+}
+
+#[derive(Clone, Debug)]
+struct NativeAmxApplicationSource {
+    entrypoint_index: u64,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    result: TransactionResult,
+    receipt: NativeAmxReceipt,
+    finality_bound_merge: bool,
+}
+
+fn ordinary_native_amx_application_sources(
+    block: &SignedBlock,
+) -> Result<Vec<NativeAmxApplicationSource>, String> {
+    let Some(bundle) = block.execution_context() else {
+        return Ok(Vec::new());
+    };
+    if !bundle
+        .external
+        .iter()
+        .any(|context| context.native_amx_receipt.is_some())
+    {
+        return Ok(Vec::new());
+    }
+
+    let entrypoints = block.external_entrypoints_cloned().collect::<Vec<_>>();
+    let results = block.results().cloned().collect::<Vec<_>>();
+    let expected_result_root = block.result_hashes().collect::<MerkleTree<_>>().root();
+    if bundle.external.len() != entrypoints.len()
+        || results.len() < bundle.external.len()
+        || block.header().result_merkle_root() != expected_result_root
+    {
+        return Err("Native AMX application block result/context alignment is invalid".to_owned());
+    }
+
+    bundle
+        .external
+        .iter()
+        .enumerate()
+        .filter_map(|(index, context)| {
+            context
+                .native_amx_receipt
+                .as_ref()
+                .map(|receipt| (index, context, receipt))
+        })
+        .map(|(index, context, receipt)| {
+            let entrypoint = entrypoints.get(index).ok_or_else(|| {
+                "Native AMX application block is missing its canonical entrypoint".to_owned()
+            })?;
+            if entrypoint.hash() != context.entrypoint_hash {
+                return Err(
+                    "Native AMX execution context does not identify its canonical entrypoint"
+                        .to_owned(),
+                );
+            }
+            let result = results.get(index).cloned().ok_or_else(|| {
+                "Native AMX application block is missing a committed transaction result".to_owned()
+            })?;
+            Ok(NativeAmxApplicationSource {
+                entrypoint_index: u64::try_from(index).map_err(|_| {
+                    "Native AMX entrypoint index does not fit the canonical manifest".to_owned()
+                })?,
+                entrypoint_hash: context.entrypoint_hash,
+                result,
+                receipt: receipt.clone(),
+                finality_bound_merge: false,
+            })
+        })
+        .collect()
+}
+
+fn merge_native_amx_application_sources(
+    block: &SignedBlock,
+    entry: &MergeLedgerEntry,
+) -> Result<Vec<NativeAmxApplicationSource>, String> {
+    let bundle = block.execution_context().ok_or_else(|| {
+        "Native AMX merge application block lacks its certified execution context".to_owned()
+    })?;
+    let reference = bundle.merge_entry.as_ref().ok_or_else(|| {
+        "Native AMX merge application block lacks its certified merge reference".to_owned()
+    })?;
+    if !reference.matches_entry(entry) {
+        return Err(
+            "Native AMX merge application source differs from its certified merge reference"
+                .to_owned(),
+        );
+    }
+    if entry.merge_qc.carrier_height != block.header().height().get()
+        || block.header().prev_block_hash() != Some(entry.merge_qc.carrier_parent_hash)
+        || entry.merge_qc.view != block.header().view_change_index()
+    {
+        return Err(
+            "Native AMX merge application source is not bound to this carrier round".to_owned(),
+        );
+    }
+    let Some(batch) = entry.execution_batch.as_ref() else {
+        return ordinary_native_amx_application_sources(block);
+    };
+    if !bundle.external.is_empty() || block.external_entrypoints_cloned().next().is_some() {
+        return Err(
+            "Native AMX merge application carrier duplicates certified external content"
+                .to_owned(),
+        );
+    }
+    if batch.application_block_header
+        != crate::merge::merge_application_header_from_carrier(block.header())
+    {
+        return Err(
+            "Native AMX merge application batch belongs to another carrier context".to_owned(),
+        );
+    }
+    if batch.lanes.is_empty() || !crate::merge::merge_execution_batch_commitments_match(batch) {
+        return Err("Native AMX merge application batch commitments are invalid".to_owned());
+    }
+
+    let mut sources = Vec::new();
+    let mut entrypoint_index = 0_u64;
+    for execution in &batch.lanes {
+        if execution.entrypoints.len() != execution.entrypoint_hashes.len()
+            || execution.results.len() != execution.entrypoints.len()
+            || execution.result_hashes.len() != execution.results.len()
+            || execution.native_amx_receipts.len() != execution.entrypoints.len()
+        {
+            return Err(
+                "Native AMX merge application source vectors are not exactly aligned".to_owned(),
+            );
+        }
+        for (((entrypoint, expected_entrypoint_hash), result), (expected_result_hash, receipt)) in
+            execution
+                .entrypoints
+                .iter()
+                .zip(&execution.entrypoint_hashes)
+                .zip(&execution.results)
+                .zip(
+                    execution
+                        .result_hashes
+                        .iter()
+                        .zip(&execution.native_amx_receipts),
+                )
+        {
+            let canonical_entrypoint_hash = entrypoint.hash();
+            if Hash::from(canonical_entrypoint_hash) != *expected_entrypoint_hash
+                || Hash::from(result.hash()) != *expected_result_hash
+            {
+                return Err(
+                    "Native AMX merge application source hash alignment is invalid".to_owned(),
+                );
+            }
+            if let Some(receipt) = receipt {
+                sources.push(NativeAmxApplicationSource {
+                    entrypoint_index,
+                    entrypoint_hash: canonical_entrypoint_hash,
+                    result: result.clone(),
+                    receipt: receipt.clone(),
+                    finality_bound_merge: true,
+                });
+            }
+            entrypoint_index = entrypoint_index.checked_add(1).ok_or_else(|| {
+                "Native AMX merge application entrypoint index overflow".to_owned()
+            })?;
+        }
+    }
+    if entrypoint_index != batch.entrypoint_count {
+        return Err("Native AMX merge application entrypoint count is invalid".to_owned());
+    }
+    Ok(sources)
+}
+
+fn canonical_native_amx_application_sources(
+    block: &SignedBlock,
+    merge_entry: Option<&MergeLedgerEntry>,
+) -> Result<Vec<NativeAmxApplicationSource>, String> {
+    merge_entry.map_or_else(
+        || ordinary_native_amx_application_sources(block),
+        |entry| merge_native_amx_application_sources(block, entry),
+    )
 }
 
 /// Full deterministic projection behind one Native AMX manifest leaf.
@@ -81,73 +258,46 @@ impl NativeAmxApplicationManifestV1 {
         }
     }
 
-    /// Derive the exact manifest from one deterministic result-bearing block.
+    /// Derive the exact manifest from ordinary external receipts in one
+    /// deterministic result-bearing block.
     ///
     /// Same-route coordinator legs are deliberately excluded by the shared
     /// Native AMX role classifier. Every separate participant route appears at
     /// most once and its source/result members retain canonical block order.
+    #[cfg(test)]
     pub(crate) fn from_result_bearing_block(block: &SignedBlock) -> Result<Self, String> {
+        Self::from_result_bearing_block_and_merge_entry(block, None)
+    }
+
+    /// Derive the exact manifest from ordinary block receipts or the exact
+    /// finality-bound autonomous execution batch carried by `merge_entry`.
+    pub(crate) fn from_result_bearing_block_and_merge_entry(
+        block: &SignedBlock,
+        merge_entry: Option<&MergeLedgerEntry>,
+    ) -> Result<Self, String> {
         let executed_block_wire = block
             .encode_wire()
             .map_err(|error| format!("canonical executed block cannot be encoded: {error}"))?;
         let executed_block_wire_len = u64::try_from(executed_block_wire.len())
             .map_err(|_| "canonical executed block length does not fit u64".to_owned())?;
         let executed_block_wire_hash = Hash::new(&executed_block_wire);
-        let Some(bundle) = block.execution_context() else {
+        let sources = canonical_native_amx_application_sources(block, merge_entry)?;
+        if sources.is_empty() {
             return Ok(Self::empty(
                 executed_block_wire_len,
                 executed_block_wire_hash,
             ));
-        };
-        if !bundle
-            .external
-            .iter()
-            .any(|context| context.native_amx_receipt.is_some())
-        {
-            return Ok(Self::empty(
-                executed_block_wire_len,
-                executed_block_wire_hash,
-            ));
-        }
-
-        let entrypoints = block.external_entrypoints_cloned().collect::<Vec<_>>();
-        let results = block.results().cloned().collect::<Vec<_>>();
-        let expected_result_root = block.result_hashes().collect::<MerkleTree<_>>().root();
-        if bundle.external.len() != entrypoints.len()
-            || results.len() < bundle.external.len()
-            || block.header().result_merkle_root() != expected_result_root
-        {
-            return Err(
-                "Native AMX application block result/context alignment is invalid".to_owned(),
-            );
         }
 
         let application_block_height = block.header().height().get();
         let application_block_hash = block.hash();
-        let mut groups = BTreeMap::<(LaneId, DataSpaceId, Hash), NativeAmxApplicationGroup>::new();
-        for (index, context) in bundle.external.iter().enumerate() {
-            let Some(native_receipt) = context.native_amx_receipt.as_ref() else {
-                continue;
-            };
-            let entrypoint = entrypoints.get(index).ok_or_else(|| {
-                "Native AMX application block is missing its canonical entrypoint".to_owned()
-            })?;
-            if entrypoint.hash() != context.entrypoint_hash {
-                return Err(
-                    "Native AMX execution context does not identify its canonical entrypoint"
-                        .to_owned(),
-                );
-            }
-            let result = results.get(index).cloned().ok_or_else(|| {
-                "Native AMX application block is missing a committed transaction result".to_owned()
-            })?;
-            let entrypoint_index = u64::try_from(index).map_err(|_| {
-                "Native AMX entrypoint index does not fit the canonical manifest".to_owned()
-            })?;
-
-            for leg in &native_receipt.legs {
+        let mut route_heights = BTreeMap::<(LaneId, DataSpaceId, Hash), u64>::new();
+        let mut groups =
+            BTreeMap::<(LaneId, DataSpaceId, Hash, u64), NativeAmxApplicationGroup>::new();
+        for source in sources {
+            for leg in &source.receipt.legs {
                 match crate::native_amx::native_amx_participant_application_role(
-                    native_receipt,
+                    &source.receipt,
                     leg,
                 ) {
                     Ok(crate::native_amx::NativeAmxParticipantApplicationRole::Coordinator) => {
@@ -167,12 +317,18 @@ impl NativeAmxApplicationManifestV1 {
                 let descriptor = &leg.participant_proposal.descriptor;
                 let prepare = &leg.prepare_qc.body;
                 let commit = &leg.commit_qc.body;
-                if descriptor.proposal_height != application_block_height
-                    || native_receipt.authority_context_height != application_block_height
-                    || prepare.source_id != native_receipt.source_id
-                    || commit.source_id != native_receipt.source_id
-                    || prepare.tx_entrypoint_hash != context.entrypoint_hash
-                    || commit.tx_entrypoint_hash != context.entrypoint_hash
+                let authority_context_height = source.receipt.authority_context_height;
+                // A certified lane source may wait for a later merge carrier;
+                // an ordinary external receipt is created by this exact block.
+                if descriptor.proposal_height != authority_context_height
+                    || (!source.finality_bound_merge
+                        && authority_context_height != application_block_height)
+                    || (source.finality_bound_merge
+                        && authority_context_height > application_block_height)
+                    || prepare.source_id != source.receipt.source_id
+                    || commit.source_id != source.receipt.source_id
+                    || prepare.tx_entrypoint_hash != source.entrypoint_hash
+                    || commit.tx_entrypoint_hash != source.entrypoint_hash
                     || prepare.participant_proposal_hash != leg.participant_proposal.proposal_hash
                     || commit.participant_proposal_hash != leg.participant_proposal.proposal_hash
                     || prepare.participant_settlement_commitment
@@ -212,7 +368,7 @@ impl NativeAmxApplicationManifestV1 {
                             || !receipt.xor_due.is_zero()
                             || !receipt.xor_after_haircut.is_zero()
                             || !receipt.xor_variance.is_zero()
-                            || receipt.timestamp_ms != application_block_height
+                            || receipt.timestamp_ms != authority_context_height
                     })
                 {
                     return Err(
@@ -225,7 +381,18 @@ impl NativeAmxApplicationManifestV1 {
                     descriptor.lane_id,
                     descriptor.dataspace_id,
                     descriptor.lane_incarnation,
+                    descriptor.lane_block_height,
                 );
+                let route = (key.0, key.1, key.2);
+                if route_heights
+                    .insert(route, descriptor.lane_block_height)
+                    .is_some_and(|height| height != descriptor.lane_block_height)
+                {
+                    return Err(
+                        "Native AMX participant route carries more than one height in one application block"
+                            .to_owned(),
+                    );
+                }
                 let settlement_source_ids = settlement
                     .receipts
                     .iter()
@@ -253,7 +420,7 @@ impl NativeAmxApplicationManifestV1 {
                 if group
                     .members
                     .iter()
-                    .any(|member| member.source_id == native_receipt.source_id)
+                    .any(|member| member.source_id == source.receipt.source_id)
                 {
                     return Err(
                         "Native AMX participant control repeats a source transaction".to_owned(),
@@ -262,12 +429,12 @@ impl NativeAmxApplicationManifestV1 {
                 group
                     .members
                     .push(wire::NativeAmxApplicationManifestMemberV1 {
-                        entrypoint_index,
-                        source_id: native_receipt.source_id,
-                        entrypoint_hash: context.entrypoint_hash,
-                        result_hash: result.hash(),
+                        entrypoint_index: source.entrypoint_index,
+                        source_id: source.receipt.source_id,
+                        entrypoint_hash: source.entrypoint_hash,
+                        result_hash: source.result.hash(),
                     });
-                group.results.push(result.clone());
+                group.results.push(source.result.clone());
             }
         }
 

@@ -66,6 +66,7 @@ DEFAULT_TRACKED_FIXTURE = (
     / "fixtures"
     / "sorafs_register_pin_manifest_multi_peer_parity_v1.json"
 )
+DEFAULT_CARGO_PROXY = REPO_ROOT / "scripts" / "sumeragi_v2_release_cargo_proxy.sh"
 CODEGEN_PATH_DIAGNOSTIC = (
     "SoraFS Android codegen fixture paths must not contain secret-looking, "
     "control-character, parent, current, drive-prefix, or platform-specific "
@@ -345,6 +346,7 @@ def run_manifest_builder(
         cargo_bin,
         "run",
         "--locked",
+        "--offline",
         "--quiet",
         "-p",
         "sorafs_car",
@@ -363,6 +365,33 @@ def run_manifest_builder(
         f"--manifest-out={manifest_out}",
     ]
     subprocess.run(cmd, check=True, cwd=REPO_ROOT)
+
+
+def require_policy_cargo_proxy(value: Path) -> str:
+    """Require the source-bound shared-policy proxy, with no caller override."""
+
+    candidate = Path(value)
+    try:
+        expected = DEFAULT_CARGO_PROXY.resolve(strict=True)
+        metadata = candidate.lstat()
+        resolved = candidate.resolve(strict=True)
+    except OSError as error:
+        raise ValueError("Android codegen Cargo policy proxy is unavailable") from error
+    if (
+        not candidate.is_absolute()
+        or candidate != expected
+        or resolved != expected
+        or stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or metadata.st_uid != os.getuid()
+        or metadata.st_mode & 0o022
+        or not metadata.st_mode & 0o100
+    ):
+        raise ValueError(
+            "Android codegen Cargo executable must be the exact source-bound policy proxy"
+        )
+    return str(expected)
 
 
 def require_generated_council_signature(manifest_report: dict) -> None:
@@ -455,8 +484,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--cargo-bin",
-        default=os.environ.get("CARGO_BIN", "cargo"),
-        help="Cargo binary to invoke (defaults to `cargo`).",
+        type=Path,
+        default=DEFAULT_CARGO_PROXY,
+        help="Policy-enforcing Cargo proxy to invoke.",
     )
     args = parser.parse_args(argv)
 
@@ -510,6 +540,11 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as error:
         raise SystemExit(str(error)) from error
 
+    try:
+        cargo_proxy = require_policy_cargo_proxy(args.cargo_bin)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+
     report_path = args.report_dir / f"{fixture_name}.json"
 
     temporary_root_errors: list[str] = []
@@ -527,7 +562,7 @@ def main(argv: list[str] | None = None) -> int:
         tmp_council_signing_seed = Path(tmpdir) / "council-signing.seed"
         write_test_council_signing_seed(tmp_council_signing_seed)
         run_manifest_builder(
-            args.cargo_bin,
+            cargo_proxy,
             payload_path,
             plan_path,
             profile_handle,

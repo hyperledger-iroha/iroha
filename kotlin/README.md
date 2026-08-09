@@ -80,6 +80,33 @@ contradictory verification responses, and Merkle paths whose direction/length
 does not match the advertised bundle location. Requests are capped at 64 KiB
 and buffered responses at 8 MiB.
 
+### Authoritative Sumeragi status and operational diagnostics
+
+`HttpClientTransport.getSumeragiStatus()` reads only
+`GET /v1/sumeragi/status` into the closed protocol-v4
+`SumeragiV2Status` model. `getSumeragiDiagnostics()` separately reads
+`GET /v1/sumeragi/diagnostics` into `SumeragiDiagnosticsStatus`; diagnostics
+are durable operational evidence and must not be treated as consensus
+authority.
+
+```kotlin
+val status = transport.getSumeragiStatus().join()
+check(status.protocolVersion == 4)
+println("height=${status.height} view=${status.view} leader=${status.leader}")
+
+val diagnostics = transport.getSumeragiDiagnostics().join()
+diagnostics.nativeAmxParticipantApplications.forEach { row ->
+    println("lane=${row.laneId} height=${row.participantHeight} state=${row.state}")
+}
+```
+
+Every JSON `u64` remains lossless as `BigInteger`. Status responses are capped
+at 1 MiB and diagnostics at 16 MiB; both routes require the exact JSON content
+type, a canonical matching `Content-Length` when supplied, fatal UTF-8, closed
+fields and tags, and current Native AMX V2 evidence. The parsers reject
+status/diagnostics swaps, legacy receipt shapes, unordered or oversized Native
+participant rows, and inconsistent carrier identities.
+
 ### Offline peer transports
 
 `core-jvm` owns the portable IPM1 wire, bounded multi-stream IQR1 scanner,

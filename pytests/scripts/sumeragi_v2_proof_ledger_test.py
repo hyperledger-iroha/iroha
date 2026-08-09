@@ -85,7 +85,7 @@ def checker_source_paths() -> tuple[Path, ...]:
 
     module = load_checker()
     filenames = tuple(module._CHECKER_COMPONENT_FILES)
-    assert len(filenames) == len(set(filenames)) == 22
+    assert len(filenames) == len(set(filenames)) == 25
     return (SCRIPT, *(SCRIPT.with_name(filename) for filename in filenames))
 
 
@@ -9735,6 +9735,8 @@ def test_effect_capacity_production_source_fidelity_is_green(tmp_path: Path) -> 
             | AdapterEffect::Apply { .. } => Some(false),""",
             "closed retry policy must classify",
         ),
+        ("plan_body_pipeline_candidate_terminal", "SerializedV2Runtime::plan_body_pipeline_candidate_terminal(self, effect, ownership)", "Ok(None)", "production EffectRuntime body-terminal plan delegation"),
+        ("commit_body_pipeline_candidate_terminals", "SerializedV2Runtime::commit_body_pipeline_candidate_terminals(self, terminals)", "Ok(())", "production EffectRuntime atomic body-terminal commit delegation"),
         (
             "retained_candidate_owners",
             "Some(existing) if existing != ownership => Err(",
@@ -9907,6 +9909,7 @@ def test_effect_capacity_production_source_fidelity_rejects_semantic_mutants(
     effects_path = repo_root / "crates/iroha_core/src/sumeragi/v2_effects.rs"
     source = effects_path.read_text(encoding="utf-8")
     items = module.rust_items(source, item_name)
+    if item_name in {"plan_body_pipeline_candidate_terminal", "commit_body_pipeline_candidate_terminals"}: items = [item for item in items if item.brace_context == (("impl", "EffectRuntime", "for", "SerializedV2Runtime"),)]
     assert len(items) == 1
     item = items[0]
     assert item.source.count(old) == 1, (item_name, old)
@@ -10075,8 +10078,8 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
         (
             "semantic_identity",
             _RUNTIME_STATEMENT_IMPL,
-            "    identity\n}",
-            "    append_runtime_identity_field(&mut identity, b\"local-route\");\n    identity\n}",
+            "        identity\n    }",
+            "        append_runtime_identity_field(&mut identity, b\"local-route\");\n        identity\n    }",
             "candidate semantic identity must encode exactly the frozen six-coordinate statement under the v2 domain",
         ),
         (
@@ -10127,24 +10130,10 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
         (
             "production_adapter_effect_candidate_statement",
             (),
-            """            RuntimeCandidateSemanticStatement::new(
-                *round,
-                *round,
-                Some(*subject),
-                None,
-                None,
-            ),
-        ),
-        AdapterEffect::ValidateBody""",
-            """            RuntimeCandidateSemanticStatement::new(
-                *round,
-                *round,
-                None,
-                None,
-                None,
-            ),
-        ),
-        AdapterEffect::ValidateBody""",
+            """            RUNTIME_CANDIDATE_KIND_VALIDATE_BODY,
+            RuntimeCandidateSemanticStatement::new(*round, *round, Some(*subject), None, None),""",
+            """            RUNTIME_CANDIDATE_KIND_VALIDATE_BODY,
+            RuntimeCandidateSemanticStatement::new(*round, *round, None, None, None),""",
             "all eleven adapter-effect classes must map through the exact seven-candidate statement table",
         ),
         (
@@ -10221,7 +10210,7 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
         (
             "effect_candidate_semantic_binding",
             _RUNTIME_DRIVER_IMPL,
-            "production_adapter_effect_candidate_binding(effect, inherited)",
+            "production_adapter_effect_candidate_binding(effect, effective_inherited.as_ref())",
             "Ok(production_adapter_effect_candidate_statement(effect).map(|(kind, statement)| RuntimeEffectCandidateSemantic { kind, semantic_identity: statement.semantic_identity(), statement: Some(statement) }))",
             "production RuntimeDriver must route every candidate through the typed inheritance and refinement gate",
         ),
@@ -10239,13 +10228,8 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
             "projection.push(parts.effect_count);",
             "candidate binding projection must independently commit the typed statement before its semantic hash",
         ),
-        (
-            "projection_parts",
-            _RUNTIME_BINDING_IMPL,
-            "candidate_statement: self.candidate_statement,",
-            "candidate_statement: None,",
-            "candidate binding validation must borrow every immutable projection field exactly once",
-        ),
+        ("projection_parts", _RUNTIME_BINDING_IMPL, "candidate_statement: self.candidate_statement,", "candidate_statement: None,", "candidate binding validation must borrow every immutable projection field exactly once"),
+        ("adopt_effect_ownership", (("impl", "RuntimeBodyCompletionOwnershipPlan"),), "RuntimeEffectOwnership::inherited(self.retained_owner.clone())", "RuntimeEffectOwnership::inherited(incoming.owner().clone())", "body-terminal adoption must rebind the exact candidate and positions under the immutable incumbent owner"),
         (
             "new",
             _RUNTIME_BINDING_IMPL,
@@ -10305,8 +10289,8 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
         (
             "production_adapter_effect_candidate_trace_projection",
             (),
-            "binding.candidate_statement.as_ref(),",
-            "None,",
+            "binding.candidate_statement.as_ref())?",
+            "None)?",
             "effect-to-candidate refinement must recompute from the independently retained typed statement",
         ),
         (
@@ -10333,7 +10317,7 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
         (
             "enqueue_with_lifecycle_owner",
             _RUNTIME_SERIALIZED_IMPL,
-            "if self.owned_preflight_is_coalesced(tag, preflight, ownership)? {",
+            "if self.owned_preflight_is_coalesced(tag, &command, preflight, ownership)? {",
             "if preflight.is_coalescence() {",
             "owned causal successors must validate a retained coalescence owner before admission",
         ),
@@ -10357,29 +10341,30 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
         (
             "body_pipeline_completion_is_owned_by",
             _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
-            "retained.first() != Some(ownership.owner())",
-            "retained.first() == Some(ownership.owner())",
-            "in-flight body completion coalescence must join and compare its one exact runtime owner",
+            "let result = (plan.retained_owner.clone(), plan.effective_statement());",
+            "let result = (ownership.owner().clone(), ownership.candidate_semantic_statement());",
+            "in-flight body completion coalescence must return and commit its resolved exact runtime owner",
         ),
         (
             "resolve_body_pipeline_completion_owner",
-            _RUNTIME_SERIALIZED_IMPL,
+            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
             """                RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Stale => {
                     if retained_owner != *ownership.owner() {""",
             """                RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Stale => {
                     if false && retained_owner != *ownership.owner() {""",
             "same or stale terminal retries must reject a foreign owner while an authority upgrade remains separately reviewed",
         ),
+        ("body_pipeline_candidate_terminal_ownership_plan", _RUNTIME_PRODUCTION_SERIALIZED_IMPL, "if !ownership.exactly_binds_adapter_effect(effect) {", "if false && !ownership.exactly_binds_adapter_effect(effect) {", "body-terminal lookup must select exactly one authorized live or deferred owner without committing it"),
         (
             "plan_body_pipeline_candidate_terminal",
-            _RUNTIME_SERIALIZED_IMPL,
+            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
             ".map(|plan| plan.adopt_effect_ownership(effect, ownership))",
             ".map(|_| Ok(ownership.clone()))",
             "body-terminal plan must adopt the incumbent owner without committing runtime state",
         ),
         (
             "commit_body_pipeline_candidate_terminals",
-            _RUNTIME_SERIALIZED_IMPL,
+            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
             """            plans.push(plan);
         }
         let prepared = self
@@ -10396,11 +10381,12 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
         Ok(())""",
             "body-terminal batch commit must revalidate every target, prepare atomically, and then commit the checked authorities",
         ),
+        ("commit_body_pipeline_candidate_terminal", _RUNTIME_PRODUCTION_SERIALIZED_IMPL, "self.commit_body_pipeline_candidate_terminals(&[(effect, ownership)])", "Ok(())", "single body-terminal commit must delegate to the atomic batch boundary"),
         (
             "enqueue_body_pipeline_completion_with_owner",
             _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
-            "self.body_pipeline_completion_is_owned_by(tag, &evidence, ownership)?",
-            "self.body_pipeline_completion_is_owned(tag, &evidence)?",
+            ".body_pipeline_completion_is_owned_by(tag, &evidence, ownership)?",
+            ".body_pipeline_completion_is_owned(tag, &evidence)?",
             "owned body-completion retries must compare the incumbent before queue coalescence",
         ),
         (
@@ -10426,7 +10412,7 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
             "a missing nonempty runtime effect sidecar must latch fail closed before returning",
         ),
         (
-            "validate_admission_identity",
+            "validate_cached_admission_identity",
             _RUNTIME_TAGGED_COMMAND_IMPL,
             "statement.validate_exact() && statement.round.height == self.tag.height()",
             "statement.validate_exact()",
@@ -10463,14 +10449,14 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
         (
             "reserve_body_available_with_owner",
             _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
-            "ownership.candidate_semantic_statement(),",
-            "None,",
+            "let candidate_statement = ownership.candidate_semantic_statement();",
+            "let candidate_statement = None;",
             "owned BodyAvailable reservation must receive the incumbent effect statement",
         ),
         (
             "reserve_body_available_with_owner",
             _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
-            "if self.owned_preflight_is_coalesced(tag, preflight, ownership)? {",
+            "if self.owned_preflight_is_coalesced(tag, &command, preflight, ownership)? {",
             "if preflight.is_coalescence() {",
             "owned BodyAvailable tombstone coalescence must pass the exact retained-owner gate",
         ),
@@ -10559,11 +10545,11 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
             "live FIFO dispatch must recover the statement from the selected command",
         ),
         (
-            "step",
+            "finish_dispatched_step",
             _RUNTIME_SERIALIZED_IMPL,
             "effect_parent_statement.as_ref(),",
             "None,",
-            "live dispatch must pass the selected statement into successor effect binding",
+            "live finalization must pass the selected statement into successor effect binding",
         ),
     ),
 )
@@ -22084,7 +22070,7 @@ def test_terminal_authority_batch_commit_waits_for_complete_macro_step_after_dig
         ),
         (
             "selected_serve_pacemaker",
-            "local_runner",
+            "timeout_vote_episode",
             "selected Serve must keep certificate escape inside",
         ),
         (
@@ -22123,7 +22109,7 @@ def test_run_inner_semantics_survive_all_pending_alias_digest_refreshes(
     """Every pending run-loop alias retains an independent semantic mutation."""
 
     module = load_checker()
-    formal_dir = local_runner_service_fixture(tmp_path, module)
+    formal_dir = pending_run_inner_fixture(tmp_path, module, checker_name)
     runner_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
     if mutation == "reply_route_geometry":
         mutate_rust_item_source(
@@ -22251,22 +22237,9 @@ def test_run_inner_semantics_survive_all_pending_alias_digest_refreshes(
     module._SERVICED_CANDIDATE_RUNNER_ITEM_SHA256["run_inner"] = digest
     module._SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256["run_inner"] = digest
 
-    if checker_name == "local_runner":
-        errors = module._local_runner_service_contract_source_fidelity_errors(
-            module.load_ledger(),
-            repo_root=tmp_path,
-            formal_dir=formal_dir,
-        )
-    elif checker_name == "retained_response":
-        errors = module._retained_response_escape_latch_source_fidelity_errors(
-            tmp_path
-        )
-    elif checker_name == "locked_body":
-        errors = module._locked_body_reproposal_source_fidelity_errors(
-            module.FORMAL_DIR, tmp_path
-        )
-    else:
-        errors = module._exact_output_production_source_fidelity_errors(tmp_path)
+    errors = pending_run_inner_source_fidelity_errors(
+        module, tmp_path, formal_dir, checker_name
+    )
 
     assert any(expected_error in error for error in errors), errors
 
@@ -22444,7 +22417,10 @@ def test_rollover_finalized_outputs_semantics_survive_pending_digest_refresh(
 
     module = load_checker()
     exact_output_production_fixture(tmp_path)
-    runner_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    runner_path = (
+        tmp_path
+        / "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs"
+    )
     mutate_rust_item_source(
         module,
         runner_path,
@@ -22543,7 +22519,7 @@ def test_rollover_runner_ack_inventory_is_exact_and_non_crashing(
         ),
         (
             "runner::HeightIngressBindings::new",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
             "new",
             (("impl", "HeightIngressBindings"),),
             "Self {\n            certified_serve,\n            leader_wire,\n        }",
@@ -22559,7 +22535,7 @@ def test_rollover_runner_ack_inventory_is_exact_and_non_crashing(
         ),
         (
             "runner::HeightIngressBindings::retire",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
             "retire",
             (("impl", "HeightIngressBindings"),),
             "self.certified_serve.gate = None;",
@@ -22568,7 +22544,7 @@ def test_rollover_runner_ack_inventory_is_exact_and_non_crashing(
         ),
         (
             "runner::HeightIngressBindings::drop",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
             "drop",
             (("impl", "Drop", "for", "HeightIngressBindings"),),
             "self.leader_wire.gate = None;",
@@ -22577,7 +22553,7 @@ def test_rollover_runner_ack_inventory_is_exact_and_non_crashing(
         ),
         (
             "runner::close_ingress_for_rollover",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
             "close_ingress_for_rollover",
             (),
             "ingress_ready.store(false, Ordering::Release);\n    block_ingress.close();",
@@ -39436,7 +39412,7 @@ del _proof_ledger_test_component
             "runner lane dispatch must apply writer receipts after complete and source-retained exact handoffs",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
             "fn rollover_finalized_height_outputs(",
             "let _ = retry_exact_output_and_apply_sidecar_admissions(\n"
             "        &mut lane_work,\n"
@@ -39504,21 +39480,21 @@ del _proof_ledger_test_component
             "late canonical lane hydration must retain the exact proposal as bounded recovery work",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
             "fn rollover_finalized_height_outputs(",
             "lane_work.persist_anchored_sessions()?;",
             "let _ = &lane_work;",
             "finalized output rollover must durably reconstruct every predecessor owner",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
             "fn rollover_finalized_height_outputs(",
             ".durable_lane_rollover_authority(artifact)?",
             "None",
             "finalized output rollover must durably reconstruct every predecessor owner",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
             "fn rollover_finalized_height_outputs(",
             "lane_work.retain_successor_owned_rollover_effects(artifact, &durable_lane_authority)?;",
             "lane_work.retain_successor_owned_rollover_effects(artifact, &durable_lane_authority.clone())?;",
@@ -40813,27 +40789,7 @@ def test_exact_output_production_source_mutations_fail_closed(
     error_fragment: str,
 ) -> None:
     module = load_checker()
-    for source_name in (
-        "crates/iroha_core/src/lib.rs",
-        "crates/iroha_core/src/merge_sidecar.rs",
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker/"
-            "exact_output_rollover_claim.rs"
-        ),
-        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "crates/iroha_core/src/sumeragi/mod.rs",
-        "crates/iroha_core/src/sumeragi/v2_effects.rs",
-        "crates/iroha_core/src/sumeragi/v2_core.rs",
-        "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
-        "crates/iroha_config/src/parameters/defaults.rs",
-        "crates/iroha_config/src/parameters/actual.rs",
-        "crates/iroha_config/src/parameters/user.rs",
-    ):
-        destination = tmp_path / source_name
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT_DIR / source_name, destination)
+    exact_output_production_fixture(tmp_path)
 
     path = tmp_path / relative_path
     source = path.read_text(encoding="utf-8")
@@ -41058,6 +41014,7 @@ def exact_output_production_fixture(tmp_path: Path) -> None:
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT_DIR / relative, destination)
+    copy_reviewed_rust_include_components(tmp_path)
 
 @pytest.mark.parametrize(
     ("relative", "old", "new", "expected_error"),

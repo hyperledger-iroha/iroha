@@ -42,9 +42,11 @@ deterministic archive replay, installation, rollback, yank, SBOM, zero
 critical/high vulnerability, OIDC identity, and cosign provenance checks for
 every target. Signed-manifest evidence must declare the governed Ed25519
 release signature algorithm (`ed25519`) and exact
-`external_ed25519_hsm` provider contract. The payload-free canary builder
+`authenticated_external_signer` provider plus `software` signing backend
+contract. The payload-free canary builder
 rejects unsupported `--signature-algorithm` values, legacy signer labels, and
-missing provider revisions before writing evidence JSON. The
+missing or non-software backends and provider revisions before writing evidence
+JSON. The
 `scripts/run_sorafs_reference_sdk_release_evidence.py` provides the reviewed
 collection planner/runner with dry-run `evidence_contract` output for each
 selected release evidence schema and required payload field. The JavaScript SDK
@@ -475,8 +477,9 @@ convert decoded or raw Norito payloads into the shared validation functions.
   smoke checks, records per-file, binary, FFI-header, archive, and manifest
   digests under an untracked output directory. It emits no signature or public
   key. The release coordinator adds every target manifest and checksum to the
-  final aggregate `release_manifest.json`; the governed PKCS#11/HSM signs that
-  one evidence-complete inventory externally, and the pinned native validator
+  final aggregate `release_manifest.json`; the governed authenticated external
+  software signer signs that one evidence-complete inventory, and the pinned
+  native validator
   verifies the raw Ed25519 signature and reviewed public-key fingerprint.
 - **CI guard:** PR checks can run `sorafs-validate bundle` and the cookbook
   script against committed fixtures; `ci/check_sorafs_reference_ffi_header.sh`
@@ -589,8 +592,9 @@ and the `release_manifest_digest_hex` it was built against.
   detached package-manifest signatures.
 - The reference production path adds the package manifest and checksums to the
   canonical aggregate `release_manifest.json` after every target and rollout
-  evidence input is final. The governed PKCS#11/HSM signer signs only those
-  final aggregate bytes through `scripts/release_manifest_signing.py`; the
+  evidence input is final. The governed authenticated external software signer
+  signs only those final aggregate bytes through
+  `scripts/release_manifest_signing.py`; the
   SHA256-pinned native `sorafs-validate release-manifest` verifier authenticates
   the raw signature and independently reviewed raw-key fingerprint.
 - The mandatory native release matrix is
@@ -639,8 +643,9 @@ targets, duplicate or unknown release-target entries, `target_count` values that
 match the unique target list, missing binary/archive checksums, missing
 deterministic-archive proof, tracked generated `dist/*` artifacts beyond
 `dist/.gitkeep`, unsigned or unverified release manifests, missing governed
-release-key fingerprints, non-external or unrevisioned HSM signing, exported
-private keys, incomplete five-target binary smoke/install/rollback/yank or
+release-key fingerprints, unauthenticated, non-software, or unrevisioned
+external signing, exported private keys, incomplete five-target binary
+smoke/install/rollback/yank or
 archive replay, missing per-target SBOMs, non-zero critical/high vulnerability
 counts, missing OIDC identity or cosign provenance verification, missing
 JavaScript/Python/Kotlin/JVM/Java Android/Swift/C# package publication evidence,
@@ -698,7 +703,8 @@ closed to unknown values,
 duplicate-free target/package inventories
 whose count fields match their unique entries, release-manifest digest bindings,
 positive integer threshold-reviewed smoke duration, signed-manifest policy
-digests, an explicit `external_ed25519_hsm` provider and positive revision,
+digests, an explicit `authenticated_external_signer` provider, exact `software`
+backend, and positive revision,
 governance approval policy and `--public-key-fingerprint-hex` inputs,
 governed-release approval markers, and checker-backed validation before
 atomically writing JSON without following output symlinks or output directories.
@@ -758,8 +764,8 @@ Implemented locally:
 - Release-packaging helper that stages binary/archive/manifest digests and
   unsigned package manifests under untracked
   `dist/sorafs-validate-release/`. It rejects retired per-package signature
-  inputs; the governed HSM signs the final aggregate release manifest
-  externally after every target and evidence input is fixed.
+  inputs; the governed authenticated external software signer signs the final
+  aggregate release manifest after every target and evidence input is fixed.
 - Published operator, metrics, and binding-generation guidance for packaging,
   telemetry extraction, C FFI header synchronization, downstream selector
   parity, and SF-11 release evidence handoff.

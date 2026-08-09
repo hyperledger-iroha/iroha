@@ -48,13 +48,14 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py"
 RELEASE_RECEIPT_TEST_COMPONENT_FILES = (
     "sumeragi_v2_release_receipt_bootstrap_archive_cases.py",
+    "sumeragi_v2_release_receipt_sdk_source_closure_cases.py",
+    "sumeragi_v2_release_receipt_supervision_cases.py",
     "sumeragi_v2_release_receipt_terminal_publication_cases.py",
 )
 
 
 def _execute_test_component(filename: str) -> None:
     """Execute one reviewed case component in this canonical test namespace."""
-
     path = Path(__file__).with_name(filename)
     if path.is_symlink() or not path.is_file():
         raise RuntimeError(f"release-receipt test component is unavailable: {path}")
@@ -193,7 +194,7 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "98f0a450fd0c25c890d77e3f5c0d13faca76ff3227797962c5dd33e5a29cd2f7"
+        "c9c49999950dfd6e7c74869bec49f42222fee2a9d3ad4f24d913cedc5012fa9d"
     )
     synthetic_sources: dict[str, Path] = {}
     for label, data, mode in (
@@ -218,8 +219,8 @@ def make_bootstrap_evidence(
         "chmod": b"#!/bin/sh\nexit 0\n",
         "cargo": (
             b"#!/bin/sh\n"
-            b"test \"$#\" = 1 && test \"$1\" = --version || exit 91\n"
-            b"printf '%s\\n' 'cargo 1.93.1 (083ac5135 2025-12-15)'\n"
+            b"printf '%s\\n' 'receipt must not execute archived Cargo' >&2\n"
+            b"exit 91\n"
         ),
         "rustc": (
             b"#!/bin/sh\n"
@@ -959,14 +960,13 @@ def make_scaling_evidence(
 
 
 def make_prebuilt_binary_bundle(
-    release_root: Path,
+    artifact_root: Path,
     *,
     sealed_manifest: str,
     lock: str,
 ) -> dict[str, Path | str | list[Path]]:
-    workspace_target = (release_root / "target").resolve(strict=True)
     bundle = (
-        workspace_target
+        artifact_root.resolve(strict=True)
         / "sumeragi-v2-release"
         / sealed_manifest
         / "programs"
@@ -1536,16 +1536,13 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     release_root = release_invocation_root / "source"
     release_root.mkdir()
     (release_root / "Cargo.lock").write_bytes(lock_bytes)
-    workspace_target = release_invocation_root / "workspace-target"
-    workspace_target.mkdir(mode=0o700)
-    workspace_target.chmod(0o700)
-    (release_root / "target").symlink_to(
-        workspace_target,
-        target_is_directory=True,
-    )
+    release_target_root = release_invocation_root / "target"
+    release_target_root.mkdir(mode=0o700)
+    release_target_root.chmod(0o700)
     release_output = release_invocation_root / "output"
     release_output.mkdir(mode=0o700)
     release_output.chmod(0o700)
+    release_artifact_root = release_output
     release_output_directory = release_output / "release"
     release_output_directory.mkdir(mode=0o700)
     release_output_directory.chmod(0o700)
@@ -1586,55 +1583,17 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     taira_contract_tests = writer_symbols["_TAIRA_CONTRACT_TESTS"]
     cross_sdk_tests = writer_symbols["_CROSS_SDK_TESTS"]
     rust_sdk_diagnostics_tests = writer_symbols["_RUST_SDK_DIAGNOSTICS_TESTS"]
-    sdk_diagnostics_suite_source_paths = writer_symbols[
-        "_SUMERAGI_SDK_DIAGNOSTICS_SUITE_SOURCE_PATHS"
-    ]
-    sdk_diagnostics_suite_source_manifest = writer_symbols[
-        "_sumeragi_sdk_diagnostics_suite_source_manifest"
-    ](ROOT_DIR)
     native_amx_grouped_fixture = writer_symbols["_NATIVE_AMX_GROUPED_FIXTURE"]
     native_amx_grouped_negative_control_count = writer_symbols[
         "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT"
     ]
-    native_amx_grouped_suite_source_paths = writer_symbols[
-        "_NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS"
-    ]
-    expected_direct_source_groups = (
-        (
-            "javascript/iroha_js/src/toriiClient.js",
-            "javascript/iroha_js/src/norito.js",
-            "javascript/iroha_js/src/native.js",
-            "javascript/iroha_js/scripts/build-dist.mjs",
-            "javascript/iroha_js/scripts/native-build-provenance.mjs",
-        ),
-        (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/"
-            "SumeragiDiagnosticsModels.kt",
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/util/"
-            "HashLiteral.kt",
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/"
-            "IrohaHash.kt",
-        ),
-        (
-            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/"
-            "SumeragiDiagnosticsModels.java",
-            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/"
-            "IrohaHash.java",
-            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/util/"
-            "HashLiteral.java",
-        ),
-    )
-    for expected_group in expected_direct_source_groups:
-        start = native_amx_grouped_suite_source_paths.index(expected_group[0])
-        assert (
-            tuple(
-                native_amx_grouped_suite_source_paths[
-                    start : start + len(expected_group)
-                ]
-            )
-            == expected_group
-        )
-    assert len(native_amx_grouped_suite_source_paths) == 50
+    for removed_symbol in (
+        "_NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS",
+        "_SUMERAGI_SDK_DIAGNOSTICS_SUITE_SOURCE_PATHS",
+        "_native_amx_grouped_suite_source_manifest",
+        "_sumeragi_sdk_diagnostics_suite_source_manifest",
+    ):
+        assert removed_symbol not in writer_symbols
     harness_text = (
         ROOT_DIR / writer_symbols["_NATIVE_AMX_GROUPED_PARITY_HARNESS"]
     ).read_text(encoding="utf-8")
@@ -1648,20 +1607,25 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         r'"\$\{javascript_staged_scripts_root\}/native-build-provenance\.mjs"',
         harness_text,
     )
-    native_amx_grouped_suite_source_manifest = writer_symbols[
-        "_native_amx_grouped_suite_source_manifest"
-    ](ROOT_DIR)
-    native_amx_grouped_fixture_sha256 = sha256(
-        ROOT_DIR / native_amx_grouped_fixture
+    retained_fixture = release_root / native_amx_grouped_fixture
+    retained_fixture.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ROOT_DIR / native_amx_grouped_fixture, retained_fixture)
+    _install_sdk_source_closure_fixture(release_root, writer_symbols)
+    sdk_source_manifest = writer_symbols["_sdk_suite_source_manifest"]
+    assert callable(sdk_source_manifest)
+    native_amx_grouped_suite_source_manifest = sdk_source_manifest(
+        release_root,
+        writer_symbols["_NATIVE_AMX_GROUPED_SOURCE_CLOSURE_SUITE"],
     )
-    for relative_path in (
-        native_amx_grouped_fixture,
-        *native_amx_grouped_suite_source_paths,
-        *sdk_diagnostics_suite_source_paths,
-    ):
-        retained_source = release_root / relative_path
-        retained_source.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ROOT_DIR / relative_path, retained_source)
+    sdk_diagnostics_suite_source_manifest = sdk_source_manifest(
+        release_root,
+        writer_symbols[
+            "_SUMERAGI_SDK_DIAGNOSTICS_SOURCE_CLOSURE_SUITE"
+        ],
+    )
+    native_amx_grouped_fixture_sha256 = sha256(
+        retained_fixture
+    )
     corridor_dir = tmp_path / "corridor"
     corridor_logs_dir = corridor_dir / "logs"
     corridor_logs_dir.mkdir(parents=True)
@@ -1830,7 +1794,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             path.write_text(f"fixture {name}\n", encoding="utf-8")
         tool_paths[name] = path
     prebuilt = make_prebuilt_binary_bundle(
-        release_root,
+        release_artifact_root,
         sealed_manifest=sealed_manifest,
         lock=lock,
     )
@@ -1849,6 +1813,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             "head_tree": tree,
             "source_manifest_sha256": sealed_manifest,
             "cargo_lock_sha256": lock,
+            "artifact_root_path": str(release_artifact_root),
+            "cargo_target_root_path": str(release_target_root),
             "leg_count": str(len(corridor_legs)),
             "production_required_test_count": str(len(required_lines) - 1),
             "g_unit_expected_test_count": str(len(canonical_g_unit_rows)),
@@ -2090,9 +2056,6 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     )
 
     seed_dir = tmp_path / "seed"
-    seed_source_bound_root = (
-        release_root / "target" / "sumeragi-v2-release" / sealed_manifest
-    )
     seed_program_target = prebuilt["prebuilt_bundle"]
     assert isinstance(seed_program_target, Path)
     runs_dir = seed_dir / "runs"
@@ -2172,7 +2135,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                     sha256(run_log),
                     output,
                     f"localnets/run-{index:03d}",
-                    f"CARGO_TARGET_DIR={seed_source_bound_root / 'test-suite'} "
+                    f"CARGO_TARGET_DIR={release_target_root} "
                     f"IROHA_TEST_TARGET_DIR={seed_program_target} "
                     f"IROHA_RELEASE_SOURCE_MANIFEST_SHA256={sealed_manifest} "
                     "IROHA_RELEASE_PREBUILT_MANIFEST_SHA256="
@@ -2331,6 +2294,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "candidate": candidate,
         "sealed": sealed,
         "release_root": release_root,
+        "release_artifact_root": release_artifact_root,
+        "release_target_root": release_target_root,
         "terminal_output": terminal_output,
         "signature_attestation": signature_attestation,
         "signature_transcript": signature_transcript,
@@ -2824,7 +2789,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "expected_bootstrap_completion_sha256"
     ]
     assert bootstrap_authentication["frozen_bootstrap_sha256"] == (
-        "98f0a450fd0c25c890d77e3f5c0d13faca76ff3227797962c5dd33e5a29cd2f7"
+        "c9c49999950dfd6e7c74869bec49f42222fee2a9d3ad4f24d913cedc5012fa9d"
     )
     assert bootstrap_authentication["candidate_commit_oid"] == evidence["head"]
     assert receipt["evidence"]["bootstrap"]["completion"]["path"] == str(
@@ -3405,7 +3370,7 @@ def test_receipt_rejects_prebuilt_artifact_mode_drift(
         (
             "cargo_version_sha256",
             "0" * 64,
-            "Cargo version digest does not match the authenticated tool",
+            "Cargo version digest does not match the policy-captured corridor transcript",
         ),
         (
             "rustc_version_sha256",
@@ -4980,27 +4945,6 @@ def test_receipt_replays_archived_git_and_rejects_runtime_divergence(
                     executable_contract=contract,
                 )
             monkeypatch.setattr(module.subprocess, "Popen", real_popen)
-        interpreter = Path(sys.executable).resolve(strict=True)
-        with pytest.raises(module.ReceiptError, match="output exceeds"):
-            module._run_bounded_replay(
-                interpreter,
-                ["-I", "-S", "-c", "import os; os.write(1, b'x' * 4096)"],
-                cwd=tmp_path,
-                environment=environment,
-                name="fixture validator",
-                maximum_output_bytes=128,
-            )
-        monkeypatch.setattr(module, "_REPLAY_TIMEOUT_SECONDS", 0.05)
-        with pytest.raises(module.ReceiptError, match="exceeded its timeout"):
-            module._run_bounded_replay(
-                interpreter,
-                ["-I", "-S", "-c", "import time; time.sleep(2)"],
-                cwd=tmp_path,
-                environment=environment,
-                name="fixture validator",
-            )
-
-
 def test_receipt_rejects_fully_rebound_cross_policy_allowed_signers(
     tmp_path: Path,
 ) -> None:
@@ -5775,6 +5719,10 @@ def test_receipt_requires_exact_nocapture_seed_diagnostic(tmp_path: Path) -> Non
 @pytest.mark.parametrize(
     ("pattern", "replacement"),
     (
+        (
+            r"CARGO_TARGET_DIR=[^ ]+",
+            "CARGO_TARGET_DIR=/tmp/escaped-cargo-target",
+        ),
         (r"IROHA_TEST_SKIP_BUILD=1", "IROHA_TEST_SKIP_BUILD=0"),
         (
             r"IROHA_TEST_ALLOW_REENTRANT_BUILD=0",

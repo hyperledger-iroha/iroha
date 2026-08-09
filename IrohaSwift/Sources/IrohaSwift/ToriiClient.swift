@@ -27859,14 +27859,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             maximumBytes: maximumBytes
         )
         try ensureStatus(response, equals: 200, responseBody: data)
-        let contentType = response.value(forHTTPHeaderField: "Content-Type")?
-            .split(separator: ";", maxSplits: 1)
-            .first?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        guard contentType == "application/json" else {
-            throw ToriiClientError.invalidPayload("\(context) response must use application/json")
-        }
+        try ensureResponseMediaType(response, equals: "application/json")
         guard !data.isEmpty else { throw ToriiClientError.emptyBody }
         return data
     }
@@ -28116,21 +28109,28 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         try ensureStatus(response, in: 200..<300, responseBody: data)
         return try decodeJSON(ToriiTimeStatusSnapshot.self, from: data)
     }
-
     public func getSumeragiStatus() async throws -> ToriiSumeragiStatusSnapshot {
         let request = try makeRequest(path: "/v1/sumeragi/status",
                                       headers: ["Accept": "application/json"])
-        let data = try await data(for: request)
+        let data = try await exactSccpJSONResponse(
+            request,
+            context: "Sumeragi status",
+            maximumBytes: 1 * 1_024 * 1_024
+        )
+        try rejectDuplicateJSONKeys(data, context: "Sumeragi status response")
         return try decodeJSON(ToriiSumeragiStatusSnapshot.self, from: data)
     }
-
     public func getSumeragiDiagnostics() async throws -> ToriiSumeragiDiagnosticsSnapshot {
         let request = try makeRequest(path: "/v1/sumeragi/diagnostics",
                                       headers: ["Accept": "application/json"])
-        let data = try await data(for: request)
+        let data = try await exactSccpJSONResponse(
+            request,
+            context: "Sumeragi diagnostics",
+            maximumBytes: 16 * 1_024 * 1_024
+        )
+        try rejectDuplicateJSONKeys(data, context: "Sumeragi diagnostics response")
         return try decodeJSON(ToriiSumeragiDiagnosticsSnapshot.self, from: data)
     }
-
     public func getSumeragiCommitQc(blockHashHex: String) async throws -> ToriiSumeragiCommitQcRecord {
         let normalized = try ToriiClient.normalizeHex32(blockHashHex, field: "block_hash")
         let request = try makeRequest(path: "/v1/sumeragi/commit-qcs/\(normalized)",

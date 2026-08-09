@@ -789,7 +789,7 @@ authenticated native replay record exists, so no native-dependent SDK suite is
 qualified. Clean native rebuilds, unskipped fixture replay, and source-bound
 provenance across all five release targets remain open. Kotlin/JVM and mirrored
 Java Android now require
-both exact bridge ABI 21 and `NativeSignerBridge` JNI contract revision 2 before
+both exact bridge ABI 21 and `NativeSignerBridge` JNI contract revision 3 before
 making any native signer call; the Android artifact gate requires both
 revision-probe exports, preventing a stale same-ABI JNI descriptor from passing
 package qualification. Swift package admission now requires an embedded

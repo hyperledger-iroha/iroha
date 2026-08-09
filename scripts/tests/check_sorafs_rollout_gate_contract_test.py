@@ -20104,7 +20104,7 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
         "Aggregate promotion also rechecks the lane-proven reference SDK release digest relationships: manifest-bound artifact fingerprints must match `valid_release_manifest_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests`, and governance-approval release-key fingerprints must match `valid_release_key_fingerprints` before final promotion can report ready.",
         "The reference SDK release gate fail-closes when more than one valid release manifest, policy, or release key anchor appears, and clears the mixed `valid_release_manifest_digests`, `valid_policy_digests`, or `valid_release_key_fingerprints` set before aggregate promotion can report ready.",
         "Release-manifest, policy, and release-key binding failures are recorded on the offending artifact before required-kind validity is computed, so the JSON summary matches the fail-closed release decision.",
-        "digests, an explicit `external_ed25519_hsm` provider and positive revision, governance approval policy and `--public-key-fingerprint-hex` inputs",
+        "digests, an explicit `authenticated_external_signer` provider, exact `software` backend, and positive revision, governance approval policy and `--public-key-fingerprint-hex` inputs",
         "Run the packaging helper for the supported release targets and publish signed release manifests outside the repository using governed release keys",
         "Ship/publish downstream SDK binding packages and release artifacts for the local JavaScript, Python, Kotlin/JVM, Java Android, Swift, and C# wrappers",
         "Archive live operator smoke evidence for the published `sorafs-validate` archives and cookbook replay before declaring SF-11 fully released",
@@ -20179,7 +20179,7 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
     )
     assert "test_signed_manifest_rejects_rsa_sha256_signature_algorithm" in checker_test
     assert "test_signed_manifest_rejects_unsupported_signature_algorithm" in checker_test
-    assert "test_signed_manifest_requires_external_hsm_provider" in checker_test
+    assert "test_signed_manifest_rejects_legacy_or_unapproved_provider" in checker_test
     assert "test_supply_chain_requires_all_five_targets" in checker_test
     assert "test_supply_chain_rejects_high_vulnerabilities" in checker_test
     assert "sorafs.reference_sdk.supply_chain_canary.v1" in checker

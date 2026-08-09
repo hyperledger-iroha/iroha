@@ -31982,7 +31982,6 @@ fn durable_lane_diagnostics_reconstruct_after_kura_restart() {
     let kura_config =
         strict_kura_config_for_testing(temp_dir.path().join("restart-diagnostics-kura"));
     let lane_config = RuntimeLaneConfig::from_catalog(&LaneCatalog::default());
-
     let expected = {
         let (kura, _) = Kura::new(&kura_config, &lane_config).expect("initialize Kura");
         let state = State::new_for_testing(
@@ -32016,6 +32015,7 @@ fn durable_lane_diagnostics_reconstruct_after_kura_restart() {
             CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock
         );
         assert!(snapshot.lane_block_sessions[0].committed_session_drained);
+        assert_passive_state_diagnostics(&state, &kura, &lane_config, &session);
         let autonomous = state
             .autonomous_lane_execution_diagnostics()
             .expect("derive restart-stable autonomous diagnostics");

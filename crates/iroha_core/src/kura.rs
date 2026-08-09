@@ -23017,35 +23017,6 @@ impl Kura {
             .is_some_and(|expected_hash| expected_hash == artifact.proposal_block_hash)
     }
 
-    fn lane_block_artifact_is_canonical_hash_only_snapshot_anchor(
-        &self,
-        proposal: &LaneBlockProposalV1,
-        artifact: &LaneBlockArtifact,
-    ) -> bool {
-        let descriptor = &proposal.descriptor;
-        Self::lane_block_artifact_matches_descriptor(&artifact.ownership, descriptor)
-            && self
-                .read_lane_block_artifact(descriptor.lane_id, descriptor.lane_block_height)
-                .is_some_and(|canonical| canonical == *artifact)
-            && self.lane_block_artifact_has_hash_only_snapshot_anchor(artifact)
-    }
-
-    fn lane_block_application_receipt_has_hash_only_snapshot_anchor(
-        &self,
-        artifact: &LaneBlockApplicationReceiptArtifact,
-    ) -> bool {
-        if artifact.application_block_height != artifact.artifact.ownership.proposal_height
-            || artifact.application_block_hash != artifact.artifact.proposal_block_hash
-        {
-            return false;
-        }
-        artifact.format == LaneBlockApplicationReceiptArtifactFormat::Current
-            && self.lane_block_artifact_is_canonical_hash_only_snapshot_anchor(
-                &artifact.proposal,
-                &artifact.artifact,
-            )
-    }
-
     fn lane_artifact_dir(blocks_dir: &Path) -> PathBuf {
         blocks_dir.join(LANE_ARTIFACTS_DIR_NAME)
     }
@@ -34449,6 +34420,7 @@ impl Kura {
                 if self.lane_block_artifact_is_canonical_hash_only_snapshot_anchor(
                     &artifact.proposal,
                     &artifact.artifact,
+                    repair_missing_sidecar,
                 ) =>
             {
                 true
@@ -35010,6 +34982,7 @@ impl Kura {
         &self,
         block: &SignedBlock,
         require_post_apply_metadata: bool,
+        merge_association: NativeAmxMergeAssociation<'_>,
     ) -> Result<NativeAmxParticipantApplicationEvidencePlan> {
         let application_block_height = block.header().height().get();
         let application_block_hash = block.hash();
@@ -35032,14 +35005,6 @@ impl Kura {
                 "Native AMX application block is not canonical in Kura",
             ));
         }
-        let native_manifest =
-            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(block)
-                .map_err(|error| {
-                    Self::invalid_lane_artifact_error(
-                        self.store_root.clone(),
-                        format!("Native AMX application manifest construction failed: {error}"),
-                    )
-                })?;
         let Some((_, finality, _)) =
             self.v2_finality_artifact_with_archive_under_prune_guard(application_block_height)?
         else {
@@ -35048,6 +35013,9 @@ impl Kura {
                 "Native AMX application block lacks durable v2 finality",
             ));
         };
+        let native_manifest = self.native_amx_manifest_for_committed_block(
+            block, merge_association, &finality,
+        )?;
         if finality.block_hash != application_block_hash
             || finality
                 .commit_qc
@@ -35166,13 +35134,13 @@ impl Kura {
     /// Publish and read back every Native AMX participant frontier before WSV
     /// can stage or commit the corresponding State transition.
     ///
-    /// This path intentionally authenticates only the durable canonical block
-    /// and v2 finality boundary. The WSV checkpoint/commit-manifest join does
-    /// not exist yet. Retention cleanup is forbidden until the post-WSV repair
-    /// pass validates that join.
+    /// Authenticate durable block/finality and the exact staged merge entry
+    /// against its already-committed association. The WSV join comes later, so
+    /// cleanup waits for the post-WSV repair to validate that join.
     pub(crate) fn prepublish_native_amx_participant_application_evidence(
         &self,
         block: &SignedBlock,
+        staged_merge_entry: Option<&MergeLedgerEntry>,
     ) -> Result<NativeAmxParticipantApplicationPrepublicationToken> {
         #[cfg(test)]
         if self
@@ -35188,7 +35156,7 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         let plan = self
             .native_amx_participant_application_evidence_for_block_under_publication_guard(
-                block, false,
+                block, false, NativeAmxMergeAssociation::Live(staged_merge_entry),
             )?;
         self.persist_native_amx_participant_application_evidence_under_publication_guard(
             block,
@@ -35273,20 +35241,19 @@ impl Kura {
     ///
     /// Every exact replicated frontier must occur once in the QC-authenticated
     /// carrier manifest. The complete carrier and every manifest leaf/proof are
-    /// authenticated while reconstructing `plan`; only marker-owned active
-    /// routes are then checked against current storage geometry and existing
-    /// manifest/receipt/latest-index files. Historical sibling leaves are never
-    /// interpreted as current storage work.
+    /// authenticated while reconstructing `plan`; only marker-owned routes are
+    /// checked against storage. Historical sibling leaves are not current work.
     pub(crate) fn preflight_native_amx_participant_application_evidence_repair(
         &self,
         block: &SignedBlock,
         markers: &[crate::state::AppliedNativeAmxParticipantFrontierMarker],
+        planned_merge_entry: Option<&MergeLedgerEntry>,
     ) -> Result<()> {
         let _publication_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let plan = self
             .native_amx_participant_application_evidence_for_block_under_publication_guard(
-                block, true,
+                block, true, NativeAmxMergeAssociation::Startup(planned_merge_entry),
             )?;
         let target_indices =
             self.native_amx_participant_application_repair_target_indices(&plan, markers)?;
@@ -35300,8 +35267,7 @@ impl Kura {
 
     /// Repair every Native AMX participant route after fresh WSV application.
     ///
-    /// Fresh application owns every participant route in the just-committed
-    /// carrier, so it retains the whole-plan publication boundary. Startup
+    /// Fresh application owns the whole participant-route publication boundary. Startup
     /// recovery must instead use
     /// [`Self::repair_native_amx_participant_application_evidence_for_markers`]
     /// to avoid interpreting historical sibling leaves as current work.
@@ -35313,7 +35279,7 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         let plan = self
             .native_amx_participant_application_evidence_for_block_under_publication_guard(
-                block, true,
+                block, true, NativeAmxMergeAssociation::CommittedOnly,
             )?;
         let repaired = plan.artifacts.len();
         let _ = self.persist_native_amx_participant_application_evidence_under_publication_guard(
@@ -35323,7 +35289,6 @@ impl Kura {
         )?;
         Ok(repaired)
     }
-
     /// Repair State-owned Native AMX evidence after WSV commit and metadata join.
     ///
     /// Startup repair requires and revalidates the exact checkpoint and commit
@@ -35339,7 +35304,7 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         let plan = self
             .native_amx_participant_application_evidence_for_block_under_publication_guard(
-                block, true,
+                block, true, NativeAmxMergeAssociation::CommittedOnly,
             )?;
         let target_indices =
             self.native_amx_participant_application_repair_target_indices(&plan, markers)?;
@@ -38499,7 +38464,7 @@ impl Kura {
         (!self.prune_recovery_is_required()).then_some(artifact)
     }
 
-    fn read_lane_block_application_receipt_without_sidecar_repair(
+    pub(crate) fn read_lane_block_application_receipt_without_sidecar_repair(
         &self,
         lane_id: LaneId,
         lane_block_height: u64,
@@ -38905,7 +38870,10 @@ impl Kura {
     ) -> bool {
         match artifact.format {
             LaneBlockApplicationReceiptArtifactFormat::Current => {
-                self.lane_block_application_receipt_matches_canonical_results(artifact)
+                self.lane_block_application_receipt_matches_canonical_results(
+                    artifact,
+                    repair_missing_sidecars,
+                )
             }
             LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
                 .lane_block_application_receipt_matches_direct_preflight(
@@ -38913,7 +38881,13 @@ impl Kura {
                     repair_missing_sidecars,
                 ),
             LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
-                self.lane_block_application_receipt_matches_merge_log(artifact)
+                if repair_missing_sidecars {
+                    self.lane_block_application_receipt_matches_merge_log(artifact)
+                } else {
+                    self.lane_block_application_receipt_matches_merge_log_without_sidecar_repair(
+                        artifact,
+                    )
+                }
             }
         }
     }
@@ -38925,7 +38899,10 @@ impl Kura {
     ) -> bool {
         match artifact.format {
             LaneBlockApplicationReceiptArtifactFormat::Current => {
-                self.lane_block_application_receipt_matches_canonical_results(artifact)
+                self.lane_block_application_receipt_matches_canonical_results(
+                    artifact,
+                    repair_missing_sidecars,
+                )
             }
             LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
                 .lane_block_application_receipt_matches_direct_preflight(
@@ -38933,7 +38910,15 @@ impl Kura {
                     repair_missing_sidecars,
                 ),
             LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
-                self.lane_block_application_receipt_matches_merge_log_under_prune_guard(artifact)
+                if repair_missing_sidecars {
+                    self.lane_block_application_receipt_matches_merge_log_under_prune_guard(
+                        artifact,
+                    )
+                } else {
+                    self.lane_block_application_receipt_matches_merge_log_without_sidecar_repair_under_prune_guard(
+                        artifact,
+                    )
+                }
             }
         }
     }
@@ -39280,13 +39265,17 @@ impl Kura {
     fn lane_block_application_receipt_matches_canonical_results(
         &self,
         artifact: &LaneBlockApplicationReceiptArtifact,
+        repair_missing_sidecar: bool,
     ) -> bool {
         match self.recover_lane_block_application_receipt_artifact_without_sidecar_repair(
             &artifact.proposal,
         ) {
             Ok(expected) => expected == *artifact,
             Err(LaneBlockPayloadAvailability::MissingProposalBlock)
-                if self.lane_block_application_receipt_has_hash_only_snapshot_anchor(artifact) =>
+                if self.lane_block_application_receipt_has_hash_only_snapshot_anchor(
+                    artifact,
+                    repair_missing_sidecar,
+                ) =>
             {
                 true
             }

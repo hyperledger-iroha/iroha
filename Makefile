@@ -301,7 +301,7 @@ kotlin-reflection-guard:
 	@bash scripts/check_kotlin_no_reflection.sh
 
 android-codegen-docs:
-	@cargo run --locked -p norito_codegen_exporter --features dev-tools -- --out target-codex/android_codegen
+	@scripts/sumeragi_v2_release_cargo_proxy.sh run --locked --offline -p norito_codegen_exporter --features dev-tools -- --out target-codex/android_codegen
 	@python3 scripts/android_codegen_docs.py \
 		--manifest target-codex/android_codegen/instruction_manifest.json \
 		--builders target-codex/android_codegen/builder_index.json \

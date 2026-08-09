@@ -28,6 +28,8 @@ from check_sorafs_reference_sdk_release_evidence import (  # noqa: E402
     RELEASE_MANIFEST_BOUND_KINDS,
     REQUIRED_DOWNSTREAM_PACKAGES,
     REQUIRED_RELEASE_TARGETS,
+    REQUIRED_SIGNING_BACKEND,
+    REQUIRED_SIGNING_PROVIDER,
     ValidationOptions,
     validate_evidence_payload,
 )
@@ -126,6 +128,24 @@ def validate_hex64(value: str | None, *, option: str, errors: list[str]) -> None
         or any(character not in "0123456789abcdef" for character in value)
     ):
         errors.append(f"{option} must be exact lowercase 32-byte hex")
+
+
+def validate_nonzero_hex64(
+    value: str | None,
+    *,
+    option: str,
+    errors: list[str],
+) -> None:
+    """Validate an exact lowercase non-zero 32-byte digest."""
+
+    before = len(errors)
+    validate_hex64(value, option=option, errors=errors)
+    if (
+        len(errors) == before
+        and isinstance(value, str)
+        and not any(bytes.fromhex(value))
+    ):
+        errors.append(f"{option} must not be zero")
 
 
 def decode_ed25519_public_key(
@@ -327,8 +347,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "private_key_absent": True,
                 "signature_algorithm": args.signature_algorithm,
                 "signing_provider": args.signing_provider,
+                "signing_backend": args.signing_backend,
                 "signing_provider_revision": args.signing_provider_revision,
-                "hsm_signature_verified": True,
+                "signer_response_verified": True,
                 "manifest_digest_hex": args.manifest_digest_hex,
                 "policy_digest_hex": args.policy_digest_hex,
                 "public_key_fingerprint_hex": args.public_key_fingerprint_hex,
@@ -454,7 +475,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             option="--manifest-digest-hex",
             errors=errors,
         )
-        validate_hex64(
+        validate_nonzero_hex64(
             args.public_key_fingerprint_hex,
             option="--public-key-fingerprint-hex",
             errors=errors,
@@ -465,11 +486,16 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors,
             (
                 ("--signing-provider", args.signing_provider),
+                ("--signing-backend", args.signing_backend),
                 ("--signing-provider-revision", args.signing_provider_revision),
             ),
         )
-        if args.signing_provider != "external_ed25519_hsm":
-            errors.append("--signing-provider must be `external_ed25519_hsm`")
+        if args.signing_provider != REQUIRED_SIGNING_PROVIDER:
+            errors.append(
+                f"--signing-provider must be `{REQUIRED_SIGNING_PROVIDER}`"
+            )
+        if args.signing_backend != REQUIRED_SIGNING_BACKEND:
+            errors.append(f"--signing-backend must be `{REQUIRED_SIGNING_BACKEND}`")
     if args.kind == "governance_approval":
         require_kind_options(
             args,
@@ -542,11 +568,18 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors,
             (("--policy-digest-hex", args.policy_digest_hex),),
         )
-        validate_hex64(
-            args.policy_digest_hex,
-            option="--policy-digest-hex",
-            errors=errors,
-        )
+        if args.kind == "signed_manifest":
+            validate_nonzero_hex64(
+                args.policy_digest_hex,
+                option="--policy-digest-hex",
+                errors=errors,
+            )
+        else:
+            validate_hex64(
+                args.policy_digest_hex,
+                option="--policy-digest-hex",
+                errors=errors,
+            )
     return errors
 
 
@@ -664,6 +697,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--public-key-fingerprint-hex")
     parser.add_argument("--signature-algorithm", default="ed25519")
     parser.add_argument("--signing-provider")
+    parser.add_argument("--signing-backend")
     parser.add_argument("--signing-provider-revision", type=positive_int_arg)
     parser.add_argument("--target", action="append", default=[])
     parser.add_argument("--package", action="append", default=[])

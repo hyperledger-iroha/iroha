@@ -9,7 +9,7 @@ readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly MODEL="SumeragiV2CertifiedResponseSourceLineageMutation.tla"
 readonly SANY_SUCCESS_MARKER="Semantic processing of module SumeragiV2CertifiedResponseSourceLineageMutation"
-readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"
 source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 
 if [[ -n "${JAVA_BIN:-}" ]]; then

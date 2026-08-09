@@ -167,6 +167,7 @@ impl Sha256 {
 }
 
 /// Hash one complete byte string.
+#[cfg(test)]
 pub(super) fn sha256(input: &[u8]) -> Result<[u8; 32], Sha256Error> {
     let mut state = Sha256::new();
     state.update(input)?;

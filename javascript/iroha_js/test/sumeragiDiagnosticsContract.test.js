@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  browserSumeragiDiagnosticsFixture,
+  browserSumeragiStatusFixture,
+} from "./sumeragiBrowserFixtures.js";
 
 export const SUMERAGI_DIAGNOSTICS_CONTRACT_TESTS = Object.freeze([
   "getSumeragiStatus validates options",
@@ -74,6 +78,128 @@ assert.equal(typeof ToriiClient, "function");
 const clientIndexModuleUrl = new URL("./index.js", clientModuleUrl);
 const { ValidationError } = await import(clientIndexModuleUrl.href);
 assert.equal(typeof ValidationError, "function");
+const browserClientModuleUrl = new URL("./toriiBrowserClient.js", clientModuleUrl);
+const { ToriiBrowserClient } = await import(browserClientModuleUrl.href);
+assert.equal(typeof ToriiBrowserClient, "function");
+
+async function verifyTypedBrowserSurface() {
+  const diagnosticsText = JSON.stringify(browserSumeragiDiagnosticsFixture())
+    .replace(
+      '"tx_queue_retained_bytes":4096',
+      '"tx_queue_retained_bytes":9007199254740993',
+    )
+    .replace(
+      '"tx_queue_max_retained_bytes":65536',
+      '"tx_queue_max_retained_bytes":9007199254740994',
+    );
+  const requests = [];
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async (url, init) => {
+      requests.push([String(url), init.method, init.headers.Accept]);
+      const body = String(url).endsWith("/v1/sumeragi/status")
+        ? JSON.stringify(browserSumeragiStatusFixture())
+        : diagnosticsText;
+      return new Response(body, {
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    },
+  });
+  const status = await client.getSumeragiStatusTyped();
+  const diagnostics = await client.getSumeragiDiagnosticsTyped();
+  assert.equal(status.protocol_version, 4);
+  assert.equal(diagnostics.tx_queue_retained_bytes, 9007199254740993n);
+  assert.equal(diagnostics.tx_queue_max_retained_bytes, 9007199254740994n);
+  assert.deepEqual(requests, [
+    [
+      "https://torii.example/v1/sumeragi/status",
+      "GET",
+      "application/json",
+    ],
+    [
+      "https://torii.example/v1/sumeragi/diagnostics",
+      "GET",
+      "application/json",
+    ],
+  ]);
+
+  const rawPayload = { operational_note: "raw payload" };
+  const separationClient = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => new Response(JSON.stringify(rawPayload), {
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  assert.deepEqual(await separationClient.getSumeragiStatus(), rawPayload);
+  assert.deepEqual(await separationClient.getSumeragiDiagnostics(), rawPayload);
+  await assert.rejects(
+    separationClient.getSumeragiStatusTyped(),
+    /unknown field/u,
+  );
+  await assert.rejects(
+    separationClient.getSumeragiDiagnosticsTyped(),
+    /unknown field/u,
+  );
+
+  const declaredLengths = [1024 * 1024 + 1, 16 * 1024 * 1024 + 1];
+  const boundedClient = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => new Response("{}", {
+      headers: {
+        "content-length": String(declaredLengths.shift()),
+        "content-type": "application/json",
+      },
+    }),
+  });
+  await assert.rejects(
+    boundedClient.getSumeragiStatusTyped(),
+    /1048576-byte response limit/u,
+  );
+  await assert.rejects(
+    boundedClient.getSumeragiDiagnosticsTyped(),
+    /16777216-byte response limit/u,
+  );
+
+  const validStatus = JSON.stringify(browserSumeragiStatusFixture());
+  const strictResponses = [
+    new Response(`{"protocol_version":4,${validStatus.slice(1)}`, {
+      headers: { "content-type": "application/json" },
+    }),
+    new Response(validStatus, {
+      headers: { "content-type": "text/plain" },
+    }),
+  ];
+  const strictClient = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => strictResponses.shift(),
+  });
+  await assert.rejects(
+    strictClient.getSumeragiStatusTyped(),
+    /duplicate object key/u,
+  );
+  await assert.rejects(
+    strictClient.getSumeragiStatusTyped(),
+    /application\/json media type/u,
+  );
+
+  const invalidUtf8Responses = [
+    new Response(Uint8Array.of(0xff), {
+      headers: { "content-type": "application/json" },
+    }),
+    new Response(Uint8Array.of(0xff), {
+      headers: { "content-type": "application/json" },
+    }),
+  ];
+  const invalidUtf8Client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => invalidUtf8Responses.shift(),
+  });
+  await assert.rejects(
+    invalidUtf8Client.getSumeragiStatusTyped(),
+    /must be valid UTF-8/u,
+  );
+  await assert.rejects(
+    invalidUtf8Client.getSumeragiDiagnosticsTyped(),
+    /must be valid UTF-8/u,
+  );
+}
+
+await verifyTypedBrowserSurface();
 
 const focus = {
   names: new Set(SUMERAGI_DIAGNOSTICS_CONTRACT_TESTS),

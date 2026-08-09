@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional, Union
+from decimal import Decimal
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
 
 
 @dataclass(frozen=True)
@@ -419,10 +421,42 @@ class SumeragiParamsSnapshot:
     mode_activation_height: Optional[int]
     chain_height: int
 
+
+def parse_sumeragi_json_object(payload: bytes, label: str) -> Dict[str, Any]:
+    """Decode strict UTF-8 JSON while retaining typed-parser numeric diagnostics."""
+
+    try:
+        text = payload.decode("utf-8", "strict")
+    except UnicodeDecodeError as error:
+        raise ValueError(f"{label} must be UTF-8 JSON") from error
+
+    def unique_object(pairs: Sequence[Tuple[str, Any]]) -> Dict[str, Any]:
+        result: Dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"{label} contains duplicate field `{key}`")
+            result[key] = value
+        return result
+
+    def reject_constant(token: str) -> Any:
+        raise ValueError(f"{label} contains a non-finite numeric value `{token}`")
+
+    try:
+        value = json.loads(
+            text,
+            object_pairs_hook=unique_object,
+            parse_float=Decimal,
+            parse_constant=reject_constant,
+        )
+    except (json.JSONDecodeError, RecursionError) as error:
+        raise ValueError(f"{label} must be valid JSON") from error
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return value
+
 # Keep the public model identity stable even though definitions live in this
 # private support module.
 for _model in tuple(globals().values()):
     if isinstance(_model, type) and _model.__module__ == __name__:
         _model.__module__ = f"{__package__}.client"
 del _model
-

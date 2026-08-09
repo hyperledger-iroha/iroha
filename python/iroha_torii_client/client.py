@@ -100,8 +100,8 @@ from .client_status_models import (
     SumeragiQcSnapshot,
     SumeragiV2EquivocationEvidenceRecord,
     _KAIGI_HEALTH_STATUSES,
+    parse_sumeragi_json_object,
 )
-
 from .native_amx import (
     compute_native_amx_descriptor_hash,
     compute_native_amx_participant_settlement_hash,
@@ -152,7 +152,6 @@ _SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME = "iroha_sccp::TairaSccpMessageProofV1"
 _SCCP_PROOF_REQUEST_NORITO_TYPE_NAME = (
     "iroha_sccp::SccpGroth16Bn254ProofRequestV1"
 )
-
 
 BASE58_ALPHABET = tuple("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
 BASE58_INDEX = {symbol: idx for idx, symbol in enumerate(BASE58_ALPHABET)}
@@ -11361,6 +11360,7 @@ class ToriiClient:
         context: str,
         params: Optional[Mapping[str, str]] = None,
         maximum_body_bytes: int,
+        parser: Callable[[bytes, str], Mapping[str, Any]] = parse_sccp_json_object,
     ) -> Mapping[str, Any]:
         response = self._request(
             "GET",
@@ -11380,7 +11380,7 @@ class ToriiClient:
             response.close()
             raise TypeError(f"{context} response must use application/json content type")
         body = _read_bounded_sccp_response_body(response, maximum_body_bytes, context)
-        return parse_sccp_json_object(body, context)
+        return parser(body, context)
 
     def _get_sccp_typed_object(
         self,
@@ -12615,22 +12615,22 @@ class ToriiClient:
         the general status route is operational telemetry, while this route is
         the fail-closed reducer projection.
         """
-
-        payload = self._get_json_object(
+        payload = self._get_sccp_json_object(
             "/v1/sumeragi/status",
             context="sumeragi status",
+            maximum_body_bytes=1 * 1024 * 1024,
+            parser=parse_sumeragi_json_object,
         )
         return _SumeragiV2StatusParser.parse(payload)
-
     def get_sumeragi_diagnostics(self) -> SumeragiDiagnosticsStatus:
         """Fetch and validate bounded operator and lane diagnostics."""
-
-        payload = self._get_json_object(
+        payload = self._get_sccp_json_object(
             "/v1/sumeragi/diagnostics",
             context="sumeragi diagnostics",
+            maximum_body_bytes=16 * 1024 * 1024,
+            parser=parse_sumeragi_json_object,
         )
         return _SumeragiDiagnosticsParser.parse(payload)
-
     # ------------------------------------------------------------------
     # Kaigi relay helpers
     # ------------------------------------------------------------------

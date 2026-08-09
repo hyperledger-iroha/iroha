@@ -25,6 +25,12 @@ import {
 } from "./kagemushaOffline.js";
 import { privacyCapabilityTransportV1 } from "./privacyCapabilityTransport.js";
 import {
+  SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
+  SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
+  parseSumeragiDiagnosticsJson,
+  parseSumeragiStatusJson,
+} from "./sumeragiTyped.js";
+import {
   AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
   AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1,
 } from "./authenticatedBlockProofs.browser.js";
@@ -970,13 +976,17 @@ function signalFrom(options) {
   return options.signal === undefined ? undefined : options.signal;
 }
 
-function kagemushaOptions(options, context) {
+function signalOnlyOptions(options, context) {
   const item = requireObject(options, context);
   const unknown = Object.keys(item).filter((key) => key !== "signal");
   if (unknown.length > 0) {
     throw new TypeError(`${context} contains unsupported option ${unknown[0]}`);
   }
   return item;
+}
+
+function kagemushaOptions(options, context) {
+  return signalOnlyOptions(options, context);
 }
 
 function copyRequestFields(source) {
@@ -1501,7 +1511,8 @@ export class ToriiBrowserClient {
         normalizedOptions.maximumBodyBytes,
         `${method} ${path}`,
       );
-    return text ? jsonParser(text) : null;
+    if (text === "" && normalizedOptions.jsonParser === undefined) return null;
+    return jsonParser(text);
   }
 
   async _bytes(method, path, options = {}) {
@@ -2517,9 +2528,47 @@ export class ToriiBrowserClient {
     return this._json("GET", "/v1/sumeragi/status", { signal: signalFrom(opts) });
   }
 
+  getSumeragiStatusTyped(options = {}) {
+    const opts = signalOnlyOptions(options, "getSumeragiStatusTyped options");
+    return this._json("GET", "/v1/sumeragi/status", {
+      headers: { Accept: "application/json" },
+      signal: signalFrom(opts),
+      maximumBodyBytes: SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
+      responseObserver: (response) => {
+        requireExactJsonContentType(
+          response.headers.get("content-type"),
+          "Sumeragi typed status response",
+        );
+      },
+      jsonParser: (text) => parseSumeragiStatusJson(
+        text,
+        "Sumeragi typed status",
+      ),
+    });
+  }
+
   getSumeragiDiagnostics(options = {}) {
     const opts = requireObject(options, "getSumeragiDiagnostics options");
     return this._json("GET", "/v1/sumeragi/diagnostics", { signal: signalFrom(opts) });
+  }
+
+  getSumeragiDiagnosticsTyped(options = {}) {
+    const opts = signalOnlyOptions(options, "getSumeragiDiagnosticsTyped options");
+    return this._json("GET", "/v1/sumeragi/diagnostics", {
+      headers: { Accept: "application/json" },
+      signal: signalFrom(opts),
+      maximumBodyBytes: SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
+      responseObserver: (response) => {
+        requireExactJsonContentType(
+          response.headers.get("content-type"),
+          "Sumeragi typed diagnostics response",
+        );
+      },
+      jsonParser: (text) => parseSumeragiDiagnosticsJson(
+        text,
+        "Sumeragi typed diagnostics",
+      ),
+    });
   }
 
   getSumeragiTelemetry(options = {}) {

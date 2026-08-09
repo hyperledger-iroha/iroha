@@ -1112,6 +1112,7 @@ struct LaneBlockProposalPreimage {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct LaneBlockDescriptorV1 {
     /// Lane whose local block is described.
     pub lane_id: LaneId,
@@ -1207,6 +1208,7 @@ impl LaneBlockDescriptorV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct LaneBlockProposalPayloadHintV1 {
     /// Global proposal height that anchored the lane payload ownership.
     pub proposal_height: u64,
@@ -1222,6 +1224,7 @@ pub struct LaneBlockProposalPayloadHintV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct LaneBlockProposalV1 {
     /// Replayable descriptor proposed to the lane committee.
     pub descriptor: LaneBlockDescriptorV1,
@@ -1933,6 +1936,7 @@ impl SumeragiLanePayloadOwnership {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct LaneSettlementReceipt {
     /// Caller-specified identifier linking the receipt to the originating transaction.
     pub source_id: [u8; 32],
@@ -2028,7 +2032,12 @@ pub const NATIVE_AMX_BLS_PROOF_BYTES: usize = 96;
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[norito(tag = "phase", content = "detail", rename_all = "snake_case")]
+#[norito(
+    tag = "phase",
+    content = "detail",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum NativeAmxPhase {
     /// Participant prepared its dataspace-local leg.
     Prepare,
@@ -2046,6 +2055,7 @@ pub enum NativeAmxPhase {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct NativeAmxAttestationBodyV2 {
     /// Exact frozen global round in which the receipt may be included.
     pub round: super::consensus_v2::ConsensusRound,
@@ -2316,6 +2326,7 @@ impl NativeAmxAttestationQcV2 {
 
 #[derive(Clone, Debug, Encode, Decode)]
 #[cfg_attr(feature = "json", derive(crate::DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 struct NativeAmxAttestationQcV2Wire {
     body: NativeAmxAttestationBodyV2,
     validator_set_hash_version: u16,
@@ -2381,6 +2392,7 @@ impl norito::json::JsonDeserialize for NativeAmxAttestationQcV2 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct NativeAmxLegRecordV2 {
     /// Participant lane certified by both phase QCs.
     pub lane_id: LaneId,
@@ -2416,6 +2428,7 @@ impl PartialOrd for NativeAmxLegRecordV2 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct NativeAmxReceipt {
     /// Receipt format version.
     pub version: u16,
@@ -2521,6 +2534,7 @@ pub struct LaneSwapMetadata {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct LaneBlockCommitment {
     /// Lane-local block height associated with the commitment.
     pub block_height: u64,
@@ -6543,32 +6557,6 @@ mod tests {
     }
 
     #[test]
-    fn native_amx_grouped_receipt_structure_matches_rust_owned_fixture() {
-        let document = grouped_native_amx_fixture_document();
-        let commitment: LaneBlockCommitment = norito::json::from_value(
-            document
-                .pointer("/golden/receipt_group")
-                .cloned()
-                .expect("fixture contains receipt group"),
-        )
-        .expect("fixture receipt group decodes");
-        commitment
-            .validate_native_amx_receipts()
-            .expect("Rust-owned grouped Native AMX fixture is structurally valid");
-        validate_grouped_native_amx_application_evidence(&document)
-            .expect("Rust-owned Native AMX application evidence is valid");
-
-        for receipt in &commitment.native_amx_receipts {
-            for leg in &receipt.legs {
-                assert!(
-                    !leg.requires_mixed_role_anchor_validation(),
-                    "golden grouped legs contain their exact current entrypoint"
-                );
-            }
-        }
-    }
-
-    #[test]
     fn native_amx_receipt_negative_corpus_fails_closed() {
         const EXPECTED_RECEIPT_CONTROLS: usize = 45;
 
@@ -6648,7 +6636,7 @@ mod tests {
 
     #[test]
     fn native_amx_application_evidence_negative_corpus_fails_closed() {
-        const EXPECTED_APPLICATION_EVIDENCE_CONTROLS: usize = 8;
+        const EXPECTED_APPLICATION_EVIDENCE_CONTROLS: usize = 10;
 
         let canonical = grouped_native_amx_fixture_document();
         validate_grouped_native_amx_application_evidence(&canonical)

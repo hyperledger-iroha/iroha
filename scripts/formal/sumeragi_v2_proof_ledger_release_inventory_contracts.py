@@ -1,3 +1,36 @@
+def _relative_to_root(path: Path, root_dir: Path = ROOT_DIR) -> str:
+    try:
+        return path.resolve().relative_to(root_dir.resolve()).as_posix()
+    except ValueError as error:
+        raise ValueError(f"path is outside the repository: {path}") from error
+
+
+FORMAL_EVIDENCE_LOGICAL_ROOT = Path("formal/sumeragi_v2")
+
+
+def _formal_evidence_logical_path(*parts: str) -> str:
+    return FORMAL_EVIDENCE_LOGICAL_ROOT.joinpath(*parts).as_posix()
+
+
+def _formal_evidence_physical_path(
+    logical_path: str, root_dir: Path = ROOT_DIR
+) -> Path:
+    logical = Path(logical_path)
+    try:
+        relative = logical.relative_to(FORMAL_EVIDENCE_LOGICAL_ROOT)
+    except ValueError as error:
+        raise ValueError(
+            f"formal evidence path escapes its logical root: {logical_path}"
+        ) from error
+    external = os.environ.get("SUMERAGI_V2_FORMAL_EVIDENCE_DIR")
+    base = (
+        Path(external)
+        if external is not None
+        else root_dir / FORMAL_EVIDENCE_LOGICAL_ROOT
+    )
+    return base / relative
+
+
 def _production_liveness_release_inventory_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
@@ -33,7 +66,7 @@ def _production_liveness_release_inventory_errors(
     canonical_grouped_sdk_suites = (
         ("openapi", 7),
         ("python", 62),
-        ("javascript", 59),
+        ("javascript", 60),
         ("swift", 4),
         ("kotlin", 6),
         ("java", 5),
@@ -180,11 +213,11 @@ def _production_liveness_release_inventory_errors(
         )
 
     canonical_sdk_diagnostics_suites = (
-        ("python", 114),
+        ("python", 121),
         ("javascript", 88),
         ("swift", 17),
-        ("kotlin", 15),
-        ("java", 10),
+        ("kotlin", 26),
+        ("java", 24),
     )
     runner_sdk_diagnostics_surfaces = indented_shell_array(
         "sumeragi_v2_sdk_diagnostics_surfaces"
@@ -225,7 +258,7 @@ def _production_liveness_release_inventory_errors(
         "client::tests::get_sumeragi_status_prefers_norito_and_handles_json",
         "client::tests::get_sumeragi_status_rejects_unknown_json_fields",
         "client::tests::get_sumeragi_status_rejects_structurally_impossible_norito_and_json",
-        "client::tests::get_sumeragi_status_json_requests_json_and_falls_back_to_norito",
+        "client::tests::get_sumeragi_status_json_requires_exact_json_media_type",
         "client::tests::get_sumeragi_diagnostics_verifies_lane_relay_envelopes",
         "client::tests::get_sumeragi_diagnostics_rejects_invalid_lane_relay_hash",
         "client::tests::get_sumeragi_diagnostics_rejects_malformed_autonomous_execution",
@@ -235,7 +268,7 @@ def _production_liveness_release_inventory_errors(
         "client::tests::get_sumeragi_diagnostics_rejects_json_payload_missing_required_fields",
         "client::tests::get_sumeragi_diagnostics_rejects_unknown_json_fields",
         "client::tests::get_sumeragi_diagnostics_rejects_zero_npos_seed",
-        "client::tests::get_sumeragi_diagnostics_accepts_json_payload_without_content_type_header",
+        "client::tests::get_sumeragi_diagnostics_requires_declared_current_media_type",
     )
     runner_rust_sdk_diagnostics_tests = tuple(
         shell_array("rust_sdk_diagnostics_tests")
@@ -640,8 +673,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 416:
-        errors.append("internal release-regression seal must contain exactly 416 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 427:
+        errors.append("internal release-regression seal must contain exactly 427 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -818,6 +851,91 @@ def _production_liveness_release_inventory_errors(
                     errors,
                     expected_attributes=("#[test]",),
                 )
+            if test_name == "successor_context_requires_the_durable_cryptographic_parent":
+                _require_rust_token_sequence(
+                    successor_adapter_path,
+                    successor_test,
+                    """
+                    let mut substituted_execution_policy = successor.clone();
+                    substituted_execution_policy.execution_policy_hash =
+                        Hash::new(b"substituted successor execution policy");
+                    assert!(matches!(
+                        VerifiedHeightContext::successor(
+                            substituted_execution_policy,
+                            proofs.clone(),
+                            &artifact,
+                            &receipt,
+                            &proofs,
+                        ),
+                        Err(AdapterError::ParentContextMismatch)
+                    ));
+                    """,
+                    "successor authentication must reject execution-policy "
+                    "substitution against the durable parent context",
+                    errors,
+                )
+                _require_rust_token_sequence(
+                    successor_adapter_path,
+                    successor_test,
+                    """
+                    let mut proposal_subject = subject(0x72);
+                    let proposal_body = b"parent-auth-body".to_vec();
+                    proposal_subject.payload_hash = Hash::new(&proposal_body);
+                    let manifest = encode_payload(
+                        &successor,
+                        proposal_round,
+                        proposal_subject,
+                        &proposal_body
+                    )
+                    .expect("encode successor fixture payload")
+                    .manifest()
+                    .clone();
+                    """,
+                    "successor parent-certificate authentication must use a "
+                    "canonical payload-bound proposal fixture",
+                    errors,
+                )
+            elif test_name == (
+                "authentication_rejects_valid_commitment_conflicts_without_mutating_adapter"
+            ):
+                _require_rust_token_sequence(
+                    successor_adapter_path,
+                    successor_test,
+                    """
+                    let locally_validated_payload = [0x87, 2];
+                    let locally_validated_manifest = encode_payload(
+                        &context,
+                        round,
+                        locally_validated_subject,
+                        &locally_validated_payload,
+                    )
+                    .expect("encode locally validated payload")
+                    .manifest()
+                    .clone();
+                    """,
+                    "execution-commitment conflict authentication must bind "
+                    "the locally validated canonical payload fixture",
+                    errors,
+                )
+                _require_rust_token_sequence(
+                    successor_adapter_path,
+                    successor_test,
+                    """
+                    let proposal_body = vec![0x83, 2];
+                    let proposal_manifest = encode_payload(
+                        &context,
+                        proposal_round,
+                        proposal_subject,
+                        &proposal_body
+                    )
+                    .expect("encode later-view proposal payload")
+                    .manifest()
+                    .clone();
+                    """,
+                    "embedded-certificate conflict authentication must bind "
+                    "the later-view canonical payload fixture",
+                    errors,
+                )
             if successor_test is not None:
                 observed_sha256 = _rust_item_token_sha256(successor_test)
                 if observed_sha256 != expected_sha256:
@@ -877,6 +995,145 @@ def _production_liveness_release_inventory_errors(
             "late canonical lane-recovery release regression",
             errors,
             expected_attributes=("#[test]",),
+        )
+        _require_rust_token_sequence(
+            late_lane_recovery_path,
+            late_lane_recovery_test,
+            """
+            let retained_prepare_qc =
+                lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Prepare);
+            let retained_prepare_pops = adapter.pops_for_lane_qc(&retained_prepare_qc);
+            assert_eq!(
+                adapter.lane_sessions.insert_qc_with_pops(
+                    retained_prepare_qc.clone(),
+                    &retained_prepare_pops
+                ),
+                Ok(LaneBlockSessionInsertOutcome::Inserted),
+                "retain one valid PrepareQC as the successor-owned decision"
+            );
+            adapter
+                .prepare_canonical_lane_rollover(&finality_artifact)
+                .expect("canonicalize the late-applied lane owner");
+            let authority = adapter
+                .durable_lane_rollover_authority(&finality_artifact)
+                .expect("inspect incomplete decided-lane rollover")
+                .expect("the incomplete lane owner must move into the successor");
+            """,
+            "late canonical lane recovery must transfer an exact retained "
+            "PrepareQC owner into successor rollover authority",
+            errors,
+        )
+        _require_rust_token_sequence(
+            late_lane_recovery_path,
+            late_lane_recovery_test,
+            """
+            let subsumed_prepare_vote =
+                signed_lane_vote(&proposal, CertPhase::Prepare, &keys[3]);
+            assert!(
+                authority
+                    .covered_source_hash(
+                        &finality_artifact,
+                        &BlockMessage::LaneBlockVote(subsumed_prepare_vote.clone()),
+                    )
+                    .expect("authenticate a still-backpressured vote subsumed by retained PrepareQC")
+                    .is_some(),
+                "a retained same-phase QC must release a redundant vote still owned by network fanout"
+            );
+            assert!(
+                !authority.uses_retained_source(&BlockMessage::LaneBlockVote(
+                    subsumed_prepare_vote.clone()
+                )),
+                "a QC-subsumed vote must retire instead of crossing into the successor"
+            );
+            """,
+            "late canonical lane recovery must retire only an authenticated "
+            "same-phase vote subsumed by retained quorum evidence",
+            errors,
+        )
+        _require_rust_token_sequence(
+            late_lane_recovery_path,
+            late_lane_recovery_test,
+            """
+            let mut forged_subsumed_vote = subsumed_prepare_vote;
+            forged_subsumed_vote.bls_signature[0] ^= 0x80;
+            assert!(
+                authority
+                    .covered_source_hash(
+                        &finality_artifact,
+                        &BlockMessage::LaneBlockVote(forged_subsumed_vote),
+                    )
+                    .is_err(),
+                "rollover must never retire a forged vote under a retained QC"
+            );
+            let unique_commit_vote = signed_lane_vote(&proposal, CertPhase::Commit, &keys[3]);
+            assert!(
+                authority
+                    .covered_source_hash(
+                        &finality_artifact,
+                        &BlockMessage::LaneBlockVote(unique_commit_vote),
+                    )
+                    .is_err(),
+                "a PrepareQC cannot retire a Commit vote which still carries unique phase progress"
+            );
+            """,
+            "late canonical lane recovery must reject forged and phase-distinct "
+            "vote retirement",
+            errors,
+        )
+        _require_rust_token_sequence(
+            late_lane_recovery_path,
+            late_lane_recovery_test,
+            """
+            assert!(
+                authority
+                    .covered_source_hash(
+                        &finality_artifact,
+                        &BlockMessage::LaneBlockQc(recovered.prepare_qc.clone()),
+                    )
+                    .expect("authenticate an uncached same-proposal quorum variant")
+                    .is_some(),
+                "a valid QC learned from another 3-of-4 subset must cross the retained rollover boundary"
+            );
+            assert!(
+                authority
+                    .covered_source_hash(
+                        &finality_artifact,
+                        &BlockMessage::LaneBlockQc(recovered.commit_qc.clone()),
+                    )
+                    .is_err(),
+                "rollover must not discard a new CommitQC when the successor owns only Prepare progress"
+            );
+            """,
+            "late canonical lane recovery must carry an alternate valid "
+            "PrepareQC while retaining phase-distinct Commit progress",
+            errors,
+        )
+        _require_rust_token_sequence(
+            late_lane_recovery_path,
+            late_lane_recovery_test,
+            """
+            assert!(
+                adapter
+                    .lane_sessions
+                    .qcs_for_incomplete_sessions()
+                    .contains(&retained_prepare_qc),
+                "the semantically equivalent retained QC must remain successor-owned"
+            );
+            let mut forged_rollover_qc = recovered.prepare_qc.clone();
+            forged_rollover_qc.bls_aggregate_signature[0] ^= 0x80;
+            assert!(
+                authority
+                    .covered_source_hash(
+                        &finality_artifact,
+                        &BlockMessage::LaneBlockQc(forged_rollover_qc),
+                    )
+                    .is_err(),
+                "semantic proof-variant recovery must still reject a forged aggregate"
+            );
+            """,
+            "late canonical lane recovery must retain the exact successor-owned "
+            "QC and reject forged aggregate variants",
+            errors,
         )
         if late_lane_recovery_test is not None:
             observed_sha256 = _rust_item_token_sha256(late_lane_recovery_test)
@@ -1105,35 +1362,34 @@ def _production_liveness_release_inventory_errors(
 
     source_sealed_commands = (
         (
+            "source-sealed-workspace-build",
+            "cargo +1.93.1 -j1 build --locked --offline --workspace",
+            "run_cargo build --locked --offline --workspace",
+        ),
+        (
+            "source-sealed-workspace-tests",
+            "cargo +1.93.1 -j1 test --locked --offline --workspace",
+            "run_cargo test --locked --offline --workspace",
+        ),
+        (
+            "source-sealed-workspace-clippy",
+            "cargo +1.93.1 -j1 clippy --locked --offline --workspace "
+            "--all-targets -- -D warnings",
+            "run_cargo clippy --locked --offline --workspace --all-targets "
+            "-- -D warnings",
+        ),
+        (
             "source-sealed-workspace-format",
-            "cargo fmt --all -- --check",
+            "cargo +1.93.1 fmt --all -- --check",
+            "run_cargo fmt --all -- --check",
         ),
         (
             "source-sealed-legacy-codec-guard",
             "bash scripts/check_no_legacy_codec.sh",
-        ),
-        (
-            "source-sealed-workspace-build",
-            "cargo build --locked --offline --workspace",
-        ),
-        (
-            "source-sealed-workspace-clippy",
-            "cargo clippy --locked --offline --workspace --all-targets -- -D warnings",
-        ),
-        (
-            "source-sealed-workspace-tests",
-            "cargo test --locked --offline --workspace",
-        ),
-        (
-            "source-sealed-irohad-tests",
-            "cargo test --locked --offline -p irohad --bin irohad "
-            "--features test-network-message-control",
+            "bash scripts/check_no_legacy_codec.sh",
         ),
     )
-    for leg_id, command in source_sealed_commands:
-        execution_command = (
-            f"run_{command}" if command.startswith("cargo ") else command
-        )
+    for leg_id, command, execution_command in source_sealed_commands:
         expected = (
             "  run_corridor_leg \\\n"
             f"    {leg_id} command 0 \\\n"
@@ -1175,7 +1431,8 @@ def _production_liveness_release_inventory_errors(
         '    IROHA_RELEASE_SCALING_IROHAD_SHA256="$IROHA_RELEASE_SCALING_IROHAD_SHA256" \\\n'
         '    IROHA_RELEASE_SCALING_IROHA_CLI_SHA256="$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256" \\\n'
         '    IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256="$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256"',
-        '--g12-seed-completion "$nexus_cross_completion_path" \\\n'
+        '--g4p-completion "$multilane_four_peer_completion_path" \\\n'
+        '  --g12-seed-completion "$nexus_cross_completion_path" \\\n'
         '  --g12-fault-soak-completion "$nexus_cross_soak_completion_path" \\\n'
         '  --scaling-evidence-manifest "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \\\n'
         '  --expected-scaling-trial-harness-sha256 \\\n'
@@ -1188,7 +1445,7 @@ def _production_liveness_release_inventory_errors(
     for fragment in scaling_release_fragments:
         if source.count(fragment) != 1:
             errors.append(
-                f"{release_path}: source-bound G-SCALE/G-12P receipt corridor "
+                f"{release_path}: source-bound G-4P/G-12P/G-SCALE receipt corridor "
                 f"must contain exactly {fragment!r}"
             )
     scaling_environment = {
@@ -1321,7 +1578,11 @@ def _production_liveness_release_inventory_errors(
                     "_formal_artifacts",
                 ),
                 "write_sumeragi_v2_release_receipt_corridor_log.py": (
+                    "_sdk_suite_source_manifest",
                     "_test_count_from_log",
+                    "_prebuilt_artifact_root",
+                    "_prebuilt_release_roots",
+                    "_prebuilt_directory",
                 ),
             }
             expected_parent_component_symbols = frozenset(
@@ -1400,21 +1661,21 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "formal" / "sumeragi_v2" / "README.md": (
-            "current inventory to 835 tests across 39 modules.\n"
+            "current inventory to 845 tests across 39 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "current 835-test,\n39-module inventory. The complete source-sealed\n"
+            "current 845-test,\n39-module inventory. The complete source-sealed\n"
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "specs" / "sumeragi_v2_liveness.md": (
-            "current source-bound inventory to 835 exact tests "
+            "current source-bound inventory to 845 exact tests "
             "across\n39 modules and "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network legs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
@@ -1545,9 +1806,8 @@ def _promotion_target_evidence_errors(
                 f"proof evidence promotion target {obligation_id} is not bound "
                 "to the current proof ledger"
             )
-        expected_log = (
-            "target/formal/sumeragi_v2/tlaps/targets/"
-            f"{obligation_id}.log"
+        expected_log = _formal_evidence_logical_path(
+            "tlaps", "targets", f"{obligation_id}.log"
         )
         if entry.get("log") != expected_log:
             errors.append(
@@ -1555,7 +1815,7 @@ def _promotion_target_evidence_errors(
                 f"{expected_log}"
             )
             continue
-        log_path = root_dir / expected_log
+        log_path = _formal_evidence_physical_path(expected_log, root_dir)
         if not log_path.is_file() or log_path.is_symlink():
             errors.append(
                 f"proof evidence target log is not a regular file: {log_path}"
@@ -1744,8 +2004,8 @@ def _release_evidence_errors(
             )
 
         preflight_value = entry.get("preflight_log")
-        expected_preflight = (
-            f"target/formal/sumeragi_v2/tlaps/{module}.preflight.log"
+        expected_preflight = _formal_evidence_logical_path(
+            "tlaps", f"{module}.preflight.log"
         )
         if preflight_value != expected_preflight:
             errors.append(
@@ -1753,7 +2013,9 @@ def _release_evidence_errors(
                 f"{expected_preflight}"
             )
         else:
-            preflight_path = root_dir / expected_preflight
+            preflight_path = _formal_evidence_physical_path(
+                expected_preflight, root_dir
+            )
             if not preflight_path.is_file() or preflight_path.is_symlink():
                 errors.append(
                     f"proof evidence preflight log is not a regular file: {preflight_path}"
@@ -1780,11 +2042,11 @@ def _release_evidence_errors(
                         )
 
         log_value = entry.get("log")
-        expected_log = f"target/formal/sumeragi_v2/tlaps/{module}.log"
+        expected_log = _formal_evidence_logical_path("tlaps", f"{module}.log")
         if log_value != expected_log:
             errors.append(f"proof evidence module {module} must use log {expected_log}")
             continue
-        log_path = root_dir / expected_log
+        log_path = _formal_evidence_physical_path(expected_log, root_dir)
         if not log_path.is_file() or log_path.is_symlink():
             errors.append(f"proof evidence log is not a regular file: {log_path}")
             continue

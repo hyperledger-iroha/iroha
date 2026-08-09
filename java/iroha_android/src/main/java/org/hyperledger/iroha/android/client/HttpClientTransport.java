@@ -48,6 +48,10 @@ import org.hyperledger.iroha.android.client.queue.PendingTransactionQueue;
 import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.crypto.export.KeyExportBundle;
 import org.hyperledger.iroha.android.crypto.export.KeyExportException;
+import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels;
+import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.SumeragiDiagnosticsStatus;
+import org.hyperledger.iroha.android.consensus.SumeragiStatusModels;
+import org.hyperledger.iroha.android.consensus.SumeragiStatusModels.SumeragiV2Status;
 import org.hyperledger.iroha.android.nexus.UaidBindingsQuery;
 import org.hyperledger.iroha.android.nexus.UaidBindingsResponse;
 import org.hyperledger.iroha.android.nexus.UaidJsonParser;
@@ -444,6 +448,26 @@ public final class HttpClientTransport implements IrohaClient {
     final TransportRequest request =
         buildJsonGetRequest("/v1/ram-lfe/program-policies", Collections.emptyMap());
     return fetchJson(request, RamLfeJsonParser::parsePolicyList, "ram-lfe program policy list");
+  }
+
+  /** Fetches the authoritative protocol-v4 Sumeragi status snapshot. */
+  @Override
+  public CompletableFuture<SumeragiV2Status> getSumeragiStatus() {
+    return fetchExactJson(
+        buildExactJsonGetRequest(
+            "/v1/sumeragi/status", SumeragiStatusModels.STATUS_JSON_MAX_BYTES),
+        SumeragiStatusModels::parseStatus,
+        "Sumeragi status");
+  }
+
+  /** Fetches operational Sumeragi evidence from its separate diagnostics route. */
+  @Override
+  public CompletableFuture<SumeragiDiagnosticsStatus> getSumeragiDiagnostics() {
+    return fetchExactJson(
+        buildExactJsonGetRequest(
+            "/v1/sumeragi/diagnostics", SumeragiStatusModels.DIAGNOSTICS_JSON_MAX_BYTES),
+        SumeragiDiagnosticsModels::parseDiagnostics,
+        "Sumeragi diagnostics");
   }
 
   /** Fetch the exact result-bearing {@code SignedBlockWire} committed at {@code height}. */
@@ -2432,8 +2456,17 @@ public final class HttpClientTransport implements IrohaClient {
       final Map<String, List<String>> headers,
       final int actualBytes,
       final String errorContext) {
-    final List<String> values = headerValues(headers, "Content-Length");
-    if (values.isEmpty()) {
+    final List<String> values = new ArrayList<>();
+    boolean matchingHeaderPresent = false;
+    for (final Map.Entry<String, List<String>> entry : headers.entrySet()) {
+      if (entry.getKey() != null && entry.getKey().equalsIgnoreCase("Content-Length")) {
+        matchingHeaderPresent = true;
+        if (entry.getValue() != null) {
+          values.addAll(entry.getValue());
+        }
+      }
+    }
+    if (!matchingHeaderPresent) {
       return;
     }
     if (values.size() != 1) {

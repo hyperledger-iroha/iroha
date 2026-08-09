@@ -7760,7 +7760,7 @@ impl Client {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/status");
         let resp = self.send_builder(
             self.default_request(HttpMethod::GET, url)
-                .header("Accept", APPLICATION_NORITO),
+                .header("Accept", ACCEPT_NORITO_PREFERRED),
         )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
@@ -7774,16 +7774,18 @@ impl Client {
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
-        if content_type.starts_with(APPLICATION_NORITO) {
+        let status = if Self::is_norito_content_type(content_type) {
             let status = decode_from_bytes::<SumeragiV2Status>(resp.body())
                 .map_err(|err| eyre!("Failed to decode sumeragi status Norito payload: {err}"))?;
             status
-                .validate()
-                .map_err(|err| eyre!("Invalid Sumeragi v2 status payload: {err}"))?;
-            return Ok(status);
-        }
-        let status = norito::json::from_slice::<SumeragiV2Status>(resp.body())
-            .map_err(|e| eyre!("Failed to decode sumeragi status JSON payload: {e}"))?;
+        } else if Self::is_exact_json_content_type(content_type) {
+            norito::json::from_slice::<SumeragiV2Status>(resp.body())
+                .map_err(|err| eyre!("Failed to decode sumeragi status JSON payload: {err}"))?
+        } else {
+            return Err(eyre!(
+                "Failed to decode sumeragi status: invalid content-type `{content_type}` (expected {APPLICATION_NORITO} or {APPLICATION_JSON})"
+            ));
+        };
         status
             .validate()
             .map_err(|err| eyre!("Invalid Sumeragi v2 status payload: {err}"))?;
@@ -7812,29 +7814,10 @@ impl Client {
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
-        if content_type.starts_with(APPLICATION_NORITO) {
-            match decode_from_bytes::<SumeragiV2Status>(resp.body()) {
-                Ok(status) => {
-                    status
-                        .validate()
-                        .map_err(|err| eyre!("Invalid Sumeragi v2 status payload: {err}"))?;
-                    return norito::json::to_value(&status)
-                        .map_err(|err| eyre!("Failed to render Sumeragi v2 status JSON: {err}"));
-                }
-                Err(norito_err) => {
-                    let status = norito::json::from_slice::<SumeragiV2Status>(resp.body())
-                        .map_err(|json_err| {
-                            eyre!(
-                                "Failed to decode sumeragi status Norito payload: {norito_err}; JSON fallback also failed: {json_err}"
-                            )
-                        })?;
-                    status
-                        .validate()
-                        .map_err(|err| eyre!("Invalid Sumeragi v2 status payload: {err}"))?;
-                    return norito::json::to_value(&status)
-                        .map_err(|err| eyre!("Failed to render Sumeragi v2 status JSON: {err}"));
-                }
-            }
+        if !Self::is_exact_json_content_type(content_type) {
+            return Err(eyre!(
+                "Failed to decode sumeragi status JSON: invalid content-type `{content_type}` (expected {APPLICATION_JSON})"
+            ));
         }
         let status = norito::json::from_slice::<SumeragiV2Status>(resp.body())
             .map_err(|err| eyre!("Failed to decode sumeragi status JSON payload: {err}"))?;
@@ -7859,7 +7842,7 @@ impl Client {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/diagnostics");
         let resp = self.send_builder(
             self.default_request(HttpMethod::GET, url)
-                .header("Accept", APPLICATION_NORITO),
+                .header("Accept", ACCEPT_NORITO_PREFERRED),
         )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
@@ -7873,12 +7856,16 @@ impl Client {
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
-        let wire = if content_type.starts_with(APPLICATION_NORITO) {
+        let wire = if Self::is_norito_content_type(content_type) {
             decode_from_bytes::<SumeragiDiagnosticsStatus>(resp.body()).map_err(|err| {
                 eyre!("Failed to decode sumeragi diagnostics Norito payload: {err}")
             })?
-        } else {
+        } else if Self::is_exact_json_content_type(content_type) {
             norito::json::from_slice(resp.body())?
+        } else {
+            return Err(eyre!(
+                "Failed to decode sumeragi diagnostics: invalid content-type `{content_type}` (expected {APPLICATION_NORITO} or {APPLICATION_JSON})"
+            ));
         };
         if let Some(npos) = &wire.npos {
             npos.validate()
@@ -30006,16 +29993,7 @@ mod tests {
             .expect("snapshot captured");
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.path(), "/v1/sumeragi/status");
-        let accept_header: HashMap<_, _> = snapshot
-            .headers
-            .iter()
-            .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
-            .collect();
-        assert_eq!(
-            accept_header.get("accept"),
-            Some(&APPLICATION_NORITO.to_owned()),
-            "client should request Norito payloads for sumeragi status"
-        );
+        assert_single_accept_header(&snapshot, ACCEPT_NORITO_PREFERRED);
 
         let json_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let json_body =
@@ -30030,6 +30008,24 @@ mod tests {
         })
         .expect("json call succeeds");
         assert_eq!(decoded_json, status);
+
+        for content_type in [
+            None,
+            Some("application/octet-stream"),
+            Some("application/x-norito-legacy"),
+        ] {
+            let response = mk_response(
+                StatusCode::OK,
+                norito::json::to_vec(&status).expect("serialize current Sumeragi status JSON"),
+                content_type,
+            );
+            let error = with_mock_http(
+                respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+                || client.get_sumeragi_status(),
+            )
+            .expect_err("undeclared or noncanonical media types must fail closed");
+            assert!(error.to_string().contains("invalid content-type"), "{error}");
+        }
     }
 
     #[test]
@@ -30101,7 +30097,7 @@ mod tests {
     }
 
     #[test]
-    fn get_sumeragi_status_json_requests_json_and_falls_back_to_norito() {
+    fn get_sumeragi_status_json_requires_exact_json_media_type() {
         let mut status = sample_sumeragi_status();
         status.height = 43;
         status.view = 7;
@@ -30130,43 +30126,27 @@ mod tests {
             .first()
             .cloned()
             .expect("snapshot captured");
-        let json_accept_header: HashMap<_, _> = json_snapshot
-            .headers
-            .iter()
-            .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
-            .collect();
-        assert_eq!(
-            json_accept_header.get("accept"),
-            Some(&APPLICATION_JSON.to_owned()),
-            "json helper should request JSON payloads for sumeragi status"
-        );
+        assert_single_accept_header(&json_snapshot, APPLICATION_JSON);
 
-        let norito_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let norito_body = norito::to_bytes(&status).expect("serialize status");
-        let norito_response = Response::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito_body)
-            .unwrap();
-        let decoded_norito =
-            with_mock_http(respond_with(&norito_snapshots, norito_response), || {
-                client_with_base_url(base_url()).get_sumeragi_status_json()
-            })
-            .expect("norito fallback succeeds");
-        assert_eq!(decoded_norito, expected_json);
-
-        let mislabeled_json_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let mislabeled_json_response = Response::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::json::to_vec(&status).expect("serialize status endpoint JSON payload"))
-            .unwrap();
-        let decoded_mislabeled_json = with_mock_http(
-            respond_with(&mislabeled_json_snapshots, mislabeled_json_response),
-            || client_with_base_url(base_url()).get_sumeragi_status_json(),
-        )
-        .expect("json fallback succeeds for mislabeled status payload");
-        assert_eq!(decoded_mislabeled_json, expected_json);
+        let rejected_json =
+            norito::json::to_vec(&status).expect("serialize rejected status JSON");
+        let rejected_responses = [
+            (Some(APPLICATION_NORITO), norito::to_bytes(&status).expect("serialize status")),
+            (Some(APPLICATION_NORITO), rejected_json.clone()),
+            (None, rejected_json.clone()),
+            (Some("application/x-norito-legacy"), rejected_json),
+        ];
+        for (content_type, body) in rejected_responses {
+            let error = with_mock_http(
+                respond_with(
+                    &Arc::new(Mutex::new(Vec::new())),
+                    mk_response(StatusCode::OK, body, content_type),
+                ),
+                || client_with_base_url(base_url()).get_sumeragi_status_json(),
+            )
+            .expect_err("the JSON-specific helper must not guess or fall back");
+            assert!(error.to_string().contains("invalid content-type"), "{error}");
+        }
     }
 
     #[test]
@@ -30432,8 +30412,9 @@ mod tests {
         let (status, _) = sample_sumeragi_status_with_relay();
         let mut value = norito::json::to_value(&status).expect("serialize diagnostics fixture");
         value
-            .as_object_mut()
-            .expect("diagnostics object")
+            .pointer_mut("/lane_relay_envelopes/0/settlement_commitment")
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("diagnostics fixture contains nested settlement commitment")
             .insert("canonical".to_owned(), norito::json::Value::Null);
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
@@ -30441,14 +30422,10 @@ mod tests {
             .body(norito::json::to_vec(&value).expect("encode adversarial diagnostics JSON"))
             .unwrap();
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-
         let result = with_mock_http(respond_with(&snapshots, response), || {
             client.get_sumeragi_diagnostics()
         });
-        assert!(
-            result.is_err(),
-            "unknown diagnostics fields must be rejected"
-        );
+        assert!(result.is_err(), "unknown nested fields must be rejected");
     }
 
     #[test]
@@ -30484,21 +30461,38 @@ mod tests {
     }
 
     #[test]
-    fn get_sumeragi_diagnostics_accepts_json_payload_without_content_type_header() {
+    fn get_sumeragi_diagnostics_requires_declared_current_media_type() {
         let client = client_with_base_url(base_url());
         let (status, relay_envelope) = sample_sumeragi_status_with_relay();
         let body = norito::json::to_vec(&status).expect("encode status payload as json");
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
-            .body(body)
+            .header("content-type", APPLICATION_JSON)
+            .body(body.clone())
             .unwrap();
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
 
         let decoded = with_mock_http(respond_with(&snapshots, response), || {
             client.get_sumeragi_diagnostics()
         })
-        .expect("decode sumeragi status without content type");
+        .expect("decode declared current diagnostics JSON");
         assert_eq!(decoded.lane_relay_envelopes, vec![relay_envelope]);
+
+        for content_type in [
+            None,
+            Some("application/octet-stream"),
+            Some("application/x-norito-legacy"),
+        ] {
+            let error = with_mock_http(
+                respond_with(
+                    &Arc::new(Mutex::new(Vec::new())),
+                    mk_response(StatusCode::OK, body.clone(), content_type),
+                ),
+                || client.get_sumeragi_diagnostics(),
+            )
+            .expect_err("undeclared or noncanonical diagnostics media must fail closed");
+            assert!(error.to_string().contains("invalid content-type"), "{error}");
+        }
     }
 
     #[test]

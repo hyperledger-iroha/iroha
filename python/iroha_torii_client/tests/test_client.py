@@ -12,7 +12,12 @@ from urllib.parse import quote
 
 import pytest
 import requests
-from requests.structures import CaseInsensitiveDict
+
+from sumeragi_exact_json_test_support import (
+    RecordingSession,
+    StubResponse,
+    sumeragi_exact_json_response_cases,
+)
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 if str(PACKAGE_ROOT) not in sys.path:
@@ -693,68 +698,6 @@ def _noncanonical_standard_base64_pad_bit_alias(encoded: str) -> str:
     index = len(chars) - 3
     chars[index] = alphabet[alphabet.index(chars[index]) ^ 0x01]
     return "".join(chars)
-
-
-class StubResponse(requests.Response):
-    def __init__(
-        self,
-        status_code: int = 200,
-        payload: Optional[Any] = None,
-        *,
-        headers: Optional[Dict[str, str]] = None,
-        text: Optional[str] = None,
-    ) -> None:
-        super().__init__()
-        self.status_code = status_code
-        self._payload = payload
-        self.headers = CaseInsensitiveDict(headers or {})
-        if payload is None:
-            content = text.encode("utf-8") if text is not None else b""
-        else:
-            content = json.dumps(payload).encode("utf-8")
-            if "Content-Type" not in self.headers:
-                self.headers["Content-Type"] = "application/json"
-        self._content = content
-        self.encoding = "utf-8"
-
-    def json(self, **kwargs: Any) -> Any:
-        if self._payload is None:
-            raise ValueError("no payload available")
-        return json.loads(self.text)
-
-
-class RecordingSession(requests.Session):
-    def __init__(self) -> None:
-        super().__init__()
-        self.calls: List[Dict[str, Any]] = []
-        self._responses: List[StubResponse] = []
-
-    def queue(self, response: StubResponse) -> None:
-        self._responses.append(response)
-
-    def request(
-        self,
-        method: Union[str, bytes],
-        url: Union[str, bytes],
-        *args: Any,
-        **kwargs: Any,
-    ) -> requests.Response:
-        params = kwargs.get("params") or {}
-        headers = kwargs.get("headers") or {}
-        data = kwargs.get("data")
-        self.calls.append(
-            {
-                "method": method,
-                "url": url,
-                "params": params,
-                "headers": headers,
-                "data": data,
-                "allow_redirects": kwargs.get("allow_redirects"),
-            }
-        )
-        if not self._responses:
-            raise AssertionError("no queued responses")
-        return self._responses.pop(0)
 
 
 def _sample_sorafs_orderbook_payloads() -> Dict[str, Any]:
@@ -3936,6 +3879,17 @@ def test_sumeragi_endpoint_methods_reject_swapped_payload_contracts() -> None:
     assert diagnostics_session.calls[0]["url"].endswith(
         "/v1/sumeragi/diagnostics"
     )
+
+    for endpoint, response, error_type, message in sumeragi_exact_json_response_cases():
+        session = RecordingSession()
+        session.queue(response)
+        client = ToriiClient("http://node.test", session=session)
+        with pytest.raises(error_type, match=message):
+            getattr(client, f"get_sumeragi_{endpoint}")()
+        assert response.was_closed is True, endpoint
+        assert session.calls[0]["url"].endswith(f"/v1/sumeragi/{endpoint}")
+        assert session.calls[0]["headers"] == {"Accept": "application/json"}
+        assert session.calls[0]["stream"] is True
 
 
 def test_get_sumeragi_diagnostics_parses_exact_nested_fee_and_native_amx_receipts() -> None:

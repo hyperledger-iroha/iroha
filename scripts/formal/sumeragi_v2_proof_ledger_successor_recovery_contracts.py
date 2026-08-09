@@ -209,6 +209,7 @@ drain_v2_ingress(
     &mut block_sync,
     &mut block_sync_request,
     &mut npos_vrf,
+    V2IngressDrainMode::Ordinary,
     body_queue_capacity,
 )?;
 if discovery_was_outstanding && block_sync_request.is_none() {
@@ -376,7 +377,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "\n#[derive(Clone, Copy, Debug, PartialEq, Eq)]\nenum OuterIngressTurn",
             ),
             (
-                "block_sync_server.serve_historical_body( kura, request, &sender, local_key )",
+                "block_sync_server.serve_historical_body( kura, request, &sender, local_key, )",
                 "executor.accept_certified_body_response_with_ingress_ownership( response, &sender, &ingress_ownership, services, )",
                 "block_sync.authenticate_response(response, &sender)",
                 "block_sync.enqueue_and_complete(discovered, |message| { executor.enqueue_discovered_commit_certificate(message, ingress_ownership) })",
@@ -1128,7 +1129,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
         for test in (
             "sumeragi::v2_block_sync::tests::discovery_outputs_only_normal_commit_qc_ingress_and_waits_for_enqueue",
             "sumeragi::v2_block_sync::tests::catch_up_is_strictly_sequential_across_contexts",
-            "sumeragi::v2_block_sync::tests::historical_body_comes_from_kura_and_a_non_signer_archive_can_serve",
+            "sumeragi::v2_block_sync::tests::historical_body_uses_self_contained_kura_finality_without_context_store",
             "sumeragi::v2_runtime::tests::successor_activation_snapshot_requires_armed_live_clocks",
             "sumeragi::v2_runner::tests::successor_activation_is_published_only_after_ingress_is_open",
             "sumeragi::v2_runner::tests::complete_tip_recovery_uses_the_same_live_successor_boundary",
@@ -2924,5 +2925,912 @@ def _async_historical_recovery_source_fidelity_errors(
                 f"missing={missing!r}, vacuous={vacuous is not None}, "
                 f"has_proof={len(parts) == 2}"
             )
+
+    return errors
+
+
+def _persistent_recovery_cut_source_fidelity_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Bind crash-safe producer and live leader-wire recovery cuts to Rust."""
+
+    base = repo_root / "crates" / "iroha_core" / "src" / "sumeragi"
+    paths = {
+        "adapter": base / "v2.rs",
+        "runtime": base / "v2_runtime.rs",
+        "effects": base / "v2_effects.rs",
+        "store": base / "serviced_candidate_store.rs",
+        "ingress": base / "mod.rs",
+        "worker": base / "v2_worker.rs",
+        "formal": repo_root
+        / "formal"
+        / "sumeragi_v2"
+        / "SumeragiV2AsyncNetwork.tla",
+    }
+    errors: list[str] = []
+    for path in paths.values():
+        if not path.is_file() or path.is_symlink():
+            errors.append(
+                f"{path}: persistent recovery-cut source must be a regular file"
+            )
+    if errors:
+        return errors
+
+    sources = {
+        name: path.read_text(encoding="utf-8") for name, path in paths.items()
+    }
+
+    def require_context_item(
+        source_name: str,
+        item_name: str,
+        context: tuple[tuple[str, ...], ...],
+        description: str,
+    ) -> RustItem | None:
+        path = paths[source_name]
+        matches = [
+            item
+            for item in rust_items(sources[source_name], item_name)
+            if item.brace_context == context
+        ]
+        if len(matches) != 1:
+            errors.append(
+                f"{path}: require exactly one {description} item {item_name} "
+                f"in context {context!r}; found {len(matches)}"
+            )
+            return None
+        return matches[0]
+
+    adapter_context = (("impl", "SumeragiV2Adapter"),)
+    runtime_context = (("impl", "SerializedV2Runtime"),)
+    executor_context = (
+        (
+            "impl",
+            "<",
+            "R",
+            ":",
+            "EffectRuntime",
+            ">",
+            "V2EffectExecutor",
+            "<",
+            "R",
+            ">",
+        ),
+    )
+    store_context = (("impl", "LeaderWireLifecycleStoreGate"),)
+    ingress_context = (("impl", "FairV2Ingress"),)
+    worker_services_context = (
+        ("impl", "V2EffectServices", "for", "ProductionV2Services"),
+    )
+
+    persist_release = require_context_item(
+        "adapter",
+        "persist_unrecorded_producer_releases",
+        adapter_context,
+        "atomic persistent producer release",
+    )
+    for sequence, description in (
+        (
+            """
+if self.ensure_canonical_reclaimed_producer_state_after_decision()? {
+    return Ok(());
+}
+""",
+            "producer release must not resurrect an epoch reclaimed by durable Decision",
+        ),
+        (
+            """
+if !addresses.insert(token.address) {
+    return Err(self.fail_serviced_candidate_store(
+        "one producer address had multiple simultaneous release authorities"
+            .to_owned(),
+    ));
+}
+""",
+            "producer release must reject duplicate durable addresses",
+        ),
+        (
+            """
+if current.status() != ProducerContinuationStatus::Reserved
+    || current.identity().address() != token.address
+    || self.durable_producer_continuations.get(&token.address) != Some(current)
+    || self.pending_producer_handoffs.contains_key(&token.address)
+{
+""",
+            "producer release must exact-match process and durable aliases before mutation",
+        ),
+        (
+            """
+let process_previous = self.producer_continuations.clone();
+let durable_previous = self.durable_producer_continuations.clone();
+let dormant_previous = self.restored_dormant_producer_continuations.clone();
+let handoffs_previous = self.pending_producer_handoffs.clone();
+""",
+            "producer release must retain one complete rollback image",
+        ),
+        (
+            """
+if let Err(reason) = self
+    .serviced_candidate_store
+    .persist_with_producer_continuations(
+        &self.durable_serviced_candidates,
+        &self.durable_producer_continuations,
+        self.serviced_candidates_decision_reclaimed,
+    )
+{
+    self.producer_continuations = process_previous;
+    self.durable_producer_continuations = durable_previous;
+    self.restored_dormant_producer_continuations = dormant_previous;
+    self.pending_producer_handoffs = handoffs_previous;
+""",
+            "failed producer persistence must roll every alias back",
+        ),
+    ):
+        _require_rust_token_sequence(
+            paths["adapter"], persist_release, sequence, description, errors
+        )
+
+    deferred_release = require_context_item(
+        "adapter",
+        "release_deferred_producer_continuations_before_owner_removal",
+        adapter_context,
+        "persist-before-remove Busy producer release",
+    )
+    _require_rust_token_sequence(
+        paths["adapter"],
+        deferred_release,
+        """
+let active = self.all_deferred_admission_ordinals();
+if !retiring.is_subset(&active)
+    || !self
+        .deferred_producer_continuations
+        .keys()
+        .all(|ordinal| active.contains(ordinal))
+{
+""",
+        "deferred release must retain one exact Busy owner for every producer",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["adapter"],
+        deferred_release,
+        """
+self.persist_unrecorded_producer_releases(&tokens)?;
+for ordinal in retiring {
+    self.deferred_producer_continuations.remove(ordinal);
+}
+""",
+        "deferred release must persist the batch before dropping ownership aliases",
+        errors,
+    )
+
+    retire_deferred_body = require_context_item(
+        "adapter",
+        "retire_deferred_body_available",
+        adapter_context,
+        "exact deferred BodyAvailable retirement",
+    )
+    _require_rust_token_sequence(
+        paths["adapter"],
+        retire_deferred_body,
+        """
+self.release_deferred_producer_continuations_before_owner_removal(&retiring)?;
+let before = self.deferred_completions.len();
+self.deferred_completions.retain(|input| !matches(input));
+""",
+        "deferred BodyAvailable retirement must persist before queue removal",
+        errors,
+    )
+
+    retire_deferred_pipeline = require_context_item(
+        "adapter",
+        "retire_deferred_body_pipeline_completions",
+        adapter_context,
+        "transactional deferred body-pipeline retirement",
+    )
+    _require_rust_token_sequence(
+        paths["adapter"],
+        retire_deferred_pipeline,
+        """
+if retiring.len() != retirements.len() {
+    return Err(self.fail_serviced_candidate_store(
+        "one deferred body occurrence occupied multiple serialized queues".to_owned(),
+    ));
+}
+self.release_deferred_producer_continuations_before_owner_removal(&retiring)?;
+""",
+        "pipeline retirement must reject duplicate owners before persistent release",
+        errors,
+    )
+
+    frontier = require_context_item(
+        "adapter",
+        "reconcile_restored_reserved_producer_frontier",
+        adapter_context,
+        "restart-only Reserved producer frontier reconciliation",
+    )
+    for sequence, description in (
+        (
+            """
+if self.reducer.durable_state().decision().is_some() {
+    return Ok(());
+}
+let current_view = self.reducer.current_tag().view();
+let protected = self.reducer.durable_state().locked().map(|certificate| {
+""",
+            "restart reconciliation must derive its cut from replayed WAL state",
+        ),
+        (
+            """
+if candidate.source_view() > current_view {
+    return Err(self.fail_serviced_candidate_store(
+        "restored producer originated beyond the replayed durable view".to_owned(),
+    ));
+}
+if candidate.source_view() == current_view {
+    continue;
+}
+""",
+            "restart reconciliation must reject the future and retain current-view producers",
+        ),
+        (
+            """
+let protects_body_pipeline = protected.is_some_and(|(view, subject)| {
+    candidate.source_view() == view
+        && candidate.target() == Some(subject)
+        && matches!(
+            stage,
+            ServicedCandidateStage::LocalProposalReady
+                | ServicedCandidateStage::BodyAvailable
+                | ServicedCandidateStage::BodyStored
+                | ServicedCandidateStage::ValidationCompleted
+        )
+});
+if !protects_body_pipeline {
+    retiring.push(address);
+}
+""",
+            "only the exact protected-lock body pipeline may survive an older restart frontier",
+        ),
+        (
+            """
+if let Err(reason) = self
+    .serviced_candidate_store
+    .persist_with_producer_continuations(
+        &self.durable_serviced_candidates,
+        &self.durable_producer_continuations,
+        self.serviced_candidates_decision_reclaimed,
+    )
+{
+    self.producer_continuations = process_previous;
+    self.durable_producer_continuations = durable_previous;
+    self.restored_dormant_producer_continuations = dormant_previous;
+""",
+            "restart frontier pruning must roll back all aliases on persistence failure",
+        ),
+    ):
+        _require_rust_token_sequence(
+            paths["adapter"], frontier, sequence, description, errors
+        )
+
+    adapter_open = _require_rust_item(
+        paths["adapter"], sources["adapter"], "open_with_aggregator", errors
+    )
+    _require_rust_token_sequence(
+        paths["adapter"],
+        adapter_open,
+        """
+adapter.reconcile_restored_reserved_producer_frontier()?;
+adapter.reclaim_serviced_candidates()?;
+let replay_tag = adapter.reducer.current_tag();
+""",
+        "restart frontier pruning must precede runtime replay and dormant capacity installation",
+        errors,
+    )
+
+    persistent_deferred = require_context_item(
+        "adapter",
+        "deferred_body_available_has_persistent_producer",
+        adapter_context,
+        "Busy-deferred persistent body-owner classifier",
+    )
+    _require_rust_token_sequence(
+        paths["adapter"],
+        persistent_deferred,
+        """
+if record.status() != ProducerContinuationStatus::Reserved
+    || record.source_class() != ProducerContinuationSourceClass::VolatileBody
+    || record.identity().address() != address
+    || record.identity().stage() != ServicedCandidateStage::BodyAvailable as u8
+    || self.durable_producer_continuations.get(&address) != Some(record)
+""",
+        "persistent deferred body classification must exact-match the stage-7 durable root",
+        errors,
+    )
+
+    persistent_body = require_context_item(
+        "runtime",
+        "body_available_has_persistent_producer",
+        runtime_context,
+        "serialized persistent body-owner classifier",
+    )
+    _require_rust_token_sequence(
+        paths["runtime"],
+        persistent_body,
+        """
+if ingress && deferred {
+    self.latch_fail_closed("one body completion retained two persistent producer carriers");
+    return Err(
+        "Sumeragi v2 body completion has duplicate persistent producer ownership"
+            .to_owned(),
+    );
+}
+Ok(ingress || deferred)
+""",
+        "one serialized body owner may have at most one persistent producer carrier",
+        errors,
+    )
+
+    rebind_body = require_context_item(
+        "runtime",
+        "rebind_body_available",
+        runtime_context,
+        "persistent-root-preserving body rebind",
+    )
+    for sequence, description in (
+        (
+            """
+let source_persistent =
+    self.body_available_has_persistent_producer(previous, manifest)?;
+let destination_persistent =
+    self.body_available_has_persistent_producer(rebound, manifest)?;
+if source_persistent && destination_persistent {
+""",
+            "rebind must classify both persistent roots before mutation",
+        ),
+        (
+            """
+if source_persistent {
+    if !self.retire_body_available(rebound, manifest)? {
+""",
+            "a sole persistent source must retire the ordinary destination",
+        ),
+        (
+            """
+let ingress = self
+    .ingress
+    .rebind_canonical_body_available(previous, rebound, manifest);
+let deferred = self
+    .driver
+    .rebind_deferred_body_available(previous, rebound, manifest);
+""",
+            "a sole persistent source must be retagged rather than retired",
+        ),
+        (
+            """
+let deferred = match self
+    .driver
+    .retire_deferred_body_available(previous, manifest)
+{
+""",
+            "a nonpersistent source must persist deferred release before coalescence",
+        ),
+    ):
+        _require_rust_token_sequence(
+            paths["runtime"], rebind_body, sequence, description, errors
+        )
+
+    retire_fetch_parent = require_context_item(
+        "runtime",
+        "retire_restored_body_fetch_parent",
+        runtime_context,
+        "pre-BodyAvailable restored Fetch retirement",
+    )
+    _require_rust_token_sequence(
+        paths["runtime"],
+        retire_fetch_parent,
+        """
+let AdapterEffect::FetchBody {
+    round,
+    subject,
+    manifest,
+    ..
+} = effect
+else {
+""",
+        "restored Fetch retirement must extract only exact FetchBody coordinates",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["runtime"],
+        retire_fetch_parent,
+        """
+if !ownership.exactly_binds_adapter_effect(effect) {
+    self.latch_fail_closed(
+        "restored body-fetch retirement changed its exact effect binding",
+    );
+""",
+        "restored Fetch retirement must exact-match the bound Fetch effect",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["runtime"],
+        retire_fetch_parent,
+        """
+match self.driver.retire_restored_body_fetch_parent(
+    *round,
+    *subject,
+    manifest.as_ref(),
+) {
+""",
+        "restored Fetch retirement must delegate durable parent lookup to the adapter",
+        errors,
+    )
+
+    adapter_fetch_parent = require_context_item(
+        "adapter",
+        "retire_restored_body_fetch_parent",
+        adapter_context,
+        "durable coordinate-bound Fetch-parent retirement",
+    )
+    for sequence, description in (
+        (
+            """
+if self.selected_producer_lifecycle.is_some()
+    || round.context_id != self.wire_context.id()
+    || round.height != self.wire_context.height
+{
+""",
+            "Fetch-parent retirement must retain immutable height geometry",
+        ),
+        (
+            """
+manifest.validate(&self.wire_context)?;
+if manifest.round != round || manifest.subject != subject {
+    return Err(AdapterError::DurableBodyMismatch);
+}
+""",
+            "a supplied Fetch manifest must exact-match its round and subject",
+        ),
+        (
+            """
+let [(address, record)] = coordinate_matches.as_slice() else {
+    return match coordinate_matches.len() {
+        0 => Ok(false),
+        _ => Err(self.fail_serviced_candidate_store(
+""",
+            "manifest-less Fetch-parent lookup must select at most one dormant stage-7 record",
+        ),
+        (
+            """
+if expected_candidate.is_some_and(|expected| record.identity().candidate() != expected) {
+    return Err(self.fail_serviced_candidate_store(
+        "restored body-fetch manifest changed its persisted producer identity".to_owned(),
+    ));
+}
+self.persist_restored_body_producer_retirement(*address, record)?;
+""",
+            "Fetch-parent retirement must bind full manifest identity before persistence",
+        ),
+    ):
+        _require_rust_token_sequence(
+            paths["adapter"], adapter_fetch_parent, sequence, description, errors
+        )
+
+    commit_fetch_retirement = require_context_item(
+        "effects",
+        "commit_pending_fetch_retirement",
+        executor_context,
+        "terminal pending-Fetch retirement",
+    )
+    _require_rust_token_sequence(
+        paths["effects"],
+        commit_fetch_retirement,
+        """
+if !retired_completion {
+    let effect = plan.pending.task.adapter_effect();
+    self.runtime
+        .retire_restored_body_fetch_parent(&effect, plan.pending.task.ownership())
+        .map_err(EffectExecutorError::Runtime)?;
+}
+let work_id = plan.pending.task.id();
+let removed = self.pending_fetches.remove(&work_id);
+""",
+        "a terminal Fetch without a token must retire its restored parent before P/Q ownership",
+        errors,
+    )
+
+    production_fetch_parent_retirement = require_context_item(
+        "effects",
+        "retire_restored_body_fetch_parent",
+        (("impl", "EffectRuntime", "for", "SerializedV2Runtime"),),
+        "production restored Fetch-parent retirement delegate",
+    )
+    _require_rust_token_sequence(
+        paths["effects"],
+        production_fetch_parent_retirement,
+        """
+SerializedV2Runtime::retire_restored_body_fetch_parent(self, effect, ownership)
+""",
+        "production EffectRuntime must not use the ordinary no-op Fetch-parent default",
+        errors,
+    )
+
+    authority_advance = _require_rust_item(
+        paths["store"], sources["store"], "advance_view", errors
+    )
+    _require_rust_item_context(
+        paths["store"],
+        authority_advance,
+        (("impl", "LeaderWireRecoveryAuthority"),),
+        "monotone leader-wire view authority",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["store"],
+        authority_advance,
+        """
+if durable_view < self.durable_view {
+    return Err("leader-wire recovery authority regressed its durable view".to_owned());
+}
+""",
+        "leader-wire view authority must reject regression",
+        errors,
+    )
+
+    store_cut = require_context_item(
+        "store",
+        "advance_recovery_cut",
+        store_context,
+        "durable leader-wire live recovery cut",
+    )
+    for sequence, description in (
+        (
+            """
+if !next.matches_geometry(self.context_id, self.height, self.owner) {
+    return Err("leader-wire recovery cut changed immutable geometry".to_owned());
+}
+""",
+            "leader-wire cut must retain frozen geometry",
+        ),
+        (
+            """
+if !next.monotonically_extends(state.recovery_authority) {
+    return Err("leader-wire recovery cut is not monotone".to_owned());
+}
+""",
+            "leader-wire cut must monotonically extend the WAL authority",
+        ),
+        (
+            """
+if retiring != *expected_dormant_slots || !retiring.is_subset(&state.replay_dormant) {
+""",
+            "durable and mirrored obsolete Dormant sets must be exactly equal",
+        ),
+        (
+            """
+let previous = state.clone();
+state.recovery_authority = next;
+for slot in &retiring {
+""",
+            "leader-wire cut must retain one complete rollback image before removal",
+        ),
+        (
+            """
+if !retiring.is_empty()
+    && let Err(error) = self.persist_locked(&state)
+{
+    *state = previous;
+    return Err(error);
+}
+""",
+            "failed leader-wire persistence must restore authority and records",
+        ),
+    ):
+        _require_rust_token_sequence(
+            paths["store"], store_cut, sequence, description, errors
+        )
+
+    admit_ingress = require_context_item(
+        "store",
+        "admit_ingress",
+        store_context,
+        "durable leader-wire ingress admission",
+    )
+    _require_rust_token_sequence(
+        paths["store"],
+        admit_ingress,
+        """
+if state.recovery_authority.obsoletes(&token) {
+    return Err(
+        "leader-wire admission is obsolete under the durable recovery cut".to_owned(),
+    );
+}
+""",
+        "durable admission must reject an obsolete identity before lookup or mutation",
+        errors,
+    )
+
+    fair_admission = _require_rust_item(
+        paths["ingress"],
+        sources["ingress"],
+        "fair_v2_ingress_admit_leader_wire",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["ingress"],
+        fair_admission,
+        """
+if gate
+    .identity_is_obsolete(&identity)
+    .map_err(|_| FairV2IngressLeaderWireAdmissionError::Exhausted)?
+{
+    return Err(FairV2IngressLeaderWireAdmissionError::Rejected);
+}
+let durable_exact = gate
+    .lookup_exact(&identity, &slot)
+""",
+        "fair ingress must reject below-cut wire before durable exact lookup",
+        errors,
+    )
+
+    fair_cut = require_context_item(
+        "ingress",
+        "advance_leader_wire_recovery_cut",
+        ingress_context,
+        "gate-first fair-ingress recovery cut",
+    )
+    _require_rust_token_sequence(
+        paths["ingress"],
+        fair_cut,
+        """
+gate.advance_recovery_cut(next, &retiring)?;
+for slot in &retiring {
+    let removed = state
+        .leader_wire_lifecycles
+        .remove(slot)
+""",
+        "persistent gate publication must precede mirror pruning",
+        errors,
+    )
+
+    entered_view = require_context_item(
+        "worker",
+        "entered_view",
+        worker_services_context,
+        "production certified-view recovery cut",
+    )
+    _require_rust_token_sequence(
+        paths["worker"],
+        entered_view,
+        """
+let next_recovery_authority = self
+    .leader_wire_recovery_authority
+    .advance_view(tag.view())?;
+self.leader_wire_ingress
+    .advance_leader_wire_recovery_cut(next_recovery_authority)?;
+self.leader_wire_recovery_authority = next_recovery_authority;
+""",
+        "certified EnterView must publish the gate cut before exposing its authority",
+        errors,
+    )
+
+    finish_decision = require_context_item(
+        "worker",
+        "finish_decision_serve_reconciliation",
+        worker_services_context,
+        "production durable-Decision recovery cut",
+    )
+    _require_rust_token_sequence(
+        paths["worker"],
+        finish_decision,
+        """
+if decided_subject.is_some() {
+    let next = self.leader_wire_recovery_authority.with_durable_decision();
+    self.leader_wire_ingress
+        .advance_leader_wire_recovery_cut(next)?;
+    self.leader_wire_recovery_authority = next;
+}
+""",
+        "durable Decision must publish the all-wire gate cut before service reconciliation",
+        errors,
+    )
+
+    regression_contracts = (
+        (
+            "adapter",
+            "failed_busy_parent_retirement_retains_queue_and_durable_owner",
+            "restores the exact queue and durable producer after injected failure",
+        ),
+        (
+            "adapter",
+            "strict_view_advance_retains_live_producer_admission_until_owner_release",
+            "distinguishes live handoff retention from restart-only frontier pruning",
+        ),
+        (
+            "adapter",
+            "restart_frontier_retains_all_four_stages_of_the_protected_body_pipeline",
+            "retains every exact protected-lock body-pipeline stage",
+        ),
+        (
+            "adapter",
+            "restart_frontier_rejects_reserved_producer_beyond_the_durable_view",
+            "rejects a future-view producer during replay reconciliation",
+        ),
+        (
+            "adapter",
+            "durable_decision_release_does_not_restore_stale_process_only_predecessor",
+            "keeps the canonical empty producer epoch after durable Decision",
+        ),
+        (
+            "adapter",
+            "body_rebind_coalescence_preserves_the_only_persistent_producer",
+            "keeps the sole persistent rebind root across a second restart",
+        ),
+        (
+            "runtime",
+            "body_available_rebind_coalesces_exact_busy_deferred_destination_owner",
+            "retains a persistent destination while retiring an ordinary source",
+        ),
+        (
+            "runtime",
+            "body_available_rebind_rejects_two_persistent_roots_before_mutation",
+            "rejects two durable roots before either serialized owner changes",
+        ),
+        (
+            "store",
+            "leader_wire_live_recovery_cut_retires_only_dormant_records_and_is_monotone",
+            "checks live Dormant-only cut, rollback, and high-water retention",
+        ),
+        (
+            "worker",
+            "entered_view_advances_live_leader_wire_recovery_cut",
+            "rejects stale wire after live EnterView",
+        ),
+        (
+            "worker",
+            "durable_decision_advances_live_leader_wire_recovery_cut",
+            "rejects every wire after durable Decision",
+        ),
+    )
+    for source_name, item_name, _description in regression_contracts:
+        _require_rust_item(
+            paths[source_name], sources[source_name], item_name, errors
+        )
+
+    live_cut_regression = _require_rust_item(
+        paths["store"],
+        sources["store"],
+        "leader_wire_live_recovery_cut_retires_only_dormant_records_and_is_monotone",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["store"],
+        live_cut_regression,
+        """
+assert!(restored.records().is_empty(), "{label}");
+assert_eq!(restored.last_admission_ordinal(), 11, "{label}");
+assert_eq!(restored.scheduler_ordinal_high_watermark(), 73, "{label}");
+assert!(
+    gate.identity_is_obsolete(&token.identity)
+        .expect("inspect live recovery cut"),
+""",
+        "live leader-wire regression must retain both high-waters and reject the retired identity",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["store"],
+        live_cut_regression,
+        """
+assert!(
+    gate.advance_recovery_cut(regressed, &BTreeSet::new())
+        .is_err(),
+    "{label} cannot regress durable view/Decision authority"
+);
+""",
+        "live leader-wire regression must reject view and Decision regression",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["store"],
+        live_cut_regression,
+        """
+for retained_status in [
+    LeaderWireLifecycleStatus::Ingress,
+    LeaderWireLifecycleStatus::Runtime,
+] {
+""",
+        "live leader-wire regression must retain active Ingress and Runtime owners",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["store"],
+        live_cut_regression,
+        """
+std::fs::create_dir(&gate.path).expect("block recovery-cut publication");
+assert!(
+    gate.advance_recovery_cut(
+""",
+        "live leader-wire regression must inject and observe persistent-cut rollback",
+        errors,
+    )
+
+    stage_seven_regression = _require_rust_item(
+        paths["adapter"],
+        sources["adapter"],
+        "restored_body_available_terminal_retirement_is_persistent_before_token_release",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["adapter"],
+        stage_seven_regression,
+        """
+assert_restored_stage_seven_retirement_does_not_resurrect(0xBB, false, false, false);
+assert_restored_stage_seven_retirement_does_not_resurrect(0xBD, false, false, false);
+""",
+        "stage-7 regression must cover manifest-bound and manifest-less terminal Fetch retirement before reservation",
+        errors,
+    )
+
+    formal_source = sources["formal"]
+    formal_contracts = {
+        "AsyncLeaderWireRecoveryCutObsoletesItem": (
+            "DeliveryView(item) < nodeView[item.envelope.recipient]",
+            "NodeHasDecision(item.envelope.recipient)",
+        ),
+        "AsyncLeaderWireAtomicAdmissionAllows": (
+            "~AsyncLeaderWireRecoveryCutObsoletesItem(item)",
+        ),
+        "AsyncLeaderWireLifecycleRecoveryCutObsolete": (
+            "AsyncLeaderWireLifecycleDormant(record)",
+            "record.view < nodeView[record.recipient]",
+            "NodeHasDecision(record.recipient)",
+        ),
+        "AsyncLeaderWireLifecycleCanTerminal": (
+            "AsyncLeaderWireLifecycleRecoveryCutObsolete(record)",
+        ),
+        "RetireLeaderWireLifecycleSlot": (
+            "IF AsyncLeaderWireLifecycleRecoveryCutObsolete(record)",
+            "THEN asyncLeaderWireLifecycles \\ {record}",
+        ),
+    }
+    for operator, required in formal_contracts.items():
+        extracted = _top_level_operator_body(
+            formal_source, operator, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(
+                f"{paths['formal']}: missing persistent recovery-cut operator {operator}"
+            )
+            continue
+        body, line = extracted
+        for token in required:
+            if token not in body:
+                errors.append(
+                    f"{paths['formal']}:{line}: {operator} must retain "
+                    f"persistent recovery-cut token {token!r}"
+                )
+
+    highwater_theorem = _top_level_theorem_body(
+        formal_source,
+        "LeaderWireRecoveryCutRetainsOrdinalHighwaters",
+        preserve_string_contents=True,
+    )
+    if highwater_theorem is None:
+        errors.append(
+            f"{paths['formal']}: missing leader-wire recovery-cut high-water theorem"
+        )
+    else:
+        body, line = highwater_theorem
+        for token in (
+            "RetireLeaderWireLifecycleSlot(slot)",
+            "AsyncLeaderWireLifecycleRecoveryCutObsolete(record)",
+            "AsyncNextLeaderWireIngressOrdinal(node)' =",
+            "AsyncNextCandidateLifecycleOrdinal(node)' =",
+        ):
+            if token not in body:
+                errors.append(
+                    f"{paths['formal']}:{line}: leader-wire recovery-cut "
+                    f"high-water theorem must retain token {token!r}"
+                )
 
     return errors

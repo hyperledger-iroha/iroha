@@ -12,25 +12,74 @@ concurrency:
 jobs:
   sumeragi-v2-formal:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    env:
+      CARGO_NET_OFFLINE: "true"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
         with:
           distribution: temurin
           java-version: '17'
+      - name: Create fresh private formal invocation layout
+        id: formal_layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          invocation_root="$(mktemp -d /private/tmp/iroha-sumeragi-v2-formal.XXXXXX)"
+          chmod 700 "$invocation_root"
+          mkdir -m 700 \
+            "$invocation_root/target" \
+            "$invocation_root/artifacts" \
+            "$invocation_root/artifacts/formal" \
+            "$invocation_root/artifacts/formal/sumeragi_v2" \
+            "$invocation_root/tmp" \
+            "$invocation_root/tools" \
+            "$invocation_root/tools/tlapm" \
+            "$invocation_root/tools/tla2tools" \
+            "$invocation_root/tools/apalache" \
+            "$invocation_root/tools/verus"
+          {
+            printf 'invocation_root=%s\n' "$invocation_root"
+            printf 'artifact_root=%s\n' "$invocation_root/artifacts"
+            printf 'tlapm_root=%s\n' "$invocation_root/tools/tlapm"
+          } >> "$GITHUB_OUTPUT"
+          {
+            printf 'CARGO_TARGET_DIR=%s\n' "$invocation_root/target"
+            printf 'IROHA_RELEASE_ARTIFACT_ROOT=%s\n' "$invocation_root/artifacts"
+            printf 'IROHA_RELEASE_CANCEL_REQUEST_PATH=%s\n' "$invocation_root/cancel-request.json"
+            printf 'SUMERAGI_V2_FORMAL_EVIDENCE_DIR=%s\n' "$invocation_root/artifacts/formal/sumeragi_v2"
+            printf 'TMPDIR=%s\n' "$invocation_root/tmp"
+            printf 'TLAPM_INSTALL_ROOT=%s\n' "$invocation_root/tools/tlapm"
+            printf 'TLA2TOOLS_INSTALL_ROOT=%s\n' "$invocation_root/tools/tla2tools"
+            printf 'APALACHE_INSTALL_ROOT=%s\n' "$invocation_root/tools/apalache"
+            printf 'VERUS_INSTALL_ROOT=%s\n' "$invocation_root/tools/verus"
+          } >> "$GITHUB_ENV"
       - name: Cache pinned TLAPM
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
-          path: target/tlapm/toolchains/3ab43c7ff31db4ced850619d4746fa4c841a7681/x86_64-linux-gnu
+          path: ${{ steps.formal_layout.outputs.tlapm_root }}/3ab43c7ff31db4ced850619d4746fa4c841a7681/x86_64-linux-gnu
           key: sumeragi-v2-tlapm-linux-x86-64-3ab43c7ff31db4ced850619d4746fa4c841a7681
       - name: Install pinned formal tools
         run: |
+          set -euo pipefail
           bash scripts/formal/install_sumeragi_v2_tlapm.sh
           bash scripts/formal/install_sumeragi_v2_tla2tools.sh
           bash scripts/formal/install_apalache.sh 0.52.2
           bash scripts/formal/install_sumeragi_v2_verus.sh
-          echo "$GITHUB_WORKSPACE/target/verus/toolchains/0.2026.05.31.5dd6d83/x86-linux" >> "$GITHUB_PATH"
+          tlapm_tree="$TLAPM_INSTALL_ROOT/3ab43c7ff31db4ced850619d4746fa4c841a7681/x86_64-linux-gnu/tlapm"
+          mapfile -t tlapm_functions < <(find "$tlapm_tree" -type f -name Functions.tla -print)
+          test "${#tlapm_functions[@]}" -eq 1
+          tlapm_stdlib="$(dirname -- "${tlapm_functions[0]}")"
+          test -f "$tlapm_stdlib/Folds.tla"
+          {
+            printf 'TLAPM_BIN=%s\n' "$tlapm_tree/bin/tlapm"
+            printf 'TLAPM_STDLIB=%s\n' "$tlapm_stdlib"
+            printf 'TLA2TOOLS_JAR=%s\n' "$TLA2TOOLS_INSTALL_ROOT/1.7.4/tla2tools.jar"
+            printf 'APALACHE_BIN=%s\n' "$APALACHE_INSTALL_ROOT/v0.52.2/bin/apalache-mc"
+          } >> "$GITHUB_ENV"
+          printf '%s\n' \
+            "$VERUS_INSTALL_ROOT/0.2026.05.31.5dd6d83/x86-linux" \
+            >> "$GITHUB_PATH"
       - name: Sumeragi v2 formal release gate
         env:
           SUMERAGI_V2_TLC_PROFILE: nightly
@@ -40,7 +89,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: sumeragi-v2-formal-nightly
-          path: target/formal/sumeragi_v2
+          path: ${{ steps.formal_layout.outputs.artifact_root }}/formal/sumeragi_v2
           if-no-files-found: ignore
 
   # Deliberately independent of the strict formal job: incomplete proof debt
@@ -48,16 +97,36 @@ jobs:
   # evidence for the exact same workflow revision.
   sumeragi-v2-chaos-100k:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
     env:
       CARGO_TERM_COLOR: never
-      CARGO_TARGET_DIR: ${{ github.workspace }}/target/sumeragi-v2-chaos-build
+      CARGO_NET_OFFLINE: "true"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 1
           persist-credentials: false
           ref: ${{ github.sha }}
+      - name: Create fresh private chaos invocation layout
+        id: chaos_layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          invocation_root="$(mktemp -d /private/tmp/iroha-sumeragi-v2-chaos.XXXXXX)"
+          chmod 700 "$invocation_root"
+          mkdir -m 700 \
+            "$invocation_root/target" \
+            "$invocation_root/artifacts" \
+            "$invocation_root/artifacts/chaos-100k"
+          {
+            printf 'invocation_root=%s\n' "$invocation_root"
+            printf 'artifact_root=%s\n' "$invocation_root/artifacts"
+          } >> "$GITHUB_OUTPUT"
+          {
+            printf 'CARGO_TARGET_DIR=%s\n' "$invocation_root/target"
+            printf 'IROHA_RELEASE_ARTIFACT_ROOT=%s\n' "$invocation_root/artifacts"
+            printf 'IROHA_RELEASE_CANCEL_REQUEST_PATH=%s\n' "$invocation_root/cancel-request.json"
+            printf 'SUMERAGI_V2_CHAOS_EVIDENCE_DIR=%s\n' "$invocation_root/artifacts/chaos-100k"
+          } >> "$GITHUB_ENV"
       - name: Verify exact workflow source
         shell: bash
         env:
@@ -66,18 +135,6 @@ jobs:
           set -euo pipefail
           expected_commit="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
           test "$(git rev-parse HEAD)" = "$expected_commit"
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
-        with:
-          cache: "false"
-          toolchain: 1.93.1
-      - name: Resolve the attested workspace lockfile
-        run: cargo generate-lockfile
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
-        with:
-          cache-on-failure: "true"
-          shared-key: sumeragi-v2-chaos-100k-1.93.1
-      - name: Prefetch pinned standalone harness dependencies
-        run: bash scripts/formal/run_sumeragi_v2_harness.sh --fetch
       - name: Sumeragi v2 source-attested 100,000-height chaos gate
         run: bash scripts/run_sumeragi_v2_100k_chaos.sh
       - name: Upload Sumeragi v2 chaos evidence
@@ -85,7 +142,5 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: sumeragi-v2-chaos-100k-nightly
-          path: |
-            Cargo.lock
-            target/sumeragi-v2-release
+          path: ${{ steps.chaos_layout.outputs.artifact_root }}
           if-no-files-found: warn

@@ -179,6 +179,7 @@ from iroha_torii_client.client import (
 from iroha_torii_client.client import (
     ToriiClient as _BaseToriiClient,
 )
+from iroha_torii_client.client_status_models import parse_sumeragi_json_object
 from iroha_torii_client.native_amx import (
     compute_native_amx_descriptor_hash,
     compute_native_amx_participant_settlement_hash,
@@ -21162,12 +21163,10 @@ class ToriiClient(_ToriiClientStreamingQueryMixin, _BaseToriiClient):
     # ------------------------------------------------------------------
     def get_sumeragi_telemetry(self) -> Optional[Any]:
         """Fetch aggregated consensus telemetry (`GET /v1/sumeragi/telemetry`)."""
-
         return self.request_json("GET", "/v1/sumeragi/telemetry", expected_status=(200,))
 
     def get_sumeragi_telemetry_typed(self) -> SumeragiTelemetrySnapshot:
         """Return `/v1/sumeragi/telemetry` as a structured snapshot."""
-
         payload = self.request_json("GET", "/v1/sumeragi/telemetry", expected_status=(200,))
         if not isinstance(payload, Mapping):
             raise TypeError("telemetry response must be a JSON object")
@@ -21175,30 +21174,31 @@ class ToriiClient(_ToriiClientStreamingQueryMixin, _BaseToriiClient):
 
     def get_sumeragi_status(self) -> Optional[Any]:
         """Fetch the raw authoritative v2 consensus status JSON."""
-
         return self.request_json("GET", "/v1/sumeragi/status", expected_status=(200,))
 
     def get_sumeragi_status_typed(self) -> SumeragiStatusSnapshot:
         """Validate the fail-closed authoritative v2 reducer snapshot."""
-
-        payload = self.request_json("GET", "/v1/sumeragi/status", expected_status=(200,))
-        if not isinstance(payload, Mapping):
-            raise TypeError("sumeragi status response must be a JSON object")
+        payload = self._get_sccp_json_object(
+            "/v1/sumeragi/status",
+            context="sumeragi status",
+            maximum_body_bytes=1 * 1024 * 1024,
+            parser=parse_sumeragi_json_object,
+        )
         return SumeragiStatusSnapshot.from_payload(payload)
 
     def get_sumeragi_diagnostics(self) -> Optional[Any]:
         """Fetch raw bounded Sumeragi operator and lane diagnostics."""
-
         return self.request_json("GET", "/v1/sumeragi/diagnostics", expected_status=(200,))
 
     def get_sumeragi_diagnostics_typed(self) -> SumeragiDiagnosticsSnapshot:
         """Validate `/v1/sumeragi/diagnostics` as a separate typed payload."""
-
-        payload = self.request_json("GET", "/v1/sumeragi/diagnostics", expected_status=(200,))
-        if not isinstance(payload, Mapping):
-            raise TypeError("sumeragi diagnostics response must be a JSON object")
+        payload = self._get_sccp_json_object(
+            "/v1/sumeragi/diagnostics",
+            context="sumeragi diagnostics",
+            maximum_body_bytes=16 * 1024 * 1024,
+            parser=parse_sumeragi_json_object,
+        )
         return SumeragiDiagnosticsSnapshot.from_payload(payload)
-
     def get_sumeragi_pacemaker(self) -> Optional[Any]:
         """Fetch pacemaker configuration (`GET /v1/sumeragi/pacemaker`)."""
 

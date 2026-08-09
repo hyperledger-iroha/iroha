@@ -6,7 +6,7 @@
 //! P1363 `s` scalar from the inverse witness and enforce the canonical low-s
 //! representative inside the proof relation.
 
-use core::{fmt, ops::Range};
+use core::fmt;
 
 use thiserror::Error;
 
@@ -38,11 +38,6 @@ pub(super) const VEGA_MDL_FIGURE9_SHA256_STEPS_V1: usize = 8;
 #[derive(Clone)]
 pub(super) struct Figure9McMaterial {
     pub(super) assignment: CircuitAssignment,
-    pub(super) issuer_byte_bits_le: Vec<[usize; 8]>,
-    pub(super) birth_byte_bits_le: Vec<[usize; 8]>,
-    pub(super) issuer_states_after_blocks_le: Vec<[[usize; 32]; 8]>,
-    pub(super) birth_states_after_blocks_le: Vec<[[usize; 32]; 8]>,
-    pub(super) excluded_sha256_rows: [Range<usize>; 2],
 }
 
 const ISSUER_X_INDEX: usize = 0;
@@ -234,9 +229,7 @@ pub(super) fn synthesize_figure9_mc_material(
 
     // The disclosed birth item is bound to the exact digest entry in the
     // issuer-authenticated MSO bytes.
-    let birth_sha_start = builder.constraint_count();
     let (birth_digest, birth_trace) = sha256_with_trace(&mut builder, &birth)?;
-    let birth_sha_rows = birth_sha_start..builder.constraint_count();
     bind_digest_to_bytes(
         &mut builder,
         birth_digest,
@@ -277,9 +270,7 @@ pub(super) fn synthesize_figure9_mc_material(
     enforce_strictly_after(&mut builder, &valid_until.date, &presentation)?;
     enforce_completed_age(&mut builder, &birth_date, &presentation, threshold)?;
 
-    let issuer_sha_start = builder.constraint_count();
     let (issuer_digest, issuer_trace) = sha256_with_trace(&mut builder, &issuer)?;
-    let issuer_sha_rows = issuer_sha_start..builder.constraint_count();
     let issuer_key = public_point(&mut builder, ISSUER_X_INDEX, ISSUER_Y_INDEX)?;
     verify_es256_low_s_from_inverse(
         &mut builder,
@@ -302,20 +293,15 @@ pub(super) fn synthesize_figure9_mc_material(
         *witness.device_s_inverse,
     )?;
 
-    let issuer_byte_bits_le = byte_indices(&issuer)?;
-    let birth_byte_bits_le = byte_indices(&birth)?;
-    let issuer_states_after_blocks_le = state_indices(&issuer_trace)?;
-    let birth_states_after_blocks_le = state_indices(&birth_trace)?;
-    if issuer_states_after_blocks_le.len() != 6 || birth_states_after_blocks_le.len() != 2 {
+    byte_indices(&issuer)?;
+    byte_indices(&birth)?;
+    let issuer_state_count = state_indices(&issuer_trace)?.len();
+    let birth_state_count = state_indices(&birth_trace)?.len();
+    if issuer_state_count != 6 || birth_state_count != 2 {
         return Err(CircuitError::InvalidDimension);
     }
     Ok(Figure9McMaterial {
         assignment: builder.finalize()?,
-        issuer_byte_bits_le,
-        birth_byte_bits_le,
-        issuer_states_after_blocks_le,
-        birth_states_after_blocks_le,
-        excluded_sha256_rows: [birth_sha_rows, issuer_sha_rows],
     })
 }
 

@@ -29,7 +29,7 @@ PROVENANCE_CERTIFICATE_IDENTITY = (
 PROVENANCE_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX = "11" * 32
 TOPOLOGY_VERIFICATION_PUBLIC_KEY_HEX = "22" * 32
-TOPOLOGY_SIGNER_IDENTITY = "sorafs-reference-sdk-topology-hsm"
+TOPOLOGY_SIGNER_IDENTITY = "sorafs-reference-sdk-topology-software"
 TOPOLOGY_SIGNER_KEY_REVISION = 7
 TOPOLOGY_SIGNER_POLICY_DIGEST_HEX = "33" * 32
 TOPOLOGY_MAX_REVIEW_AGE_SECS = 3_600
@@ -59,7 +59,7 @@ def write_topology_qualification(path: Path) -> Path:
         "storage_provider_count": 2,
         "gateway_count": 2,
         "governance_dag_instance_count": 2,
-        "runtime_handle_kinds": ["monitoring", "hsm", "kms", "webauthn"],
+        "runtime_handle_kinds": ["monitoring", "external_signer", "kms", "webauthn"],
         "runtime_material_policy_valid": True,
         "signed_model_artifact_count": 1,
         "required_lane_slots": list(CANONICAL_READINESS_LANES),

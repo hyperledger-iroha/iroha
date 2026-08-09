@@ -45,6 +45,166 @@ def _load_verifier_module() -> Any:
 VERIFIER_MODULE = _load_verifier_module()
 
 
+def test_identity_supervision_has_no_forbidden_process_controls() -> None:
+    source = VERIFIER.read_text(encoding="utf-8")
+    for forbidden in (
+        "import signal",
+        "os.kill(",
+        "os.killpg(",
+        ".kill(",
+        ".terminate(",
+        "start_new_session",
+        "def _abort",
+        "wait(timeout=",
+    ):
+        assert forbidden not in source
+
+
+@pytest.mark.parametrize(
+    ("timeout_seconds", "maximum_output_bytes", "program", "message"),
+    [
+        (
+            0,
+            1024,
+            "import time; time.sleep(0.05)",
+            "exceeded its timeout",
+        ),
+        (
+            5,
+            32,
+            "import sys; "
+            "sys.stdout.buffer.write(b'O' * 131072); sys.stdout.flush(); "
+            "sys.stderr.buffer.write(b'E' * 131072); sys.stderr.flush()",
+            "closed size limit",
+        ),
+    ],
+)
+def test_pinned_command_finishes_naturally_before_reporting_latched_violation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    timeout_seconds: int,
+    maximum_output_bytes: int,
+    program: str,
+    message: str,
+) -> None:
+    monkeypatch.setattr(
+        VERIFIER_MODULE, "_COMMAND_TIMEOUT_SECONDS", timeout_seconds
+    )
+    sentinel = tmp_path / "natural-completion"
+    child = (
+        f"{program}; from pathlib import Path; "
+        f"Path({str(sentinel)!r}).write_text('complete', encoding='utf-8')"
+    )
+
+    with pytest.raises(VERIFIER_MODULE.VerificationError, match=message):
+        VERIFIER_MODULE._run_bounded(
+            Path(sys.executable).resolve(strict=True),
+            ["-I", "-S", "-c", child],
+            cwd=tmp_path,
+            environment={"PATH": os.defpath},
+            maximum_output_bytes=maximum_output_bytes,
+        )
+
+    assert sentinel.read_text(encoding="utf-8") == "complete"
+
+
+@pytest.mark.parametrize(
+    "fault_method", ("register", "select", "read", "wait")
+)
+def test_pinned_command_drains_after_generic_supervisor_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fault_method: str,
+) -> None:
+    real_selector = VERIFIER_MODULE.selectors.DefaultSelector
+
+    class FaultingSelector:
+        def __init__(self) -> None:
+            self._selector = real_selector()
+            self._failed = False
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._selector, name)
+
+        def register(self, *args: object, **kwargs: object) -> object:
+            if fault_method == "register" and not self._failed:
+                self._failed = True
+                raise RuntimeError("injected supervisor failure")
+            return self._selector.register(*args, **kwargs)
+
+        def select(self, timeout: float | None = None) -> object:
+            if fault_method == "select" and not self._failed:
+                self._failed = True
+                raise RuntimeError("injected supervisor failure")
+            return self._selector.select(timeout)
+
+    monkeypatch.setattr(
+        VERIFIER_MODULE.selectors, "DefaultSelector", FaultingSelector
+    )
+    if fault_method == "read":
+        real_read = VERIFIER_MODULE.os.read
+        real_popen = VERIFIER_MODULE.subprocess.Popen
+        read_armed = False
+        read_failed = False
+
+        def faulting_read(descriptor: int, size: int) -> bytes:
+            nonlocal read_failed
+            if read_armed and not read_failed:
+                read_failed = True
+                raise RuntimeError("injected supervisor failure")
+            return real_read(descriptor, size)
+
+        def arming_popen(*args: object, **kwargs: object) -> object:
+            nonlocal read_armed
+            process = real_popen(*args, **kwargs)
+            read_armed = True
+            return process
+
+        monkeypatch.setattr(VERIFIER_MODULE.os, "read", faulting_read)
+        monkeypatch.setattr(
+            VERIFIER_MODULE.subprocess, "Popen", arming_popen
+        )
+    if fault_method == "wait":
+        real_popen = VERIFIER_MODULE.subprocess.Popen
+
+        class FaultingProcess:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                self._process = real_popen(*args, **kwargs)
+                self._failed = False
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self._process, name)
+
+            def wait(self) -> int:
+                if not self._failed:
+                    self._failed = True
+                    raise RuntimeError("injected supervisor failure")
+                return self._process.wait()
+
+        monkeypatch.setattr(
+            VERIFIER_MODULE.subprocess, "Popen", FaultingProcess
+        )
+    sentinel = tmp_path / "supervisor-exception-natural-completion"
+    child = (
+        "import sys; "
+        "sys.stdout.buffer.write(b'O' * 131072); sys.stdout.flush(); "
+        "sys.stderr.buffer.write(b'E' * 131072); sys.stderr.flush(); "
+        "from pathlib import Path; "
+        f"Path({str(sentinel)!r}).write_text('complete', encoding='utf-8')"
+    )
+
+    with pytest.raises(RuntimeError, match="injected supervisor failure"):
+        VERIFIER_MODULE._run_bounded(
+            Path(sys.executable).resolve(strict=True),
+            ["-I", "-S", "-c", child],
+            cwd=tmp_path,
+            environment={"PATH": os.defpath},
+            maximum_output_bytes=1024 * 1024,
+        )
+
+    assert sentinel.read_text(encoding="utf-8") == "complete"
+
+
 def canonical_json(value: Any) -> bytes:
     return (
         json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
@@ -740,8 +900,7 @@ def test_rejects_stable_ssh_keygen_copy_that_cannot_execute(tmp_path: Path) -> N
     case = make_case(tmp_path)
     case["ssh_keygen"].write_text(
         f"#!{Path(sys.executable).resolve()}\n"
-        "import os, signal\n"
-        "os.kill(os.getpid(), signal.SIGKILL)\n",
+        "raise SystemExit(79)\n",
         encoding="utf-8",
     )
     case["ssh_keygen"].chmod(0o755)

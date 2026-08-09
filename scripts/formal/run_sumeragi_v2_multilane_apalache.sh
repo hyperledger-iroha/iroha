@@ -22,11 +22,26 @@ readonly REPO_ROOT
 readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly CONTRACT_CHECKER="${REPO_ROOT}/scripts/formal/check_sumeragi_v2_multilane_models.py"
 readonly RUNNER_CONTRACT_TEST="${REPO_ROOT}/scripts/formal/check_sumeragi_v2_multilane_apalache_runner_contract.py"
-readonly INSTALL_ROOT="${APALACHE_INSTALL_ROOT:-${REPO_ROOT}/target/apalache/toolchains}"
-readonly APALACHE_BIN="${APALACHE_BIN:-${INSTALL_ROOT}/v${APALACHE_VERSION}/bin/apalache-mc}"
-readonly EVIDENCE_DIR="${REPO_ROOT}/target/formal/sumeragi_v2"
+if [[ -n "${APALACHE_BIN:-}" ]]; then
+  resolved_apalache_candidate="$APALACHE_BIN"
+else
+  resolved_apalache_candidate="$(command -v apalache-mc || true)"
+fi
+readonly APALACHE_BIN="$resolved_apalache_candidate"
+readonly EVIDENCE_DIR="${SUMERAGI_V2_FORMAL_EVIDENCE_DIR:?SUMERAGI_V2_FORMAL_EVIDENCE_DIR is required}"
 readonly LOG_DIR="${EVIDENCE_DIR}/multilane_apalache"
 readonly EVIDENCE_PATH="${EVIDENCE_DIR}/multilane_apalache_evidence.tsv"
+
+source "${REPO_ROOT}/scripts/sumeragi_v2_release_process_policy.sh"
+if [[ -z "${CARGO_TARGET_DIR:-}" \
+  || -z "${IROHA_RELEASE_ARTIFACT_ROOT:-}" \
+  || -z "${IROHA_RELEASE_CANCEL_REQUEST_PATH:-}" ]]; then
+  echo "Apalache must run through the external-target formal wrapper" >&2
+  exit 2
+fi
+require_external_cargo_target_dir "$REPO_ROOT"
+require_external_release_artifact_root "$REPO_ROOT"
+require_release_artifact_directory "$EVIDENCE_DIR"
 
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -69,8 +84,7 @@ source_manifest_sha256="$(
 readonly source_manifest_sha256
 
 if [[ ! -f "$APALACHE_BIN" || -L "$APALACHE_BIN" || ! -x "$APALACHE_BIN" ]]; then
-  echo "pinned Apalache v${APALACHE_VERSION} is required at ${APALACHE_BIN}" >&2
-  echo "run scripts/formal/install_apalache.sh ${APALACHE_VERSION} first" >&2
+  echo "pinned Apalache v${APALACHE_VERSION} is required from the authenticated external tool inventory" >&2
   exit 1
 fi
 RESOLVED_APALACHE_BIN="$(canonical_path "$APALACHE_BIN")"
@@ -128,6 +142,7 @@ run_typecheck() {
   local module="$1"
   local log="${LOG_DIR}/${module}.typecheck.log"
   local out="${run_dir}/${module}.typecheck.out"
+  release_gate_boundary "apalache:${module}:before-typecheck" || return $?
   set +e
   (
     cd "$FORMAL_DIR"
@@ -135,6 +150,7 @@ run_typecheck() {
   ) >"$log" 2>&1
   local status=$?
   set -e
+  release_gate_boundary "apalache:${module}:after-typecheck-natural-completion" || return $?
   cat "$log"
   if [[ "$status" -ne 0 ]] ||
     [[ "$(grep -Fc "# APALACHE version: ${APALACHE_VERSION} |" "$log" || true)" != 1 ]] ||
@@ -154,6 +170,7 @@ run_positive() {
   local invariants="$5"
   local log="${LOG_DIR}/${name}.check.log"
   local out="${run_dir}/${name}.check.out"
+  release_gate_boundary "apalache:${name}:before-check" || return $?
   set +e
   (
     cd "$FORMAL_DIR"
@@ -166,6 +183,7 @@ run_positive() {
   ) >"$log" 2>&1
   local status=$?
   set -e
+  release_gate_boundary "apalache:${name}:after-check-natural-completion" || return $?
   cat "$log"
   if [[ "$status" -ne 0 ]] ||
     [[ "$(grep -Fc "# APALACHE version: ${APALACHE_VERSION} |" "$log" || true)" != 1 ]] ||
@@ -239,6 +257,7 @@ if [[ "$final_source_manifest_sha256" != "$source_manifest_sha256" ]]; then
 fi
 
 evidence_tmp="$(mktemp "${EVIDENCE_DIR}/.multilane_apalache_evidence.XXXXXX")"
+release_gate_boundary "apalache:before-evidence-publication" || exit $?
 {
   printf 'schema_version\t1\n'
   printf 'backend\tapalache\n'
@@ -285,5 +304,6 @@ evidence_tmp="$(mktemp "${EVIDENCE_DIR}/.multilane_apalache_evidence.XXXXXX")"
     "$(hash_file "${LOG_DIR}/inflight-first-release-layout.check.log")"
 } >"$evidence_tmp"
 mv -- "$evidence_tmp" "$EVIDENCE_PATH"
+release_gate_boundary "apalache:after-evidence-publication" || exit $?
 
 echo "[apalache] all 5 source-bound refinement kernels plus the layout-only in-flight carrier passed pinned v${APALACHE_VERSION} bounded checks; no proof status was changed; evidence=${EVIDENCE_PATH}"

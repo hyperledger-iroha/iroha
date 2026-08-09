@@ -4523,11 +4523,11 @@ impl V2ApplyService {
         let witness = state_block
             .take_exec_witness()
             .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
-        let native_amx_manifest =
-            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(
-                valid.as_ref(),
-            )
-            .map_err(V2ApplyError::ExecutionCommitment)?;
+        let native_amx_manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
+            valid.as_ref(),
+            state_block.staged_merge_entry(),
+        )
+        .map_err(V2ApplyError::ExecutionCommitment)?;
         let execution_commitment =
             crate::sumeragi::exec::execution_commitment_from_validated_block(
                 &witness,
@@ -4649,11 +4649,11 @@ impl V2ApplyService {
         let witness = state_block
             .take_exec_witness()
             .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
-        let native_amx_manifest =
-            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(
-                valid_block.as_ref(),
-            )
-            .map_err(V2ApplyError::ExecutionCommitment)?;
+        let native_amx_manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
+            valid_block.as_ref(),
+            state_block.staged_merge_entry(),
+        )
+        .map_err(V2ApplyError::ExecutionCommitment)?;
         let actual_execution_commitment =
             crate::sumeragi::exec::execution_commitment_from_validated_block(
                 &witness,
@@ -4719,6 +4719,7 @@ impl V2ApplyService {
                 self.kura
                     .prepublish_native_amx_participant_application_evidence(
                         committed_block.as_ref(),
+                        state_block.staged_merge_entry(),
                     )
                     .map_err(|error| {
                         V2ApplyError::committed_recovery_required(
@@ -4730,8 +4731,9 @@ impl V2ApplyService {
         } else {
             None
         };
-        let native_amx_frontiers = State::native_amx_participant_frontier_markers(
+        let native_amx_frontiers = State::native_amx_participant_frontier_markers_and_merge_entry(
             committed_block.as_ref(),
+            state_block.staged_merge_entry(),
         )
         .map_err(|error| {
             V2ApplyError::committed_recovery_required(

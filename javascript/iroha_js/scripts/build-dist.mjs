@@ -29,11 +29,15 @@ const LOCK_TIMEOUT_MS = 60_000;
 const STALE_LOCK_MS = 5 * 60_000;
 const REQUIRED_OUTPUTS = [
   "address.js",
+  "browser.js",
   "curveRegistry.js",
   "ivmArtifact.js",
   "native.js",
   "nativeArtifactHash.js",
   "numericV1.js",
+  "strictLosslessJson.js",
+  "sumeragiTyped.js",
+  "toriiBrowserClient.js",
   "toriiClient.js",
   "kotodamaCompiler/index.js",
   "kotodamaCompiler/browser.js",

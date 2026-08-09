@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import base64
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -45,6 +46,170 @@ IDENTITY_NAMES = {
     "ssh_revocation": "identity-revocation",
     "verify_transcript": "identity-transcript.json",
 }
+
+
+def _load_validator_module() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "sumeragi_release_bootstrap_validator_test_module", VALIDATOR
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_validator_supervision_has_no_forbidden_process_controls() -> None:
+    source = VALIDATOR.read_text(encoding="utf-8")
+    for forbidden in (
+        "import signal",
+        "os.kill(",
+        "os.killpg(",
+        ".kill(",
+        ".terminate(",
+        "start_new_session",
+        "def _abort",
+        "wait(timeout=",
+    ):
+        assert forbidden not in source
+
+
+@pytest.mark.parametrize(
+    ("timeout_seconds", "maximum_output_bytes", "program", "message"),
+    [
+        (
+            0,
+            1024,
+            "import time; time.sleep(0.05)",
+            "runtime limit",
+        ),
+        (
+            5,
+            32,
+            "import sys; "
+            "sys.stdout.buffer.write(b'O' * 131072); sys.stdout.flush(); "
+            "sys.stderr.buffer.write(b'E' * 131072); sys.stderr.flush()",
+            "output limit",
+        ),
+    ],
+)
+def test_manifest_helper_finishes_naturally_before_reporting_latched_violation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    timeout_seconds: int,
+    maximum_output_bytes: int,
+    program: str,
+    message: str,
+) -> None:
+    module = _load_validator_module()
+    monkeypatch.setattr(module, "_COMMAND_TIMEOUT_SECONDS", timeout_seconds)
+    monkeypatch.setattr(module, "_MAX_HELPER_OUTPUT_BYTES", maximum_output_bytes)
+    sentinel = tmp_path / "natural-completion"
+    child = (
+        f"{program}; from pathlib import Path; "
+        f"Path({str(sentinel)!r}).write_text('complete', encoding='utf-8')"
+    )
+
+    with pytest.raises(module.ValidationError, match=message):
+        module._run_bounded(
+            PYTHON,
+            ("-I", "-S", "-c", child),
+            cwd=tmp_path,
+            environment={"PATH": os.defpath},
+        )
+
+    assert sentinel.read_text(encoding="utf-8") == "complete"
+
+
+@pytest.mark.parametrize(
+    "fault_method", ("register", "select", "read", "wait")
+)
+def test_manifest_helper_drains_after_generic_supervisor_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fault_method: str,
+) -> None:
+    module = _load_validator_module()
+    real_selector = module.selectors.DefaultSelector
+
+    class FaultingSelector:
+        def __init__(self) -> None:
+            self._selector = real_selector()
+            self._failed = False
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._selector, name)
+
+        def register(self, *args: object, **kwargs: object) -> object:
+            if fault_method == "register" and not self._failed:
+                self._failed = True
+                raise RuntimeError("injected supervisor failure")
+            return self._selector.register(*args, **kwargs)
+
+        def select(self, timeout: float | None = None) -> object:
+            if fault_method == "select" and not self._failed:
+                self._failed = True
+                raise RuntimeError("injected supervisor failure")
+            return self._selector.select(timeout)
+
+    monkeypatch.setattr(module.selectors, "DefaultSelector", FaultingSelector)
+    if fault_method == "read":
+        real_read = module.os.read
+        real_popen = module.subprocess.Popen
+        read_armed = False
+        read_failed = False
+
+        def faulting_read(descriptor: int, size: int) -> bytes:
+            nonlocal read_failed
+            if read_armed and not read_failed:
+                read_failed = True
+                raise RuntimeError("injected supervisor failure")
+            return real_read(descriptor, size)
+
+        def arming_popen(*args: object, **kwargs: object) -> object:
+            nonlocal read_armed
+            process = real_popen(*args, **kwargs)
+            read_armed = True
+            return process
+
+        monkeypatch.setattr(module.os, "read", faulting_read)
+        monkeypatch.setattr(module.subprocess, "Popen", arming_popen)
+    if fault_method == "wait":
+        real_popen = module.subprocess.Popen
+
+        class FaultingProcess:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                self._process = real_popen(*args, **kwargs)
+                self._failed = False
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self._process, name)
+
+            def wait(self) -> int:
+                if not self._failed:
+                    self._failed = True
+                    raise RuntimeError("injected supervisor failure")
+                return self._process.wait()
+
+        monkeypatch.setattr(module.subprocess, "Popen", FaultingProcess)
+    sentinel = tmp_path / "supervisor-exception-natural-completion"
+    child = (
+        "import sys; "
+        "sys.stdout.buffer.write(b'O' * 131072); sys.stdout.flush(); "
+        "sys.stderr.buffer.write(b'E' * 131072); sys.stderr.flush(); "
+        "from pathlib import Path; "
+        f"Path({str(sentinel)!r}).write_text('complete', encoding='utf-8')"
+    )
+
+    with pytest.raises(RuntimeError, match="injected supervisor failure"):
+        module._run_bounded(
+            PYTHON,
+            ("-I", "-S", "-c", child),
+            cwd=tmp_path,
+            environment={"PATH": os.defpath},
+        )
+
+    assert sentinel.read_text(encoding="utf-8") == "complete"
 
 
 def _canonical(value: Any) -> bytes:

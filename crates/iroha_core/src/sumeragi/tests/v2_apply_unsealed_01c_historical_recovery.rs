@@ -1,10 +1,20 @@
 v2_apply_test!(
     historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application,
     {
-        use iroha_data_model::block::consensus::SumeragiAutonomousLaneExecutionStage;
+        use crate::{
+            queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan},
+            sumeragi::v2_lane_work::{
+                LaneApplicationEvidenceRepairPlanning, LaneApplicationEvidenceRepairSummary,
+                apply_lane_application_evidence_repair, plan_lane_application_evidence_repair,
+            },
+        };
+        use iroha_data_model::{
+            block::consensus::{NativeAmxPhase, SumeragiAutonomousLaneExecutionStage},
+            isi::Register,
+        };
 
-        let fixture = ApplyFixture::new_with_lane_lifecycle();
-        let assert_fixture_execution_policy = |stage: &str| {
+        let fixture = ApplyFixture::new_with_native_lane_lifecycle();
+        let assert_fixture_context = |stage: &str| {
             assert_eq!(
                 crate::sumeragi::v2_recovery::committed_execution_policy_hash(
                     fixture.state.as_ref(),
@@ -13,13 +23,20 @@ v2_apply_test!(
                 fixture.context.execution_policy_hash,
                 "apply-fixture execution policy drifted {stage}"
             );
+            assert_eq!(
+                crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(
+                    fixture.state.as_ref(),
+                ),
+                fixture.context.nexus_amx_context_hash,
+                "apply-fixture Nexus/AMX context drifted {stage}"
+            );
         };
-        assert_fixture_execution_policy("after setup");
+        assert_fixture_context("after setup");
         let mut genesis_store = fixture.reopen_body_store();
         fixture
             .execute(&mut genesis_store)
             .expect("commit parent before historical autonomous end-to-end recovery");
-        assert_fixture_execution_policy("after parent commit");
+        assert_fixture_context("after parent commit");
         let context = successor_height_context(&fixture);
         let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(32);
         let queue = fixture_queue(fixture.state.as_ref(), events_sender.clone());
@@ -44,18 +61,82 @@ v2_apply_test!(
                 .ok()
                 .map(|asset| (**asset.value()).clone())
         };
+        let participant_domains = (0..2)
+            .map(|index| {
+                DomainId::try_new(
+                    format!("nativeparticipant{index}"),
+                    "independent-dataspace",
+                )
+                .expect("valid grouped Native participant domain")
+            })
+            .collect::<Vec<_>>();
+        let participant_domains_are_committed = || {
+            let view = fixture.state.view();
+            participant_domains
+                .iter()
+                .all(|domain| view.world.domain(domain).is_ok())
+        };
         assert_eq!(autonomous_balance(), None);
-        let (payload, expected_fifo) = reserve_canonical_successor_autonomous_mint_batch(
-            &fixture,
-            &queue,
-            &context,
-            2,
-            autonomous_asset_id.clone(),
-        );
-        assert_fixture_execution_policy("after autonomous queue reservation");
+        assert!(!participant_domains_are_committed());
+        let reservation_domains = participant_domains.clone();
+        let reservation_asset = autonomous_asset_id.clone();
+        let (payload, expected_fifo) =
+            reserve_canonical_successor_autonomous_batch_with_instructions(
+                &fixture,
+                &queue,
+                &context,
+                2,
+                move |index| {
+                    vec![
+                        InstructionBox::from(Mint::asset_quantity(
+                            1_u32,
+                            reservation_asset.clone(),
+                        )),
+                        InstructionBox::from(Register::domain(Domain::new(
+                            reservation_domains[index].clone(),
+                        ))),
+                    ]
+                },
+                true,
+                Some(native_amx_receipts_for_apply_fixture),
+            );
+        assert_fixture_context("after autonomous queue reservation");
         let origin_descriptor = payload.origin_proposal.descriptor.clone();
         let expected_reservation_keys = payload.reservation_keys.clone();
         let expected_routing_plans = payload.routing_plans.clone();
+        let expected_native_plan = RoutingPlan::native_amx(
+            RoutingDecision::default(),
+            vec![RouteLeg::new(
+                RoutingDecision::new(LaneId::new(1), DataSpaceId::new(7)),
+                RouteLegRole::Participant,
+            )],
+        );
+        assert!(
+            expected_routing_plans
+                .iter()
+                .all(|plan| plan == &expected_native_plan),
+            "both autonomous sources must retain the same Native plan"
+        );
+        let native_receipts = payload
+            .native_amx_receipts
+            .iter()
+            .map(|receipt| receipt.as_ref().expect("Native source carries a V2 receipt"))
+            .collect::<Vec<_>>();
+        assert_eq!(native_receipts.len(), 2);
+        assert_eq!(
+            native_receipts[0].legs[0].participant_proposal,
+            native_receipts[1].legs[0].participant_proposal
+        );
+        assert_eq!(
+            native_receipts[0].legs[0].participant_settlement,
+            native_receipts[1].legs[0].participant_settlement
+        );
+        assert!(native_receipts.iter().all(|receipt| {
+            receipt.version == 2
+                && receipt.legs.len() == 1
+                && receipt.legs[0].prepare_qc.body.phase == NativeAmxPhase::Prepare
+                && receipt.legs[0].commit_qc.body.phase == NativeAmxPhase::Commit
+        }));
         let expected_reservation_bytes = expected_reservation_keys
             .iter()
             .map(norito::encode_canonical)
@@ -138,7 +219,7 @@ v2_apply_test!(
             .execute(&successor.context, &mut successor.store, &successor.task)
             .expect("finalize the historical autonomous control-only carrier");
         assert_eq!(fixture.state.committed_height(), 2);
-        assert_fixture_execution_policy("after control-only carrier commit");
+        assert_fixture_context("after control-only carrier commit");
         let reserved_row = diagnostic_at(
             &queue,
             SumeragiAutonomousLaneExecutionStage::ReservationsDurable,
@@ -217,6 +298,11 @@ v2_apply_test!(
         assert_eq!(install.payload.entrypoint_hashes, payload.entrypoint_hashes);
         assert_eq!(install.payload.reservation_keys, expected_reservation_keys);
         assert_eq!(install.payload.routing_plans, expected_routing_plans);
+        assert_eq!(
+            install.payload.native_amx_receipts,
+            payload.native_amx_receipts,
+            "historical recovery must retain the exact Native receipt bytes"
+        );
         assert_eq!(
             install.reservation_group,
             LaneQueueReservationReconciliationGroupV1 {
@@ -310,6 +396,8 @@ v2_apply_test!(
                 iroha_config::parameters::defaults::sumeragi::V2_MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES,
                 iroha_config::parameters::defaults::sumeragi::V2_AUTONOMOUS_CARRIER_HEADROOM_BYTES,
                 iroha_config::parameters::defaults::sumeragi::V2_AUTONOMOUS_PRODUCER_RECHECK,
+                std::time::Duration::from_millis(10),
+                std::time::Duration::from_secs(1),
                 iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS,
                 iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS,
                 iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER,
@@ -498,6 +586,11 @@ v2_apply_test!(
         );
         assert_eq!(execution.reservation_keys, expected_reservation_bytes);
         assert_eq!(execution.routing_plans, expected_routing_bytes);
+        assert_eq!(
+            execution.native_amx_receipts,
+            install.payload.native_amx_receipts,
+            "merge execution must retain each production Native receipt unchanged"
+        );
         assert_eq!(
             execution.entrypoint_hashes,
             install.payload.entrypoint_hashes
@@ -744,9 +837,133 @@ v2_apply_test!(
         );
         assert!(queue.lane_reservation_commit_barriers().is_empty());
         assert!(queue.lane_reservation_release_barriers().is_empty());
+        let pre_live_state_hash =
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+        let pre_live_merge_ledger = fixture.state.merge_ledger.snapshot();
+        fixture
+            .kura
+            .fail_next_native_amx_prepublication_for_tests();
+        let error = service
+            .execute(active_context.context(), &mut body_store, &task)
+            .expect_err("inject the exact live Native prepublication crash boundary");
+        assert!(
+            matches!(
+                &error,
+                V2ApplyError::CommittedRecoveryRequired { stage, .. }
+                    if *stage == "pre-WSV Native AMX participant evidence publication"
+            ),
+            "unexpected Native prepublication failure: {error:?}"
+        );
+        assert!(error.requires_restart_recovery());
+        assert_eq!(fixture.state.committed_height(), 2);
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+            pre_live_state_hash,
+            "failed live Native prepublication must not stage WSV"
+        );
+        assert_eq!(fixture.state.merge_ledger.snapshot(), pre_live_merge_ledger);
+        assert_eq!(autonomous_balance(), None);
+        assert!(!participant_domains_are_committed());
+        assert!(
+            expected_fifo
+                .iter()
+                .all(|hash| !fixture.state.has_committed_transaction(*hash))
+        );
+        assert_eq!(
+            fixture
+                .kura
+                .exact_durable_blocks_count()
+                .expect("read exact durable height after Native crash"),
+            3
+        );
+        let durable_carrier = fixture
+            .kura
+            .get_block(NonZeroUsize::new(3).expect("non-zero Native carrier height"))
+            .expect("read result-bearing Native merge carrier after live crash");
+        assert!(durable_carrier.has_results());
+        assert_eq!(durable_carrier.results().len(), 2);
+        assert_eq!(durable_carrier.hash(), carrier.hash());
+        let height_three_finality = fixture
+            .kura
+            .v2_finality_artifact(3)
+            .expect("read Native carrier finality")
+            .expect("Native carrier finality precedes prepublication");
+        assert_eq!(height_three_finality.block_hash, durable_carrier.hash());
+        assert!(
+            fixture
+                .kura
+                .wsv_checkpoint(3)
+                .expect("read absent Native crash checkpoint")
+                .is_none()
+        );
+        assert!(
+            fixture
+                .kura
+                .commit_manifest(3)
+                .expect("read absent Native crash commit manifest")
+                .is_none()
+        );
+        let durable_merge_carrier = fixture
+            .kura
+            .merge_carrier_for_entry(entry_hash)
+            .expect("read staged Native merge-carrier record")
+            .expect("Kura block commit stages the exact merge association");
+        assert_eq!(durable_merge_carrier.entry_hash, entry_hash);
+        assert_eq!(durable_merge_carrier.block_height, 3);
+        assert_eq!(durable_merge_carrier.block_hash, durable_carrier.hash());
+        assert_eq!(
+            fixture
+                .kura
+                .merge_entry_by_hash(entry_hash)
+                .expect("read full staged Native merge entry"),
+            Some(entry.clone())
+        );
+        let native_amx_manifest =
+            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
+                durable_carrier.as_ref(),
+                Some(&entry),
+            )
+            .expect("derive exact staged Native application manifest");
+        assert_eq!(native_amx_manifest.count(), 1);
+        assert_eq!(native_amx_manifest.entries()[0].leaf.members.len(), 2);
+        let native_amx_frontiers =
+            State::native_amx_participant_frontier_markers_and_merge_entry(
+                durable_carrier.as_ref(),
+                Some(&entry),
+            )
+            .expect("derive exact staged Native State frontier");
+        assert_eq!(native_amx_frontiers.len(), 1);
+        assert_eq!(native_amx_frontiers[0].source_count, 2);
+        let missing_live_witness = fixture
+            .kura
+            .prepublish_native_amx_participant_application_evidence(
+                durable_carrier.as_ref(),
+                None,
+            )
+            .expect_err("live merge prepublication requires its exact staged witness");
+        assert!(
+            missing_live_witness
+                .to_string()
+                .contains("live Native AMX merge publication lacks its staged association witness"),
+            "unexpected missing live witness error: {missing_live_witness}"
+        );
+        let live_prepublication = fixture
+            .kura
+            .prepublish_native_amx_participant_application_evidence(
+                durable_carrier.as_ref(),
+                Some(&entry),
+            )
+            .expect("publish exact staged Native evidence before WSV retry");
+        assert!(live_prepublication.authenticates_state_frontiers(
+            durable_carrier.as_ref(),
+            &native_amx_manifest,
+            &height_three_finality,
+            &native_amx_frontiers,
+        ));
         service
             .execute(active_context.context(), &mut body_store, &task)
             .expect("atomically apply the exact canonical autonomous merge carrier");
+        assert_fixture_context("after exact Native carrier application");
         assert_eq!(fixture.state.committed_height(), 3);
         assert_eq!(
             fixture.state.merge_ledger.snapshot(),
@@ -760,6 +977,7 @@ v2_apply_test!(
             Some(iroha_primitives::numeric::Quantity::from(2_u32)),
             "two additive autonomous effects must enter canonical WSV exactly once"
         );
+        assert!(participant_domains_are_committed());
         assert!(queue.live_lane_reservations().is_empty());
         assert!(queue.lane_reservation_commit_barriers().is_empty());
         assert!(queue.lane_reservation_release_barriers().is_empty());
@@ -853,8 +1071,208 @@ v2_apply_test!(
             queue.lane_reservation_group_is_finalized_for_diagnostics(&expected_reservation_keys)
         );
 
+        let native_marker = native_amx_frontiers[0];
+        let native_receipt = fixture
+            .kura
+            .read_native_amx_participant_application_receipt(
+                native_marker.lane_id,
+                native_marker.dataspace_id,
+                native_marker.lane_incarnation,
+                native_marker.lane_block_height,
+            )
+            .expect("read exact committed Native participant receipt");
+        let structural_native_receipt = fixture
+            .kura
+            .read_structural_native_amx_participant_application_receipt(
+                native_marker.lane_id,
+                native_marker.dataspace_id,
+                native_marker.lane_block_height,
+            )
+            .expect("read structural Native participant receipt");
+        assert_eq!(structural_native_receipt, native_receipt);
+        let structural_native_receipt_bytes =
+            norito::encode_canonical(&structural_native_receipt)
+                .expect("encode exact structural Native receipt");
+        let pre_startup_state_hash =
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+        let pre_startup_merge_ledger = fixture.state.merge_ledger.snapshot();
+        let pre_startup_balance = autonomous_balance();
+        assert!(participant_domains_are_committed());
+
         drop(service);
         drop(queue);
+        drop(body_store);
+        drop(lane_work);
+        fixture
+            .kura
+            .remove_latest_native_amx_participant_manifest_for_testing(
+                native_marker.lane_id,
+                native_marker.dataspace_id,
+                native_marker.lane_incarnation,
+                native_marker.lane_block_height,
+                durable_carrier.hash(),
+            )
+            .expect("remove only the exact latest Native manifest");
+        fixture
+            .kura
+            .remove_merge_carrier_record_for_testing(durable_carrier.as_ref(), &entry)
+            .expect("remove only the exact merge-carrier reverse record");
+        assert!(
+            fixture
+                .kura
+                .merge_carrier_for_entry(entry_hash)
+                .expect("read absent merge-carrier reverse record")
+                .is_none()
+        );
+        assert_eq!(
+            fixture
+                .kura
+                .merge_entry_by_hash(entry_hash)
+                .expect("read retained full merge entry after association loss"),
+            Some(entry.clone())
+        );
+        assert_eq!(
+            fixture
+                .kura
+                .read_structural_native_amx_participant_application_receipt(
+                    native_marker.lane_id,
+                    native_marker.dataspace_id,
+                    native_marker.lane_block_height,
+                ),
+            Some(structural_native_receipt.clone()),
+            "manifest loss must retain the exact structural Native receipt"
+        );
+        assert!(
+            fixture
+                .kura
+                .read_native_amx_participant_application_receipt(
+                    native_marker.lane_id,
+                    native_marker.dataspace_id,
+                    native_marker.lane_incarnation,
+                    native_marker.lane_block_height,
+                )
+                .is_none(),
+            "the authoritative reader must reject a receipt without its manifest"
+        );
+        let missing_startup_association = fixture
+            .kura
+            .preflight_native_amx_participant_application_evidence_repair(
+                durable_carrier.as_ref(),
+                std::slice::from_ref(&native_marker),
+                None,
+            )
+            .expect_err("startup Native repair requires a committed or planned association");
+        assert!(
+            missing_startup_association
+                .to_string()
+                .contains("Native AMX application block lacks its committed merge association"),
+            "unexpected missing startup association error: {missing_startup_association}"
+        );
+        fixture
+            .kura
+            .preflight_native_amx_participant_application_evidence_repair(
+                durable_carrier.as_ref(),
+                std::slice::from_ref(&native_marker),
+                Some(&entry),
+            )
+            .expect("planned merge association authorizes exact Native startup repair");
+
+        let startup_context = {
+            let state_view = fixture.state.view();
+            crate::sumeragi::v2_context::build_successor_height_context_from_state(
+                &height_three_finality,
+                &state_view,
+                crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(
+                    fixture.state.as_ref(),
+                ),
+            )
+            .expect("derive exact height-four startup context")
+        };
+        assert_eq!(startup_context.height, 4);
+        let planning = plan_lane_application_evidence_repair(
+            &startup_context,
+            fixture.state.as_ref(),
+            fixture.kura.as_ref(),
+            limits,
+        )
+        .expect("plan exact Native and merge association startup repairs");
+        let LaneApplicationEvidenceRepairPlanning::Ready(plan) = planning else {
+            panic!("durable Native carrier body must make startup repair ready");
+        };
+        assert_eq!(plan.item_count(), 2);
+        let repair_summary = apply_lane_application_evidence_repair(
+            fixture.state.as_ref(),
+            fixture.kura.as_ref(),
+            plan,
+        )
+        .expect("apply exact planned Native and merge association repairs");
+        assert_eq!(
+            repair_summary,
+            LaneApplicationEvidenceRepairSummary {
+                ordinary_pairs: 0,
+                ordinary_receipts: 0,
+                native_carriers: 1,
+                native_routes: 1,
+                merge_carriers: 1,
+            }
+        );
+        assert_eq!(
+            fixture
+                .kura
+                .merge_carrier_for_entry(entry_hash)
+                .expect("read repaired merge-carrier record"),
+            Some(durable_merge_carrier)
+        );
+        let repaired_native_receipt = fixture
+            .kura
+            .read_native_amx_participant_application_receipt(
+                native_marker.lane_id,
+                native_marker.dataspace_id,
+                native_marker.lane_incarnation,
+                native_marker.lane_block_height,
+            )
+            .expect("read repaired Native participant receipt");
+        assert_eq!(repaired_native_receipt, native_receipt);
+        assert_eq!(
+            norito::encode_canonical(&repaired_native_receipt)
+                .expect("re-encode repaired Native participant receipt"),
+            structural_native_receipt_bytes,
+            "startup repair must reproduce the exact retained receipt bytes"
+        );
+        assert!(
+            fixture
+                .state
+                .native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached()
+                .expect("read repaired Native State frontiers")
+                .is_empty()
+        );
+        assert_eq!(fixture.state.committed_height(), 3);
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+            pre_startup_state_hash,
+            "startup evidence repair must not mutate canonical WSV"
+        );
+        assert_eq!(fixture.state.merge_ledger.snapshot(), pre_startup_merge_ledger);
+        assert_eq!(autonomous_balance(), pre_startup_balance);
+        assert!(participant_domains_are_committed());
+        assert!(
+            expected_fifo
+                .iter()
+                .all(|hash| fixture.state.has_committed_transaction(*hash))
+        );
+        let replanning = plan_lane_application_evidence_repair(
+            &startup_context,
+            fixture.state.as_ref(),
+            fixture.kura.as_ref(),
+            limits,
+        )
+        .expect("replan exact completed startup evidence repair");
+        let LaneApplicationEvidenceRepairPlanning::Ready(empty_plan) = replanning else {
+            panic!("completed startup evidence repair must remain locally ready");
+        };
+        assert!(empty_plan.is_empty());
+        assert_eq!(empty_plan.item_count(), 0);
+
         let terminal_queue = fixture_queue(fixture.state.as_ref(), events_sender);
         let terminal_replay = terminal_queue
             .install_lane_reservation_journal(&reservation_path, 1024 * 1024)

@@ -175,18 +175,19 @@ ASYNC_LIVENESS_FACADE = "SumeragiV2AsyncLivenessProofs"
 # bodies are independently pinned by ``_acyclic_liveness_debt_topology_errors``
 # before this reviewed global mechanical-body seal is accepted.
 ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = (
-    "9c0edd76ed2f516a7ac657927ef32ff6c637d088ca3183c00b01e3e1b97001da"
+    "946223a56f68896ae0484ec2d46acc7d3337e17beeb1409f3167d39ab294a52a"
 )
 ASYNC_LIVENESS_SHARD_MAX_BYTES = 256 * 1024
 ASYNC_LIVENESS_SHARD_MAX_LINES = 5_500
 ASYNC_LIVENESS_SHARD_MAX_THEOREMS = 150
-# These two shards carry the reviewed exact-ingress and producer-continuation
-# proof seams.  Keep their narrow, source-current ceilings explicit so one
-# additional line or theorem still fails instead of silently raising the
-# limit for every release shard.
+# These shards carry the reviewed exact-ingress, producer-continuation, and
+# causal-work rank proof seams.  Keep their narrow, source-current ceilings
+# explicit so one additional line or theorem still fails instead of silently
+# raising the limit for every release shard.
 ASYNC_LIVENESS_SHARD_REVIEWED_MAX_LINES = {
-    "SumeragiV2AsyncInstallRunnerProofs": 5_862,
+    "SumeragiV2AsyncInstallRunnerProofs": 5_879,
     "SumeragiV2AsyncProgressOwnershipProofs": 5_662,
+    "SumeragiV2AsyncTemporalRankProofs": 5_514,
 }
 ASYNC_LIVENESS_SHARD_REVIEWED_MAX_THEOREMS = {
     "SumeragiV2AsyncInstallRunnerProofs": 159,
@@ -596,6 +597,10 @@ ASYNC_LIVENESS_SHARDS = (
 # the immediately preceding chain shard; every other non-root shard imports
 # its chain predecessor.
 ASYNC_LIVENESS_EXTENDS_OVERRIDES = {
+    "SumeragiV2AsyncTemporalRankProofs": (
+        "SumeragiV2AsyncRecoveryProgressWitnessProofs",
+        "SumeragiV2AsyncCausalWorkBudgetProofs",
+    ),
     "SumeragiV2AsyncDeadlockProofs": (
         "SumeragiV2AsyncFiniteRunnerEpisodeProofs",
         "SumeragiV2AsyncCandidateProducerContinuationProofs",
@@ -612,7 +617,7 @@ def _async_liveness_shard_source_prefix(module: str, index: int) -> str:
     dependencies = ASYNC_LIVENESS_EXTENDS_OVERRIDES.get(
         module, (ASYNC_LIVENESS_SHARDS[index - 1][0],)
     )
-    if module == "SumeragiV2AsyncDeadlockProofs":
+    if module == "SumeragiV2AsyncTemporalRankProofs":
         return header + "EXTENDS " + ",\n        ".join(dependencies) + "\n\n"
     return header + f"EXTENDS {', '.join(dependencies)}\n\n"
 
@@ -2598,3 +2603,1535 @@ EFFECT_CAPACITY_MUTATION_FORMAL_GLOBS = (
 )
 
 # Load the bounded admission and recovery mutation source contracts by path.
+
+
+def _revision4_model_contract_errors(
+    formal_dir: Path,
+    root_dir: Path = ROOT_DIR,
+) -> list[str]:
+    """Pin the executable revision-4 routing and conditional-progress surface."""
+
+    errors: list[str] = []
+    module_path = formal_dir / "SumeragiV2Revision4.tla"
+    if not module_path.is_file() or module_path.is_symlink():
+        return [f"{module_path}: revision-4 model must be a regular file"]
+    source = module_path.read_text(encoding="utf-8")
+
+    required_operator_tokens = {
+        "Views": ("0..(N - 1)",),
+        "ConstantOK": (
+            "N = 3 * F + 1",
+            "Cardinality(Faulty) <= F",
+            "\\E candidateView \\in Views : UsableView(candidateView)",
+        ),
+        "Init": ("ConstantOK",),
+        "Propose": (
+            "manifestTargets' = Validators",
+            "bodyTargets' = SetA(view)",
+        ),
+        "EnterFallback": (
+            "fallback' = TRUE",
+            "bodyTargets' = Validators",
+        ),
+        "ChangeView": (
+            "view < N - 1",
+            "fallback' = FALSE",
+            "prepareVoteRoutes' = {}",
+            "commitVoteRoutes' = {}",
+            "timeoutVoteRoutes' = {}",
+        ),
+        "ManifestCommitteeFanout": (
+            "manifestTargets = Validators",
+        ),
+        "FastPathAndFallbackBodyFanout": (
+            "IF fallback THEN Validators ELSE SetA(view)",
+        ),
+        "PrepareVotesRouteToProxyTail": (
+            "Validators \\X {ProxyTail(view)}",
+            "VoteSigners(prepareVotes)",
+        ),
+        "CommitVotesRouteToProxyTail": (
+            "Validators \\X {ProxyTail(view)}",
+            "VoteSigners(commitVotes)",
+        ),
+        "TimeoutVotesBypassProxyTail": (
+            "RouteSources(timeoutVoteRoutes) = timeoutVotes",
+            "= Validators",
+        ),
+        "PostGSTSendTimeout": (
+            "~UsableView(view)",
+            "SendTimeout(validator)",
+        ),
+        "ConditionalPostGSTProgress": (
+            "decisions /= {}",
+            "applied",
+            "successorActive",
+        ),
+        "FinalizedOutputDebtDoesNotBlockSuccessor": (
+            "applied",
+            "finalizedOutputDebt",
+            "~> successorActive",
+        ),
+    }
+    for operator, required in required_operator_tokens.items():
+        extracted = _top_level_operator_body(
+            source,
+            operator,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{module_path}: missing revision-4 operator {operator}"
+            )
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        missing = [token for token in required if token not in normalized]
+        if missing:
+            errors.append(
+                f"{module_path}:{line}: revision-4 operator {operator} is "
+                f"missing {missing}"
+            )
+
+    fairness = _top_level_operator_body(source, "PostGSTFairness")
+    if fairness is None:
+        errors.append(f"{module_path}: missing revision-4 PostGSTFairness")
+    else:
+        body, line = fairness
+        normalized = " ".join(body.split())
+        required_fair_actions = (
+            "HonestLeaderProposes",
+            "HonestBodyService",
+            "EnterFallback",
+            "HonestPrepareService",
+            "HonestTailPrepareQCService",
+            "HonestCommitService",
+            "HonestTailDecisionService",
+            "HonestTimeoutService",
+            "ChangeView",
+            "LocalDecisionBodyRecovery",
+            "LocalDecisionApplication",
+            "ActivateSuccessor",
+        )
+        missing = [
+            action
+            for action in required_fair_actions
+            if f"WF_vars({action})" not in normalized
+        ]
+        if missing:
+            errors.append(
+                f"{module_path}:{line}: PostGSTFairness is missing weakly fair "
+                f"services {missing}"
+            )
+        if "WF_vars(RepairFinalizedOutput)" in normalized:
+            errors.append(
+                f"{module_path}:{line}: finalized-output repair may not be a "
+                "revision-4 successor-progress fairness prerequisite"
+            )
+
+    config_contracts = {
+        "SumeragiV2Revision4.cfg": (
+            "SPECIFICATION Spec",
+            "INVARIANT ManifestCommitteeFanout",
+            "INVARIANT FastPathAndFallbackBodyFanout",
+            "INVARIANT PrepareVotesRouteToProxyTail",
+            "INVARIANT CommitVotesRouteToProxyTail",
+            "INVARIANT TimeoutVotesBypassProxyTail",
+            "INVARIANT NonblockingSuccessorActivation",
+        ),
+        "SumeragiV2Revision4Liveness.cfg": (
+            "SPECIFICATION PostGSTSpec",
+            "PROPERTY ConditionalPostGSTProgress",
+            "PROPERTY FinalizedOutputDebtDoesNotBlockSuccessor",
+        ),
+    }
+    for filename, required in config_contracts.items():
+        path = formal_dir / filename
+        if not path.is_file() or path.is_symlink():
+            errors.append(f"{path}: revision-4 TLC config must be a regular file")
+            continue
+        config_source = path.read_text(encoding="utf-8")
+        missing = [token for token in required if token not in config_source]
+        if missing:
+            errors.append(
+                f"{path}: revision-4 TLC configuration is missing {missing}"
+            )
+
+    runner_path = root_dir / "scripts" / "formal" / "run_sumeragi_v2_tlc.sh"
+    if not runner_path.is_file() or runner_path.is_symlink():
+        errors.append(f"{runner_path}: revision-4 TLC runner must be a regular file")
+    else:
+        runner_source = runner_path.read_text(encoding="utf-8")
+        required_runner_tokens = (
+            "revision4_safety",
+            "revision4_liveness",
+            'revision4_safety) cfg="SumeragiV2Revision4.cfg"',
+            'revision4_liveness) cfg="SumeragiV2Revision4Liveness.cfg"',
+            "revision4_safety|revision4_liveness)",
+            "SumeragiV2Revision4.tla",
+        )
+        missing = [
+            token for token in required_runner_tokens if token not in runner_source
+        ]
+        if missing:
+            errors.append(
+                f"{runner_path}: focused revision-4 TLC runner is missing {missing}"
+            )
+    return errors
+
+
+def _revision4_adversarial_safety_contract_errors(
+    formal_dir: Path,
+    root_dir: Path = ROOT_DIR,
+) -> list[str]:
+    """Pin the non-vacuous four-validator/two-body adversarial safety search."""
+
+    errors: list[str] = []
+    module_path = formal_dir / "SumeragiV2Revision4AdversarialSafety.tla"
+    if not module_path.is_file() or module_path.is_symlink():
+        return [
+            f"{module_path}: revision-4 adversarial safety model must be a "
+            "regular file"
+        ]
+    source = module_path.read_text(encoding="utf-8")
+
+    required_operator_tokens = {
+        "ConstantOK": (
+            "N = 4",
+            "F = 1",
+            "Q = 3",
+            "Cardinality(Faulty) = 1",
+            "Cardinality(Bodies) = 2",
+        ),
+        "HonestCommitVote": (
+            "validator \\in Honest",
+            "<<validator, body>> \\in fullBodies",
+            "VoteBodies(validator) = {}",
+            "commitVotes' = commitVotes \\cup {<<validator, body>>}",
+        ),
+        "ByzantineCommitVote": (
+            "validator \\in Faulty",
+            "<<validator, body>> \\notin commitVotes",
+            "commitVotes' = commitVotes \\cup {<<validator, body>>}",
+        ),
+        "FormCommitQC": (
+            "body \\notin commitQCs",
+            "VoteCount(body) >= Q",
+            "commitQCs' = commitQCs \\cup {body}",
+        ),
+        "Decide": (
+            "body \\in commitQCs",
+            "body \\notin decisions",
+            "decisions' = decisions \\cup {body}",
+        ),
+        "Next": (
+            "DeliverFullBody(validator, body)",
+            "HonestCommitVote(validator, body)",
+            "ByzantineCommitVote(validator, body)",
+            "FormCommitQC(body)",
+            "Decide(body)",
+        ),
+        "FixedAdversarialGeometry": (
+            "Cardinality(Validators) = 4",
+            "Cardinality(Honest) = 3",
+            "Cardinality(Faulty) = 1",
+            "Q = 3",
+        ),
+        "HonestSignOncePerRound": (
+            "validator \\in Honest",
+            "Cardinality(VoteBodies(validator)) <= 1",
+        ),
+        "ByzantineEquivocationRemainsEnabled": (
+            "validator \\in Faulty",
+            "<<validator, body>> \\notin commitVotes",
+            "ENABLED ByzantineCommitVote(validator, body)",
+        ),
+        "CommitQCsHaveQuorum": (
+            "body \\in commitQCs",
+            "VoteCount(body) >= Q",
+        ),
+        "DecisionsHaveCommitQC": ("decisions \\subseteq commitQCs",),
+        "PostQCExecutionRemainsOpen": (
+            "commitQCs /= {}",
+            "ENABLED DeliverFullBody(validator, body)",
+            "ENABLED HonestCommitVote(validator, body)",
+            "ENABLED ByzantineCommitVote(validator, body)",
+            "ENABLED FormCommitQC(body)",
+            "ENABLED Decide(body)",
+        ),
+        "ConflictingCommitQCsImpossible": (
+            "Cardinality(commitQCs) <= 1",
+        ),
+        "DecisionAgreement": ("Cardinality(decisions) <= 1",),
+    }
+    operator_bodies: dict[str, tuple[str, int]] = {}
+    for operator, required in required_operator_tokens.items():
+        extracted = _top_level_operator_body(
+            source,
+            operator,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{module_path}: missing revision-4 adversarial operator "
+                f"{operator}"
+            )
+            continue
+        operator_bodies[operator] = extracted
+        body, line = extracted
+        normalized = " ".join(body.split())
+        missing = [token for token in required if token not in normalized]
+        if missing:
+            errors.append(
+                f"{module_path}:{line}: revision-4 adversarial operator "
+                f"{operator} is missing {missing}"
+            )
+
+    byzantine_body = operator_bodies.get("ByzantineCommitVote")
+    if byzantine_body is not None:
+        body, line = byzantine_body
+        normalized = " ".join(body.split())
+        if "VoteBodies(" in normalized:
+            errors.append(
+                f"{module_path}:{line}: ByzantineCommitVote must permit the "
+                "faulty validator to vote for both bodies"
+            )
+
+    for operator in (
+        "DeliverFullBody",
+        "HonestCommitVote",
+        "ByzantineCommitVote",
+        "FormCommitQC",
+        "Decide",
+    ):
+        extracted = operator_bodies.get(operator)
+        if extracted is None:
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        forbidden = (
+            "commitQCs = {}",
+            "decisions = {}",
+            "Cardinality(commitQCs) = 0",
+            "Cardinality(decisions) = 0",
+        )
+        present = [token for token in forbidden if token in normalized]
+        if present:
+            errors.append(
+                f"{module_path}:{line}: {operator} must remain enabled after "
+                f"the first QC or decision; found global stop guards {present}"
+            )
+
+    config_path = formal_dir / "SumeragiV2Revision4AdversarialSafety.cfg"
+    if not config_path.is_file() or config_path.is_symlink():
+        errors.append(
+            f"{config_path}: revision-4 adversarial TLC config must be a "
+            "regular file"
+        )
+    else:
+        config_source = config_path.read_text(encoding="utf-8")
+        required_config_tokens = (
+            "SPECIFICATION Spec",
+            "Validators = {v1, v2, v3, v4}",
+            "Faulty = {v4}",
+            "Bodies = {b1, b2}",
+            "INVARIANT FixedAdversarialGeometry",
+            "INVARIANT HonestSignOncePerRound",
+            "INVARIANT ByzantineEquivocationRemainsEnabled",
+            "INVARIANT CommitQCsHaveQuorum",
+            "INVARIANT DecisionsHaveCommitQC",
+            "INVARIANT PostQCExecutionRemainsOpen",
+            "INVARIANT ConflictingCommitQCsImpossible",
+            "INVARIANT DecisionAgreement",
+        )
+        missing = [
+            token
+            for token in required_config_tokens
+            if token not in config_source
+        ]
+        if missing:
+            errors.append(
+                f"{config_path}: revision-4 adversarial TLC configuration is "
+                f"missing {missing}"
+            )
+
+    runner_path = root_dir / "scripts" / "formal" / "run_sumeragi_v2_tlc.sh"
+    if not runner_path.is_file() or runner_path.is_symlink():
+        errors.append(
+            f"{runner_path}: revision-4 adversarial TLC runner must be a "
+            "regular file"
+        )
+    else:
+        runner_source = runner_path.read_text(encoding="utf-8")
+        required_runner_tokens = (
+            "revision4_adversarial_safety",
+            (
+                'revision4_adversarial_safety) cfg='
+                '"SumeragiV2Revision4AdversarialSafety.cfg"'
+            ),
+            "SumeragiV2Revision4AdversarialSafety.tla",
+        )
+        missing = [
+            token for token in required_runner_tokens if token not in runner_source
+        ]
+        if missing:
+            errors.append(
+                f"{runner_path}: focused revision-4 adversarial TLC runner is "
+                f"missing {missing}"
+            )
+    return errors
+
+
+def _revision4_certified_fence_reservation_contract_errors(
+    formal_dir: Path,
+    root_dir: Path = ROOT_DIR,
+) -> list[str]:
+    """Pin the bounded revision-4 certified-fence reservation kernel."""
+
+    errors: list[str] = []
+    module_path = formal_dir / "SumeragiV2Revision4CertifiedFenceReservation.tla"
+    if not module_path.is_file() or module_path.is_symlink():
+        return [
+            f"{module_path}: revision-4 certified-fence reservation model "
+            "must be a regular file"
+        ]
+    source = module_path.read_text(encoding="utf-8")
+
+    required_operator_tokens = {
+        "BarrierKinds": ('{"Serve", "LeaderWire"}',),
+        "CertifiedKinds": (
+            '{"TimeoutCertificate", "CommitQC", '
+            '"CommitCertificateResponse"}',
+        ),
+        "IneligibleKinds": ('{"PrepareQC", "TimeoutVote"}',),
+        "IngressKinds": ("CertifiedKinds \\cup IneligibleKinds",),
+        "CommandClasses": ('{"Normal", "Progress", "Completion"}',),
+        "Stages": ('{"Ingress", "Runtime", "TrustedTail", "Handled"}',),
+        "RuntimeCapacity": ("4",),
+        "NormalLimit": ("1",),
+        "ProgressLimit": ("2",),
+        "OrdinaryCompletionLimit": ("3",),
+        "CompletionReserve": (
+            "OrdinaryCompletionLimit - ProgressLimit",
+        ),
+        "OrdinaryRuntimePrefix": (
+            '<<"Progress", "Progress", "Completion">>',
+        ),
+        "QueueClassCount": (
+            "Cardinality(",
+            "queue[index] = commandClass",
+        ),
+        "QueueCertifiedCount": (
+            "CertifiedFenceEscapeKind(queue[index])",
+        ),
+        "QueueCertifiedCredit": (
+            "QueueCertifiedCount(queue) = 0",
+            "THEN 0 ELSE 1",
+        ),
+        "QueueNoncompletionCount": (
+            'queue[index] # "Completion"',
+        ),
+        "ExternalOwnerCount": (
+            "unpublishedBodyAvailable",
+            "conflictingProposalQueued",
+        ),
+        "OwnedRuntimeDepth": (
+            "Len(queue) + ExternalOwnerCount",
+        ),
+        "OwnedClassCount": (
+            'commandClass = "Progress"',
+            'QueueClassCount(queue, "Progress") + QueueCertifiedCount(queue)',
+            "QueueClassCount(queue, commandClass)",
+            'commandClass = "Completion" /\\ unpublishedBodyAvailable',
+            'commandClass = "Normal" /\\ conflictingProposalQueued',
+        ),
+        "OwnedNoncompletionCount": (
+            'OwnedClassCount(queue, "Normal")',
+            'OwnedClassCount(queue, "Progress")',
+        ),
+        "CertifiedCreditIn": (
+            "incomingCertified",
+            "RetainedCertifiedCreditEnabled",
+            "QueueCertifiedCount(queue) > 0",
+        ),
+        "CanAppendClass": (
+            "CertifiedCreditIn(queue, incomingCertified)",
+            "OwnedRuntimeDepth(queue) < RuntimeCapacity",
+            "OwnedRuntimeDepth(queue) + 1",
+            "<= OrdinaryCompletionLimit + credit",
+            "normalAfter <= NormalLimit",
+            "noncompletionAfter <= ProgressLimit + credit",
+        ),
+        "Init": (
+            "ownerIdentity \\in OwnerIdentities",
+            "ownerSnapshot = ownerIdentity",
+            "ownerRetained = TRUE",
+            "offeredKind \\in IngressKinds",
+            "authenticated \\in BOOLEAN",
+            'stage = "Ingress"',
+            "runtimeQueue = OrdinaryRuntimePrefix",
+            "runtimeQueue = <<>>",
+            "pendingProgress = 0",
+            "pendingProgress = 2",
+            "pendingProgress = 1",
+            "pendingCompletion = 0",
+            "pendingCompletion = 1",
+            "pendingCertified =",
+            "CertifiedKinds \\ {offeredKind}",
+            'runtimeQueue = <<"Progress">>',
+            "conflictingProposalQueued",
+            'escapePhase = "Fresh"',
+        ),
+        "CertifiedFenceEscapeKind": ("kind \\in CertifiedKinds",),
+        "OfferAdvancesRetainedOwner": (
+            "OfferContext = ownerIdentity.context",
+            "OfferHeight = ownerIdentity.height",
+            "OfferView >= ownerIdentity.view",
+        ),
+        "CanUseCertifiedFinalSlot": (
+            "CertifiedFenceEscapeEnabled",
+            "OwnedRuntimeDepth(runtimeQueue) = RuntimeCapacity - 1",
+            "OwnedRuntimeDepth(runtimeQueue) < RuntimeCapacity",
+            'CanAppendClass(runtimeQueue, offeredKind, "Progress", TRUE)',
+        ),
+        "CanUseCertifiedEarlySlot": (
+            "CertifiedFenceEscapeEnabled",
+            "OwnedRuntimeDepth(runtimeQueue) < RuntimeCapacity - 1",
+            'CanAppendClass(runtimeQueue, offeredKind, "Progress", TRUE)',
+        ),
+        "AdmitCertifiedEscape": (
+            'stage = "Ingress"',
+            "ownerRetained",
+            "authenticated",
+            "CertifiedFenceEscapeKind(offeredKind)",
+            'escapePhase = "Fresh"',
+            "OfferAdvancesRetainedOwner",
+            "CanUseCertifiedFinalSlot",
+            'stage\' = "Runtime"',
+            "runtimeQueue' = Append(runtimeQueue, offeredKind)",
+            'escapePhase\' = "Charged"',
+            "UNCHANGED <<ownerIdentity, ownerSnapshot, ownerRetained",
+        ),
+        "AdmitCertifiedEscapeEarly": (
+            'stage = "Ingress"',
+            "CertifiedFenceEscapeKind(offeredKind)",
+            'escapePhase = "Fresh"',
+            "CanUseCertifiedEarlySlot",
+            'stage\' = "Runtime"',
+            "runtimeQueue' = Append(runtimeQueue, offeredKind)",
+            'escapePhase\' = "Charged"',
+        ),
+        "AdmitOrdinaryProgress": (
+            "pendingProgress > 0",
+            'CanAppendClass(runtimeQueue, "Progress", "Progress", FALSE)',
+            'runtimeQueue\' = Append(runtimeQueue, "Progress")',
+            "pendingProgress' = pendingProgress - 1",
+        ),
+        "AdmitOrdinaryCompletion": (
+            "pendingCompletion > 0",
+            'CanAppendClass(runtimeQueue, "Completion", "Completion", FALSE)',
+            'runtimeQueue\' = Append(runtimeQueue, "Completion")',
+            "pendingCompletion' = pendingCompletion - 1",
+        ),
+        "AdmitAdditionalCertified": (
+            'stage = "Runtime"',
+            'escapePhase = "Fresh"',
+            "kind \\in pendingCertified",
+            'CanAppendClass(runtimeQueue, kind, "Progress", TRUE)',
+            "runtimeQueue' = Append(runtimeQueue, kind)",
+            "pendingCertified' = pendingCertified \\ {kind}",
+            'escapePhase\' = "Charged"',
+        ),
+        "ReserveUnpublishedBodyAvailable": (
+            "conflictingProposalQueued",
+            "~unpublishedBodyAvailable",
+            "unpublishedBodyAvailable' = TRUE",
+            "conflictingProposalQueued' = FALSE",
+        ),
+        "DispatchCertifiedEscape": (
+            'stage = "Runtime"',
+            "ownerRetained",
+            "CertifiedFenceEscapeEnabled",
+            "OwnedRuntimeDepth(runtimeQueue) = RuntimeCapacity",
+            "FirstCertifiedQueueIndex = Len(runtimeQueue)",
+            "runtimeQueue[FirstCertifiedQueueIndex] = offeredKind",
+            "CertifiedFenceEscapeKind(offeredKind)",
+            'stage\' = "TrustedTail"',
+            "runtimeQueue' = SubSeq(runtimeQueue, 1, Len(runtimeQueue) - 1)",
+            'THEN "Spent"',
+            "UNCHANGED <<ownerIdentity, ownerSnapshot, ownerRetained",
+        ),
+        "DispatchEarlyCertifiedEscape": (
+            'stage = "Runtime"',
+            "CertifiedQueueIndices # {}",
+            "FirstCertifiedQueueIndex # Len(runtimeQueue)",
+            "runtimeQueue' = RemoveAt(runtimeQueue, FirstCertifiedQueueIndex)",
+            'THEN "Spent"',
+        ),
+        "RunCertifiedTrustedTail": (
+            'stage = "TrustedTail"',
+            "ownerRetained",
+            "CertifiedFenceEscapeEnabled",
+            "CertifiedFenceEscapeKind(offeredKind)",
+            'stage\' = "Handled"',
+            "ownerRetained' = FALSE",
+            'installedTC\' = (offeredKind = "TimeoutCertificate")',
+            'decided\' = (offeredKind \\in '
+            '{"CommitQC", "CommitCertificateResponse"})',
+            'escapePhase\' = "Fresh"',
+            "UNCHANGED <<ownerIdentity, ownerSnapshot, offeredKind",
+        ),
+        "Next": (
+            "AdmitCertifiedEscape",
+            "AdmitCertifiedEscapeEarly",
+            "AdmitOrdinaryProgress",
+            "AdmitOrdinaryCompletion",
+            "AdmitAdditionalCertified(kind)",
+            "ReserveUnpublishedBodyAvailable",
+            "DispatchCertifiedEscape",
+            "DispatchEarlyCertifiedEscape",
+            "RunCertifiedTrustedTail",
+        ),
+        "Spec": (
+            "Init",
+            "[][Next]_vars",
+            "WF_vars(AdmitCertifiedEscape)",
+            "WF_vars(AdmitCertifiedEscapeEarly)",
+            "WF_vars(AdmitOrdinaryProgress)",
+            "WF_vars(AdmitOrdinaryCompletion)",
+            "WF_vars(ReserveUnpublishedBodyAvailable)",
+            "WF_vars(AdmitAdditionalCertified(kind))",
+            "WF_vars(DispatchCertifiedEscape)",
+            "WF_vars(DispatchEarlyCertifiedEscape)",
+            "WF_vars(RunCertifiedTrustedTail)",
+        ),
+        "OwnerIdentityNeverReplaced": ("ownerIdentity = ownerSnapshot",),
+        "OwnerRetainedAcrossEscape": (
+            'stage \\in {"Runtime", "TrustedTail"} '
+            "=> ownerRetained",
+        ),
+        "NoOrdinaryRuntimeDisplacement": (
+            "QueueCertifiedCredit(runtimeQueue)",
+            'OwnedClassCount(runtimeQueue, "Normal") <= NormalLimit',
+            "OwnedNoncompletionCount(runtimeQueue) - credit <= ProgressLimit",
+            'OwnedClassCount(runtimeQueue, "Completion") <= CompletionReserve',
+        ),
+        "ReservedSlotOnlyCertified": (
+            "OwnedRuntimeDepth(runtimeQueue) = RuntimeCapacity",
+            "authenticated",
+            "QueueCertifiedCount(runtimeQueue) >= 1",
+            "CertifiedFenceEscapeKind(offeredKind)",
+        ),
+        "SingleCertifiedCredit": (
+            "QueueCertifiedCredit(runtimeQueue) \\in {0, 1}",
+            "QueueCertifiedCount(runtimeQueue) > 0",
+            "<=> QueueCertifiedCredit(runtimeQueue) = 1",
+        ),
+        "OrdinaryCapacityGeometry": (
+            "CompletionReserve = 1",
+            "OwnedRuntimeDepth(runtimeQueue) - credit <= OrdinaryCompletionLimit",
+            "OwnedNoncompletionCount(runtimeQueue) - credit <= ProgressLimit",
+        ),
+        "CertifiedFirstCompletionCorridor": (
+            'stage = "Runtime"',
+            "QueueCertifiedCount(runtimeQueue) >= 1",
+            "pendingCompletion = 1",
+            "OwnedNoncompletionCount(runtimeQueue) - 1 = ProgressLimit",
+            "OwnedRuntimeDepth(runtimeQueue) < RuntimeCapacity",
+            'CanAppendClass(runtimeQueue, "Completion", "Completion", FALSE)',
+        ),
+        "CertifiedFirstProgressCorridor": (
+            'stage = "Runtime"',
+            "QueueCertifiedCount(runtimeQueue) >= 1",
+            "pendingProgress > 0",
+            "OwnedNoncompletionCount(runtimeQueue) - 1 < ProgressLimit",
+            "OwnedRuntimeDepth(runtimeQueue) < RuntimeCapacity",
+            'CanAppendClass(runtimeQueue, "Progress", "Progress", FALSE)',
+        ),
+        "PrepareQcCannotUseEscape": (
+            'offeredKind = "PrepareQC" => stage = "Ingress"',
+        ),
+        "RawTimeoutVoteCannotUseEscape": (
+            'offeredKind = "TimeoutVote" => stage = "Ingress"',
+        ),
+        "AuthenticationRequiredForEscape": (
+            'stage \\in {"Runtime", "TrustedTail", "Handled"} '
+            "=> authenticated",
+        ),
+        "HandledOutcomeExact": (
+            'stage = "Handled"',
+            'offeredKind = "TimeoutCertificate"',
+            "installedTC /\\ ~decided",
+            "~installedTC /\\ decided",
+        ),
+        "CertifiedEscapeEpisodeIsOneShot": (
+            'escapePhase \\in {"Fresh", "Charged", "Spent"}',
+            'escapePhase \\in {"Charged", "Spent"}',
+            "~ENABLED AdmitCertifiedEscape",
+            "~ENABLED AdmitCertifiedEscapeEarly",
+            "~ENABLED (\\E kind \\in CertifiedKinds:",
+            'stage = "Handled"',
+            "~ownerRetained",
+            'escapePhase = "Fresh"',
+        ),
+        "UnpublishedBodyAvailableOwnsOrdinaryCompletion": (
+            "~(unpublishedBodyAvailable /\\ conflictingProposalQueued)",
+            'OwnedClassCount(runtimeQueue, "Completion") >= 1',
+            'OwnedClassCount(runtimeQueue, "Normal") >= 1',
+        ),
+        "CertifiedEscapeEventuallyHandled": (
+            "authenticated",
+            "CertifiedFenceEscapeKind(offeredKind)",
+            "ownerRetained",
+            '~> (stage = "Handled")',
+        ),
+    }
+    operator_bodies: dict[str, tuple[str, int]] = {}
+    for operator, required in required_operator_tokens.items():
+        extracted = _top_level_operator_body(
+            source,
+            operator,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{module_path}: missing revision-4 certified-fence operator "
+                f"{operator}"
+            )
+            continue
+        operator_bodies[operator] = extracted
+        body, line = extracted
+        normalized = " ".join(body.split())
+        missing = [token for token in required if token not in normalized]
+        if missing:
+            errors.append(
+                f"{module_path}:{line}: revision-4 certified-fence operator "
+                f"{operator} is missing {missing}"
+            )
+
+    exact_kind_bodies = {
+        "CertifiedKinds": (
+            '{"TimeoutCertificate", "CommitQC", '
+            '"CommitCertificateResponse"}'
+        ),
+        "IneligibleKinds": '{"PrepareQC", "TimeoutVote"}',
+        "CommandClasses": '{"Normal", "Progress", "Completion"}',
+        "CertifiedFenceEscapeKind": "kind \\in CertifiedKinds",
+    }
+    for operator, expected in exact_kind_bodies.items():
+        extracted = operator_bodies.get(operator)
+        if extracted is None:
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != expected:
+            errors.append(
+                f"{module_path}:{line}: revision-4 certified-fence operator "
+                f"{operator} must equal only {expected!r}; found "
+                f"{normalized!r}"
+            )
+
+    exact_numeric_bodies = {
+        "RuntimeCapacity": "4",
+        "NormalLimit": "1",
+        "ProgressLimit": "2",
+        "OrdinaryCompletionLimit": "3",
+        "CompletionReserve": "OrdinaryCompletionLimit - ProgressLimit",
+        "QueueCertifiedCredit": (
+            "IF QueueCertifiedCount(queue) = 0 THEN 0 ELSE 1"
+        ),
+    }
+    for operator, expected in exact_numeric_bodies.items():
+        extracted = operator_bodies.get(operator)
+        if extracted is None:
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != expected:
+            errors.append(
+                f"{module_path}:{line}: revision-4 certified-fence operator "
+                f"{operator} must equal only {expected!r}; found "
+                f"{normalized!r}"
+            )
+
+    atomic_replacement = _top_level_theorem_body(
+        source,
+        "BodyAvailableReservationAtomicallyReplacesConflict",
+        preserve_string_contents=True,
+    )
+    if atomic_replacement is None:
+        errors.append(
+            f"{module_path}: missing atomic unpublished BodyAvailable replacement theorem"
+        )
+    else:
+        body, line = atomic_replacement
+        normalized = " ".join(body.split())
+        required = (
+            "ReserveUnpublishedBodyAvailable",
+            "unpublishedBodyAvailable'",
+            "~conflictingProposalQueued'",
+            "OwnedRuntimeDepth(runtimeQueue') = OwnedRuntimeDepth(runtimeQueue)",
+            "BY DEF ReserveUnpublishedBodyAvailable",
+            "OwnedRuntimeDepth",
+            "ExternalOwnerCount",
+        )
+        missing = [token for token in required if token not in normalized]
+        if missing:
+            errors.append(
+                f"{module_path}:{line}: atomic BodyAvailable replacement theorem "
+                f"is missing {missing!r}"
+            )
+
+    config_contracts = {
+        "revision4_certified_fence_reservation_fixed.cfg": (
+            "SPECIFICATION Spec",
+            "CONSTANTS",
+            "CertifiedFenceEscapeEnabled = TRUE",
+            "RetainedCertifiedCreditEnabled = TRUE",
+            "INVARIANT TypeOK",
+            "INVARIANT OwnerIdentityNeverReplaced",
+            "INVARIANT OwnerRetainedAcrossEscape",
+            "INVARIANT NoOrdinaryRuntimeDisplacement",
+            "INVARIANT ReservedSlotOnlyCertified",
+            "INVARIANT SingleCertifiedCredit",
+            "INVARIANT OrdinaryCapacityGeometry",
+            "INVARIANT CertifiedFirstCompletionCorridor",
+            "INVARIANT CertifiedFirstProgressCorridor",
+            "INVARIANT PrepareQcCannotUseEscape",
+            "INVARIANT RawTimeoutVoteCannotUseEscape",
+            "INVARIANT AuthenticationRequiredForEscape",
+            "INVARIANT HandledOutcomeExact",
+            "INVARIANT CertifiedEscapeEpisodeIsOneShot",
+            "INVARIANT UnpublishedBodyAvailableOwnsOrdinaryCompletion",
+            "PROPERTY CertifiedEscapeEventuallyHandled",
+            "CHECK_DEADLOCK FALSE",
+        ),
+        "revision4_certified_fence_reservation_blocked_bug.cfg": (
+            "SPECIFICATION Spec",
+            "CONSTANTS",
+            "CertifiedFenceEscapeEnabled = FALSE",
+            "RetainedCertifiedCreditEnabled = TRUE",
+            "INVARIANT TypeOK",
+            "INVARIANT OwnerIdentityNeverReplaced",
+            "INVARIANT NoOrdinaryRuntimeDisplacement",
+            "INVARIANT PrepareQcCannotUseEscape",
+            "INVARIANT RawTimeoutVoteCannotUseEscape",
+            "PROPERTY CertifiedEscapeEventuallyHandled",
+            "CHECK_DEADLOCK FALSE",
+        ),
+        "revision4_certified_fence_reservation_arrival_order_bug.cfg": (
+            "SPECIFICATION Spec",
+            "CONSTANTS",
+            "CertifiedFenceEscapeEnabled = TRUE",
+            "RetainedCertifiedCreditEnabled = FALSE",
+            "INVARIANT TypeOK",
+            "INVARIANT CertifiedFirstProgressCorridor",
+            "CHECK_DEADLOCK FALSE",
+        ),
+    }
+    for filename, required in config_contracts.items():
+        config_path = formal_dir / filename
+        if not config_path.is_file() or config_path.is_symlink():
+            errors.append(
+                f"{config_path}: revision-4 certified-fence TLC config must "
+                "be a regular file"
+            )
+            continue
+        config_source = config_path.read_text(encoding="utf-8")
+        missing = [token for token in required if token not in config_source]
+        if missing:
+            errors.append(
+                f"{config_path}: revision-4 certified-fence TLC "
+                f"configuration is missing {missing}"
+            )
+
+    runner_path = root_dir / "scripts" / "formal" / "run_sumeragi_v2_tlc.sh"
+    if not runner_path.is_file() or runner_path.is_symlink():
+        errors.append(
+            f"{runner_path}: revision-4 certified-fence TLC runner must be a "
+            "regular file"
+        )
+    else:
+        runner_source = runner_path.read_text(encoding="utf-8")
+        required_runner_tokens = (
+            "revision4_certified_fence_reservation",
+            (
+                'revision4_certified_fence_reservation) cfg='
+                '"revision4_certified_fence_reservation_fixed.cfg"'
+            ),
+            "SumeragiV2Revision4CertifiedFenceReservation.tla",
+        )
+        missing = [
+            token for token in required_runner_tokens if token not in runner_source
+        ]
+        if missing:
+            errors.append(
+                f"{runner_path}: focused revision-4 certified-fence TLC "
+                f"runner is missing {missing}"
+            )
+
+    mutation_runner_path = (
+        root_dir
+        / "scripts"
+        / "formal"
+        / "run_sumeragi_v2_liveness_ownership_mutations.sh"
+    )
+    if not mutation_runner_path.is_file() or mutation_runner_path.is_symlink():
+        errors.append(
+            f"{mutation_runner_path}: certified-fence mutation runner must be "
+            "a regular file"
+        )
+    else:
+        runner_source = mutation_runner_path.read_text(encoding="utf-8")
+        required_runner_tokens = (
+            "SumeragiV2Revision4CertifiedFenceReservation.tla",
+            (
+                "revision4-certified-fence-reservation|"
+                "SumeragiV2Revision4CertifiedFenceReservation.tla|"
+                "revision4_certified_fence_reservation_fixed.cfg"
+            ),
+            (
+                "revision4-certified-fence-reservation-blocked|"
+                "SumeragiV2Revision4CertifiedFenceReservation.tla|"
+                "revision4_certified_fence_reservation_blocked_bug.cfg"
+            ),
+            (
+                "revision4-certified-fence-arrival-order|"
+                "SumeragiV2Revision4CertifiedFenceReservation.tla|"
+                "revision4_certified_fence_reservation_arrival_order_bug.cfg|"
+                "CertifiedFirstProgressCorridor"
+            ),
+        )
+        missing = [
+            token for token in required_runner_tokens if token not in runner_source
+        ]
+        if missing:
+            errors.append(
+                f"{mutation_runner_path}: certified-fence mutation runner is "
+                f"missing {missing}"
+            )
+
+    documentation_contracts = {
+        formal_dir / "README.md": (
+            "its escape episode is explicitly\n"
+            "`Fresh`, `Charged`, or `Spent`:",
+            "direct TC, CommitQC, or `CommitCertificateResponse` carrying a CommitQC root;",
+            "The claimed-response rank counts\n"
+            "the exact frozen direct roots plus the strictly decreasing trusted causal tail,\n"
+            "so pacemaker priority cannot be replenished indefinitely.",
+            "The\nstandalone revision-4 kernel also charges an unpublished `BodyAvailable` token\n"
+            "as an ordinary Completion owner and replaces its conflicting proposal owner in\n"
+            "one atomic transition, preserving physical occupancy throughout the swap.",
+        ),
+        formal_dir / "PROOF.md": (
+            "its escape episode is explicitly `Fresh`,\n"
+            "`Charged`, or `Spent`:",
+            "direct TC, CommitQC, or\n"
+            "`CommitCertificateResponse` carrying a CommitQC root;",
+            "The claimed-response rank counts the exact frozen direct\n"
+            "roots and their strictly decreasing trusted causal tail, so pacemaker priority\n"
+            "cannot be replenished indefinitely.",
+            "The standalone revision-4 kernel charges\n"
+            "an unpublished `BodyAvailable` token as an ordinary Completion owner and\n"
+            "atomically replaces its conflicting proposal owner without changing physical\n"
+            "occupancy.",
+        ),
+    }
+    for documentation_path, claims in documentation_contracts.items():
+        if not documentation_path.is_file() or documentation_path.is_symlink():
+            errors.append(
+                f"{documentation_path}: revision-4 latch documentation must be regular"
+            )
+            continue
+        documentation = documentation_path.read_text(encoding="utf-8")
+        for claim in claims:
+            if documentation.count(claim) != 1:
+                errors.append(
+                    f"{documentation_path}: revision-4 latch documentation must "
+                    f"contain exact claim {claim!r}"
+                )
+    return errors
+
+
+def _runtime_certified_fence_capacity_source_fidelity_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Pin production's retained one-credit C/P/K runtime admission."""
+
+    errors: list[str] = []
+    runtime_path = repo_root / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+    if not runtime_path.is_file() or runtime_path.is_symlink():
+        return [
+            f"{runtime_path}: certified-fence runtime capacity source must "
+            "be a regular file"
+        ]
+    try:
+        source = runtime_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        return [f"{runtime_path}: cannot read runtime capacity source: {error}"]
+
+    config_items: dict[str, RustItem | None] = {}
+    for item_name in (
+        "validate",
+        "normal_limit",
+        "progress_limit",
+        "ordinary_total_limit",
+    ):
+        item = _require_qualified_rust_item(
+            runtime_path,
+            source,
+            "RuntimeQueueConfig",
+            item_name,
+            errors,
+            f"RuntimeQueueConfig::{item_name} C/P/K geometry",
+        )
+        config_items[item_name] = item
+        _require_rust_item_token_sha256(
+            runtime_path,
+            item,
+            _PRODUCTION_RUNTIME_CERTIFIED_FENCE_CAPACITY_ITEM_SHA256[
+                f"RuntimeQueueConfig::{item_name}"
+            ],
+            f"RuntimeQueueConfig::{item_name} C/P/K geometry",
+            errors,
+        )
+
+    _require_exact_rust_tokens(
+        runtime_path,
+        config_items.get("normal_limit"),
+        """
+const fn normal_limit(self) -> usize {
+    self.capacity - self.progress_reserve - self.completion_reserve - 1
+}
+""",
+        "normal limit must equal C-P-K-1",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        runtime_path,
+        config_items.get("progress_limit"),
+        """
+const fn progress_limit(self) -> usize {
+    self.capacity - self.completion_reserve - 1
+}
+""",
+        "ordinary noncompletion limit must equal C-K-1",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        runtime_path,
+        config_items.get("ordinary_total_limit"),
+        """
+const fn ordinary_total_limit(self) -> usize {
+    self.capacity - 1
+}
+""",
+        "ordinary total limit must equal C-1",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        config_items.get("validate"),
+        """
+self.progress_reserve
+    .checked_add(self.completion_reserve)
+    .and_then(|reserved| reserved.checked_add(1))
+    .is_none_or(|reserved| reserved >= self.capacity)
+""",
+        "queue validation must reserve P+K+1 strictly below C",
+        errors,
+    )
+
+    bounded_context = (
+        (
+            "impl",
+            "<",
+            "C",
+            ":",
+            "ExactRuntimeCommandIdentity",
+            ">",
+            "BoundedIngress",
+            "<",
+            "C",
+            ">",
+        ),
+    )
+    bounded_items: dict[str, RustItem | None] = {}
+    for item_name in (
+        "certified_fence_escape_credit",
+        "check_capacity_change_inner",
+        "remaining_capacity",
+    ):
+        item = _require_rust_item(runtime_path, source, item_name, errors)
+        bounded_items[item_name] = item
+        _require_rust_item_context(
+            runtime_path,
+            item,
+            bounded_context,
+            f"BoundedIngress::{item_name} retained-credit admission",
+            errors,
+        )
+        _require_rust_item_token_sha256(
+            runtime_path,
+            item,
+            _PRODUCTION_RUNTIME_CERTIFIED_FENCE_CAPACITY_ITEM_SHA256[
+                f"BoundedIngress::{item_name}"
+            ],
+            f"BoundedIngress::{item_name} retained-credit admission",
+            errors,
+        )
+
+    _require_exact_rust_tokens(
+        runtime_path,
+        bounded_items.get("certified_fence_escape_credit"),
+        """
+fn certified_fence_escape_credit(&self) -> usize {
+    usize::from(
+        self.commands
+            .iter()
+            .any(|queued| queued.command.is_certified_fence_escape()),
+    )
+}
+""",
+        "queued immutable certificate roots must retain exactly one credit",
+        errors,
+    )
+    capacity_change = bounded_items.get("check_capacity_change_inner")
+    for required, description in (
+        (
+            """
+if certified_fence_escape
+    && (class != CommandClass::Progress
+        || additions != 1
+        || dormant_replacements != 0)
+{
+    return Err(EnqueueError::FailClosed);
+}
+""",
+            "certified credit is restricted to one exact Progress addition",
+        ),
+        (
+            """
+let (normal_before, progress_before, retained_certified) =
+    self.commands.iter().try_fold(
+        (0usize, 0usize, false),
+        |(normal, progress, certified), queued| {
+            let normal = normal
+                .checked_add(usize::from(queued.class == CommandClass::Normal))
+                .ok_or(EnqueueError::FailClosed)?;
+            let progress = progress
+                .checked_add(usize::from(queued.class == CommandClass::Progress))
+                .ok_or(EnqueueError::FailClosed)?;
+            Ok::<_, EnqueueError>((
+                normal,
+                progress,
+                certified || queued.command.is_certified_fence_escape(),
+            ))
+        },
+    )?;
+let certified_credit = usize::from(retained_certified || certified_fence_escape);
+""",
+            "one scan derives class occupancy and retained certificate credit",
+        ),
+        (
+            """
+let ordinary_occupied_after = occupied_after
+    .checked_sub(certified_credit)
+    .ok_or(EnqueueError::FailClosed)?;
+if ordinary_occupied_after > self.config.ordinary_total_limit() {
+    return Err(EnqueueError::Full);
+}
+""",
+            "ordinary total occupancy excludes the one retained credit",
+        ),
+        (
+            """
+let ordinary_noncompletion_after = noncompletion_after
+    .checked_sub(certified_credit)
+    .ok_or(EnqueueError::FailClosed)?;
+if normal_after > self.config.normal_limit()
+    || ordinary_noncompletion_after > self.config.progress_limit()
+{
+    return Err(EnqueueError::ReservedCapacity);
+}
+""",
+            "normal and noncompletion limits retain disjoint P/K capacity",
+        ),
+    ):
+        _require_rust_token_sequence(
+            runtime_path,
+            capacity_change,
+            required,
+            description,
+            errors,
+        )
+    _require_exact_rust_tokens(
+        runtime_path,
+        bounded_items.get("remaining_capacity"),
+        """
+fn remaining_capacity(&self) -> usize {
+    let ordinary_occupied = self
+        .occupied_with_dormant_reservations()
+        .unwrap_or(usize::MAX)
+        .saturating_sub(self.certified_fence_escape_credit());
+    self.config
+        .ordinary_total_limit()
+        .saturating_sub(ordinary_occupied)
+}
+""",
+        "remaining ordinary capacity must retain queued certificate credit",
+        errors,
+    )
+
+    classifier = _require_rust_item(
+        runtime_path,
+        source,
+        "wire_payload_is_certified_fence_escape",
+        errors,
+    )
+    _require_rust_item_context(
+        runtime_path,
+        classifier,
+        (),
+        "closed runtime wire-payload certified-fence classifier",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        runtime_path,
+        classifier,
+        _PRODUCTION_RUNTIME_CERTIFIED_FENCE_CAPACITY_ITEM_SHA256[
+            "wire_payload_is_certified_fence_escape"
+        ],
+        "closed runtime wire-payload certified-fence classifier",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        runtime_path,
+        classifier,
+        """
+pub(crate) const fn wire_payload_is_certified_fence_escape(
+    payload: &wire::ConsensusMessageV2Payload,
+) -> bool {
+    matches!(
+        payload,
+        wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+            | wire::ConsensusMessageV2Payload::QuorumCertificate(wire::QuorumCertificate {
+                phase: wire::GlobalPhase::Commit,
+                ..
+            })
+            | wire::ConsensusMessageV2Payload::CommitCertificateResponse(
+                wire::CommitCertificateResponse {
+                    certificate: wire::QuorumCertificate {
+                        phase: wire::GlobalPhase::Commit,
+                        ..
+                    },
+                    ..
+                }
+            )
+    )
+}
+""",
+        "only TC, direct CommitQC, and CommitQC recovery response receive credit",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        runtime_path,
+        source,
+        """
+mod exact_runtime_command_identity_sealed {
+    pub trait Sealed {}
+}
+
+pub(crate) trait ExactRuntimeCommandIdentity:
+    exact_runtime_command_identity_sealed::Sealed
+{
+""",
+        "certified-credit classifier must remain module sealed",
+        errors,
+    )
+    sealed_impl_prefix = rust_code_tokens(
+        "impl exact_runtime_command_identity_sealed::Sealed for"
+    )
+    sealed_impl_count = _token_sequence_count(
+        rust_code_tokens(source), sealed_impl_prefix
+    )
+    if sealed_impl_count != 3:
+        errors.append(
+            f"{runtime_path}: exact runtime command identity must retain "
+            "exactly the authenticated, adapter, and test-only sealed "
+            f"implementations; found {sealed_impl_count}"
+        )
+    for command_type in (
+        "AuthenticatedConsensusMessage",
+        "AdapterCommand",
+        "FakeCommand",
+    ):
+        _require_rust_source_token_sequence(
+            runtime_path,
+            source,
+            (
+                "impl exact_runtime_command_identity_sealed::Sealed for "
+                f"{command_type} {{}}"
+            ),
+            f"sealed exact runtime identity implementation for {command_type}",
+            errors,
+        )
+    _require_rust_source_token_sequence(
+        runtime_path,
+        source,
+        """
+impl ExactRuntimeCommandIdentity for AuthenticatedConsensusMessage {
+    fn exact_runtime_command_identity(&self) -> RuntimeCommandIdentity {
+""",
+        "authenticated runtime identity implementation",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        runtime_path,
+        source,
+        """
+fn is_certified_fence_escape(&self) -> bool {
+    wire_payload_is_certified_fence_escape(self.payload())
+}
+""",
+        "authenticated commands derive credit from exact wire payload",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        runtime_path,
+        source,
+        """
+fn is_certified_fence_escape(&self) -> bool {
+    matches!(self, Self::Authenticated(message) if message.is_certified_fence_escape())
+}
+""",
+        "adapter commands cannot assert certificate credit independently",
+        errors,
+    )
+
+    runtime_credit = _require_rust_item(
+        runtime_path,
+        source,
+        "has_certified_fence_escape_credit",
+        errors,
+    )
+    _require_rust_item_context(
+        runtime_path,
+        runtime_credit,
+        (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+        "serialized runtime certified-fence credit observation",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        runtime_path,
+        runtime_credit,
+        _PRODUCTION_RUNTIME_CERTIFIED_FENCE_CAPACITY_ITEM_SHA256[
+            "SerializedV2Runtime::has_certified_fence_escape_credit"
+        ],
+        "serialized runtime certified-fence credit observation",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        runtime_path,
+        runtime_credit,
+        """
+pub(crate) fn has_certified_fence_escape_credit(&self) -> bool {
+    self.ingress.certified_fence_escape_credit() == 1
+}
+""",
+        "runtime credit observation must expose only the exact retained credit",
+        errors,
+    )
+
+    tests = (
+        "certified_commit_uses_physical_slot_reserved_from_completions",
+        "certified_commit_arriving_first_preserves_every_ordinary_reserve",
+        "distinct_certificates_share_exactly_one_physical_credit",
+        "invalid_configuration_is_rejected",
+        "queue_configuration_excludes_one_certified_credit_from_ordinary_limits",
+        "prepare_qc_cannot_spend_the_certified_physical_credit",
+        "retiring_the_sole_certificate_does_not_fake_completion_headroom",
+        "unpublished_body_replacement_cannot_overbook_the_certified_slot",
+    )
+    test_context = (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),)
+    test_items: dict[str, RustItem | None] = {}
+    for item_name in tests:
+        item = _require_rust_item(runtime_path, source, item_name, errors)
+        test_items[item_name] = item
+        _require_rust_item_context(
+            runtime_path,
+            item,
+            test_context,
+            f"certified-fence capacity regression {item_name}",
+            errors,
+            expected_attributes=("#[test]",),
+        )
+        _require_rust_item_token_sha256(
+            runtime_path,
+            item,
+            _PRODUCTION_RUNTIME_CERTIFIED_FENCE_CAPACITY_ITEM_SHA256[
+                f"test::{item_name}"
+            ],
+            f"certified-fence capacity regression {item_name}",
+            errors,
+        )
+    _require_rust_token_sequence(
+        runtime_path,
+        test_items.get(
+            "certified_commit_arriving_first_preserves_every_ordinary_reserve"
+        ),
+        """
+assert_eq!(
+    runtime.remaining_completion_capacity(),
+    7,
+    "charging the CommitQC to its own slot leaves every ordinary position free"
+);
+""",
+        "certificate-first regression preserves every ordinary slot",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        test_items.get("distinct_certificates_share_exactly_one_physical_credit"),
+        """
+assert!(matches!(
+    runtime.enqueue_network(commit(0xC3)),
+    Err(NetworkIngressError::Backpressure(
+        EnqueueError::ReservedCapacity
+    ))
+));
+""",
+        "distinct certificate roots cannot mint a second physical credit",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        test_items.get("invalid_configuration_is_rejected"),
+        "RuntimeQueueConfig::new(3, 1, 1).validate()",
+        "P+K+1 equal to C must fail closed",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        test_items.get(
+            "queue_configuration_excludes_one_certified_credit_from_ordinary_limits"
+        ),
+        """
+assert_eq!(config.normal_limit(), 3);
+assert_eq!(config.progress_limit(), 5);
+assert_eq!(config.ordinary_total_limit(), 7);
+assert_eq!(
+    config.normal_limit() + config.progress_reserve + config.completion_reserve + 1,
+    config.capacity
+);
+""",
+        "C=8/P=2/K=2 must expose C-P-K-1, C-K-1, C-1, and one credit",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        test_items.get("prepare_qc_cannot_spend_the_certified_physical_credit"),
+        """
+assert!(matches!(
+    runtime.enqueue_network(certificate(0xB2, wire::GlobalPhase::Prepare)),
+    Err(NetworkIngressError::Backpressure(
+        EnqueueError::ReservedCapacity
+    ))
+));
+
+runtime
+    .enqueue_network(certificate(0xB3, wire::GlobalPhase::Commit))
+    .expect("only the CommitQC receives the certified physical credit");
+""",
+        "PrepareQC cannot spend the exact CommitQC/TC physical credit",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        test_items.get(
+            "retiring_the_sole_certificate_does_not_fake_completion_headroom"
+        ),
+        """
+assert_eq!(
+    runtime.remaining_completion_capacity(),
+    0,
+    "retiring the only certificate also retires its physical credit"
+);
+""",
+        "sole-certificate retirement must not invent Completion headroom",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        test_items.get(
+            "unpublished_body_replacement_cannot_overbook_the_certified_slot"
+        ),
+        """
+let reservation = runtime
+    .ingress
+    .reserve_canonical_body_available(owner_tag, canonical)
+    .expect("the unpublished body atomically replaces its conflicting proposal");
+assert_eq!(
+    runtime.queued_commands(),
+    2,
+    "the conflicting proposal must retire before the reservation becomes live"
+);
+assert_eq!(runtime.remaining_completion_capacity(), 0);
+""",
+        "unpublished BodyAvailable must atomically replace its conflict",
+        errors,
+    )
+
+    reserve_body = _require_rust_item(
+        runtime_path,
+        source,
+        "reserve_canonical_body_available_internal",
+        errors,
+    )
+    commit_body = _require_rust_item(
+        runtime_path,
+        source,
+        "commit_canonical_body_available",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        reserve_body,
+        """
+ingress.discard_proposals_conflicting_with(reservation.manifest());
+ingress.reserved_body_available = Some(reservation.clone());
+""",
+        "reservation publication must atomically retire the conflicting proposal first",
+        errors,
+    )
+    if commit_body is not None and _token_sequence_count(
+        rust_code_tokens(commit_body.source),
+        rust_code_tokens("self.discard_proposals_conflicting_with(reservation.manifest())"),
+    ):
+        errors.append(
+            f"{runtime_path}:{commit_body.line}: BodyAvailable materialization "
+            "must not defer conflicting-proposal retirement past reservation publication"
+        )
+    expected_capacity_seal_keys = {
+        "RuntimeQueueConfig::validate",
+        "RuntimeQueueConfig::normal_limit",
+        "RuntimeQueueConfig::progress_limit",
+        "RuntimeQueueConfig::ordinary_total_limit",
+        "BoundedIngress::certified_fence_escape_credit",
+        "BoundedIngress::check_capacity_change_inner",
+        "BoundedIngress::remaining_capacity",
+        "wire_payload_is_certified_fence_escape",
+        "SerializedV2Runtime::has_certified_fence_escape_credit",
+        *(f"test::{item_name}" for item_name in tests),
+    }
+    observed_capacity_seal_keys = set(
+        _PRODUCTION_RUNTIME_CERTIFIED_FENCE_CAPACITY_ITEM_SHA256
+    )
+    if observed_capacity_seal_keys != expected_capacity_seal_keys:
+        errors.append(
+            "runtime certified-fence source-seal inventory must contain "
+            "exactly nine production items and eight regressions; "
+            f"missing={sorted(expected_capacity_seal_keys - observed_capacity_seal_keys)}, "
+            f"extra={sorted(observed_capacity_seal_keys - expected_capacity_seal_keys)}"
+        )
+    return errors
